@@ -1,0 +1,58 @@
+{
+  "source_files": {
+    "VAE_montcarlo.py": {
+      "lines": 1779
+    },
+    "VAE_montcarlo_modified.py": {
+      "lines": 1909
+    }
+  },
+  "extracted_nodes": {
+    "model.py": [
+      "SurvivalDataset",
+      "Encoder",
+      "Decoder",
+      "DVFM"
+    ],
+    "training.py": [
+      "train_dvfm"
+    ],
+    "prediction.py": [
+      "predict_survival_curves",
+      "get_median_survival_time"
+    ],
+    "synthetic.py": [
+      "_theta_to_frailty_alpha",
+      "_softplus_np",
+      "_sample_clayton_uv_vector_theta",
+      "_weibull_ph_time",
+      "_covdep_clayton_components",
+      "generate_copula_data",
+      "analyze_conditional_dependence"
+    ],
+    "baselines.py": [
+      "train_deepsurv",
+      "train_mtlr",
+      "_fit_cox_and_predict_survival",
+      "ClaytonWeibullAFT",
+      "fit_clayton_weibull_aft"
+    ],
+    "metrics.py": [
+      "_km_step_survival",
+      "_eval_step_curve",
+      "compute_oracle_brier_ibs",
+      "compute_ipcw_brier_ibs",
+      "_safe_subset_mae",
+      "_censoring_rate",
+      "_collect_metrics",
+      "_median_from_survival",
+      "_build_km_area",
+      "_weighted_ci_dep",
+      "_CopulaGraphic",
+      "_CopulaGraphicWrapper",
+      "_predict_event_probs_from_curve",
+      "_ibs_dep_copula_graphic",
+      "_collect_dep_metrics"
+    ]
+  }
+}

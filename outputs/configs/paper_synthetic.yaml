@@ -1,0 +1,48 @@
+mode: synthetic
+seed: 42
+repeats: 5
+output_dir: outputs/paper_synthetic
+device: auto
+
+split:
+  strategy: holdout
+  test_size: 0.20
+
+preprocessing:
+  standardize: false
+  time_normalize: none
+
+synthetic:
+  n_samples: 5000
+  n_features: 10
+  scenarios:
+    - {id: S1, name: clayton_low, copula: clayton, dependence: low, theta: 1}
+    - {id: S2, name: clayton_high, copula: clayton, dependence: high, theta: 10}
+    - {id: S3, name: frailty_mixture_low, copula: frailty_mixture, dependence: low, theta: 0.5}
+    - {id: S4, name: frailty_mixture_high, copula: frailty_mixture, dependence: high, theta: 10}
+    - {id: S5, name: frank_low, copula: frank, dependence: low, theta: 0.2}
+    - {id: S6, name: frank_high, copula: frank, dependence: high, theta: 10}
+    - {id: S7, name: gaussian_low, copula: gaussian, dependence: low, theta: 0.1}
+    - {id: S8, name: gaussian_high, copula: gaussian, dependence: high, theta: 0.8}
+    - {id: S9, name: gumbel_low, copula: gumbel, dependence: low, theta: 1.1}
+    - {id: S10, name: gumbel_high, copula: gumbel, dependence: high, theta: 10}
+
+models:
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
+  dvfm:
+    latent_dim: 20
+    epochs: 300
+    lr: 0.005
+    batch_size: 64
+    beta_max: 1.0
+    warmup_epochs: 50
+    free_bits: 0.0
+    mc_samples: 100
+  deepsurv: {epochs: 120, lr: 0.001, batch_size: 64}
+  mtlr: {epochs: 120, lr: 0.005, bins: 60}
+  clayton_aft: {epochs: 100, lr: 0.005}
+
+evaluation:
+  n_time_points: 600
+  max_time_factor: 1.5
+  save_predictions: false

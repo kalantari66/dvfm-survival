@@ -1,0 +1,19 @@
+mode: real
+seed: 42
+repeats: 1
+output_dir: outputs/real_example
+device: auto
+
+split: {strategy: holdout, test_size: 0.20}
+preprocessing: {standardize: true, time_normalize: train_max}
+
+data:
+  name: toy_real
+  path: data/examples/toy_real.csv
+  time_col: time
+  event_col: event
+
+models:
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
+
+evaluation: {n_time_points: 200, max_time_factor: 1.5, save_predictions: false}
