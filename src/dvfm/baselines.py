@@ -269,25 +269,13 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
 
 
 def _fit_cox_and_predict_survival(X_train, t_train, e_train, X_test, time_points):
+    """CoxPH evaluation matching the active supplied reference run."""
     df_train = pd.DataFrame(X_train, columns=[f"X{i}" for i in range(X_train.shape[1])])
     df_train["time"] = t_train
     df_train["event"] = e_train
 
-    cph = None
-    for pen in [0.0, 0.01, 0.1, 1.0]:
-        try:
-            cph_try = CoxPHFitter(penalizer=pen)
-            cph_try.fit(df_train, duration_col="time", event_col="event")
-            cph = cph_try
-            break
-        except Exception:
-            cph = None
-
-    if cph is None:
-        max_train_time = float(np.max(t_train))
-        medians = np.full(len(X_test), max_train_time, dtype=float)
-        surv_curves = np.ones((len(X_test), len(time_points)), dtype=float)
-        return medians, surv_curves
+    cph = CoxPHFitter()
+    cph.fit(df_train, duration_col="time", event_col="event")
 
     df_test = pd.DataFrame(X_test, columns=[f"X{i}" for i in range(X_test.shape[1])])
     partial_hazard = cph.predict_partial_hazard(df_test).values.flatten()
@@ -295,17 +283,20 @@ def _fit_cox_and_predict_survival(X_train, t_train, e_train, X_test, time_points
     baseline_survival = cph.baseline_survival_
     baseline_times = baseline_survival.index.values
     baseline_s = baseline_survival.values.flatten()
-
-    baseline_interp = np.interp(time_points, baseline_times, baseline_s, left=1.0, right=baseline_s[-1])
+    baseline_interp = np.interp(
+        time_points, baseline_times, baseline_s, left=1.0, right=baseline_s[-1]
+    )
     surv_curves = np.power(baseline_interp[None, :], partial_hazard[:, None])
 
-    medians = np.zeros(len(X_test), dtype=float)
     max_train_time = float(np.max(t_train))
-    for i in range(len(X_test)):
-        idx = np.where(surv_curves[i] <= 0.5)[0]
-        medians[i] = time_points[idx[0]] if len(idx) > 0 else max_train_time
-
-    return medians, surv_curves
+    medians = []
+    for risk_score in partial_hazard:
+        patient_survival = baseline_s ** risk_score
+        crossing_idx = np.where(patient_survival <= 0.5)[0]
+        medians.append(
+            baseline_times[crossing_idx[0]] if len(crossing_idx) > 0 else max_train_time
+        )
+    return np.asarray(medians, dtype=float), surv_curves
 
 
 class ClaytonWeibullAFT(nn.Module):
@@ -403,3 +394,10 @@ def fit_clayton_weibull_aft(X_train, t_train, e_train, X_test, time_points, epoc
         medians[i] = time_points[idx[0]] if len(idx) > 0 else max_train_time
 
     return medians, surv
+
+
+# The functions below are imported last so the exact supplied implementations are used.
+from .reference_core import train_deepsurv as train_deepsurv
+from .reference_core import train_mtlr as train_mtlr
+
+__all__ = ["train_deepsurv", "train_mtlr", "_fit_cox_and_predict_survival", "ClaytonWeibullAFT", "fit_clayton_weibull_aft"]

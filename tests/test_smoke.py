@@ -1,3 +1,5 @@
+"""Functional tests only; these are not performance benchmarks."""
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -17,12 +19,12 @@ def test_generator_shapes():
     assert set(np.unique(event)).issubset({0, 1})
 
 
-def test_dvfm_forward_and_metrics():
+def test_dvfm_forward_prediction_and_metrics():
     X, time, event, true_t, _ = generate_copula_data(
         n_samples=128, n_features=5, copula_type="clayton", theta=1.0, seed=8
     )
     loader = DataLoader(SurvivalDataset(X, time, event), batch_size=32, shuffle=False)
-    model = DVFM(input_dim=5, latent_dim=3)
+    model = DVFM(input_dim=5, latent_dim=20)
     x, t, e = next(iter(loader))
     outputs = model(x, t, e)
     loss, _, _ = model.loss_function(*outputs, t, e)

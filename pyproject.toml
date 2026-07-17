@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dvfm-survival"
-version = "0.1.0"
+version = "0.2.0"
 description = "Deep Variational Frailty Models for survival prediction under dependent censoring"
 readme = "README.md"
 requires-python = ">=3.10"

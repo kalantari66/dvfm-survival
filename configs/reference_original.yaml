@@ -1,0 +1,52 @@
+# Exact active run_experiment() parameters from reference/VAE_montcarlo.py
+mode: synthetic
+seed: 42
+repeats: 1
+output_dir: outputs/reference_original
+device: auto
+
+split:
+  strategy: holdout
+  test_size: 0.30
+
+preprocessing:
+  standardize: false
+  time_normalize: none
+
+synthetic:
+  n_samples: 10000
+  n_features: 10
+  scenarios:
+    - id: reference_gaussian
+      name: gaussian_theta_1
+      copula: gaussian
+      dependence: reference
+      theta: 1.0
+
+models:
+  enabled: [coxph, deepsurv, mtlr, dvfm]
+  dvfm:
+    latent_dim: 20
+    epochs: 200
+    lr: 0.001
+    batch_size: 64
+    beta_max: 1.0
+    warmup_epochs: 50
+    free_bits: 0.0
+    mc_samples: 100
+  deepsurv:
+    epochs: 200
+    lr: 0.001
+    batch_size: 64
+  mtlr:
+    epochs: 200
+    lr: 0.005
+    bins: 200
+  clayton_aft:
+    epochs: 100
+    lr: 0.005
+
+evaluation:
+  n_time_points: 1000
+  max_time_factor: 1.5
+  save_predictions: false

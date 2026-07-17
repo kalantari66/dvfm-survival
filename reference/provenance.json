@@ -1,58 +1,44 @@
 {
-  "source_files": {
-    "VAE_montcarlo.py": {
-      "lines": 1779
+  "unchanged_uploaded_sources": [
+    {
+      "path": "reference/VAE_montcarlo.py",
+      "bytes": 72340,
+      "lines": 1780,
+      "sha256": "56822dcbcda21d64ca4b2a1a63df32231225e235500acbd7490a0722dac83a79"
     },
-    "VAE_montcarlo_modified.py": {
-      "lines": 1909
+    {
+      "path": "reference/VAE_montcarlo_modified.py",
+      "bytes": 70886,
+      "lines": 1910,
+      "sha256": "c3bb6fe7bebce148530f0999c505b6f20be839d8017e8d1759e9c8440992b9f9"
     }
+  ],
+  "package_core": {
+    "path": "src/dvfm/reference_core.py",
+    "bytes": 70850,
+    "lines": 1783,
+    "sha256": "e841b3c414b7c2482a24a8ddfa5d95c552c228338026c1b739e3fd6853b097f9"
   },
-  "extracted_nodes": {
-    "model.py": [
-      "SurvivalDataset",
-      "Encoder",
-      "Decoder",
-      "DVFM"
-    ],
-    "training.py": [
-      "train_dvfm"
-    ],
-    "prediction.py": [
-      "predict_survival_curves",
-      "get_median_survival_time"
-    ],
-    "synthetic.py": [
-      "_theta_to_frailty_alpha",
-      "_softplus_np",
-      "_sample_clayton_uv_vector_theta",
-      "_weibull_ph_time",
-      "_covdep_clayton_components",
-      "generate_copula_data",
-      "analyze_conditional_dependence"
-    ],
-    "baselines.py": [
-      "train_deepsurv",
-      "train_mtlr",
-      "_fit_cox_and_predict_survival",
-      "ClaytonWeibullAFT",
-      "fit_clayton_weibull_aft"
-    ],
-    "metrics.py": [
-      "_km_step_survival",
-      "_eval_step_curve",
-      "compute_oracle_brier_ibs",
-      "compute_ipcw_brier_ibs",
-      "_safe_subset_mae",
-      "_censoring_rate",
-      "_collect_metrics",
-      "_median_from_survival",
-      "_build_km_area",
-      "_weighted_ci_dep",
-      "_CopulaGraphic",
-      "_CopulaGraphicWrapper",
-      "_predict_event_probs_from_curve",
-      "_ibs_dep_copula_graphic",
-      "_collect_dep_metrics"
-    ]
+  "package_core_change": "Import-only SciPy trapz compatibility fallback; algorithms unchanged.",
+  "reference_parameters": {
+    "dvfm_epochs": 200,
+    "dvfm_lr": 0.001,
+    "dvfm_batch_size": 64,
+    "latent_dim": 20,
+    "beta_max": 1.0,
+    "warmup_epochs": 50,
+    "free_bits": 0.0,
+    "mc_samples": 100,
+    "deepsurv_epochs": 200,
+    "deepsurv_lr": 0.001,
+    "mtlr_epochs": 200,
+    "mtlr_lr": 0.005,
+    "mtlr_bins": 200,
+    "n_samples": 10000,
+    "n_features": 10,
+    "test_size": 0.3,
+    "n_time_points": 1000,
+    "max_time_factor": 1.5,
+    "seed": 42
   }
 }

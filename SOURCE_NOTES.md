@@ -1,15 +1,20 @@
 # Source and packaging notes
 
-Algorithmic code was extracted from the two supplied Python files without changing the model equations or optimization procedures.
+The two uploaded scripts are preserved byte-for-byte in `reference/`.
 
-Packaging-only additions:
+The package uses `src/dvfm/reference_core.py`, copied from `reference/VAE_montcarlo.py`. One import-only compatibility change is applied there:
 
-- module separation and imports
-- YAML configuration and CLI
-- generic CSV/XLSX loaders
-- holdout and k-fold experiment wrappers
-- output organization
-- SciPy `trapezoid` compatibility alias for the former `trapz` name
-- SurvivalEVAL 0.8 import fallback for `KaplanMeierArea`
+- use NumPy's `trapz` when `scipy.integrate.trapz` is unavailable in newer SciPy versions.
 
-The exact supplied files are retained in `reference/` for line-by-line comparison.
+This does not change any model formula, loss, training step, prediction equation, generator, or metric calculation.
+
+Packaging additions are limited to:
+
+- YAML configuration and a command-line runner;
+- generic CSV/XLSX loaders;
+- real, synthetic, and semi-synthetic input interfaces;
+- result-file organization;
+- configuration validation that prevents accidental use of shortened DVFM settings;
+- tests that check shapes, finite losses, prediction dimensions, metrics, and exact reference parameters.
+
+The benchmark CLI has no `--quick` performance mode. Use `--validate-only` to check files and settings without model fitting.

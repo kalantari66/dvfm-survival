@@ -1,130 +1,149 @@
-# DVFM Survival
+# DVFM Survival — Reference-Parameter Repository
 
-Clean, configuration-driven code for **Deep Variational Frailty Models (DVFM)** for survival prediction under dependent censoring.
+Clean GitHub repository for **Deep Variational Frailty Models (DVFM)** under dependent censoring.
 
-The repository keeps the supplied model architecture, censored ELBO, training loop, aggregate-posterior Monte Carlo prediction, synthetic generators, and baseline algorithms unchanged. The new code only organizes them into modules and adds a generic interface for synthetic, real, and semi-synthetic datasets.
+This revision uses the supplied implementation directly and restores the active reference settings, especially **200 DVFM epochs**. The earlier five-epoch/sixty-epoch smoke configuration has been removed because it was not suitable for comparing model performance.
 
-## Included methods
+## What is unchanged
 
-- DVFM with Weibull event/censoring decoders and a shared latent frailty
-- Cox proportional hazards
-- DeepSurv
-- neural MTLR
-- Clayton-Weibull AFT dependent-censoring baseline
+The following are imported from `src/dvfm/reference_core.py`, which is a package-compatible copy of the supplied `VAE_montcarlo.py`:
 
-## Metrics
+- DVFM encoder and decoder
+- Weibull event/censoring likelihood
+- censored ELBO
+- KL annealing and optimizer loop
+- aggregate-posterior Monte Carlo prediction
+- synthetic dependent-censoring generators
+- DeepSurv implementation
+- MTLR implementation
+- oracle and IPCW Brier-score functions
 
-- Concordance index (C-index)
-- integrated Brier score with IPCW (IBS-IPCW)
-- dependence-aware IBS (IBS-DEP)
-- MAE on uncensored, censored, and all samples
-- oracle MAE/IBS when true event times are available (synthetic and semi-synthetic data)
+The only compatibility edit in the package copy is a fallback from SciPy's removed `trapz` import to NumPy's equivalent. The original uploaded scripts are preserved unchanged in `reference/`.
+
+## Reference parameters
+
+The main values are:
+
+```text
+DVFM epochs       200
+DVFM learning rate 0.001
+latent dimension   20
+batch size          64
+beta max             1.0
+warm-up epochs      50
+free bits             0
+MC samples          100
+DeepSurv epochs     200
+MTLR epochs         200
+MTLR bins           200
+synthetic N       10000
+features             10
+test fraction       0.30
+time-grid points    1000
+```
+
+See [`PARAMETER_AUDIT.md`](PARAMETER_AUDIT.md) for the complete mapping.
 
 ## Installation
 
 ```bash
-git clone <YOUR-GITHUB-URL>
-cd dvfm-survival
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e .
 ```
 
-## Quick smoke tests
+Windows:
+
+```bat
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e ".[test]"
+```
+
+macOS/Linux:
 
 ```bash
-dvfm-run --config configs/real_example.yaml --quick
-dvfm-run --config configs/semi_synthetic_example.yaml --quick
-dvfm-run --config configs/paper_synthetic.yaml --quick
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[test]"
 ```
 
-Full paper-style synthetic benchmark:
+## Check the installation without changing parameters
+
+```bash
+dvfm-run --config configs/reference_original.yaml --validate-only
+pytest -v
+```
+
+`--validate-only` checks the configuration and dataset paths. It does not fit models or generate performance numbers.
+
+## Reproduce the active uploaded experiment
+
+```bash
+dvfm-run --config configs/reference_original.yaml
+```
+
+This configuration reproduces the active settings in `VAE_montcarlo.py`: Gaussian generator, theta 1, 10,000 samples, 70/30 split, 1,000 time points, and 200 epochs for DVFM/DeepSurv/MTLR.
+
+## Full synthetic benchmark
 
 ```bash
 dvfm-run --config configs/paper_synthetic.yaml
 ```
 
-Full paper-style real-data benchmark:
+This is computationally expensive: 10 scenarios × 5 repetitions, with 200 training epochs and 100 Monte Carlo samples.
 
-1. Put the datasets in `data/raw/` using the paths/column names in `configs/paper_real.yaml`.
-2. Run:
+## Real datasets
+
+Place the datasets in `data/raw/` with the names and columns listed in `configs/paper_real.yaml`, then run:
 
 ```bash
 dvfm-run --config configs/paper_real.yaml
 ```
 
-The real datasets are not redistributed in this repository. Check their original licenses and access requirements.
+The repository does not redistribute restricted real datasets.
 
-## Input formats
+A generic real dataset can be CSV or Excel and must include:
 
-### Real data
+- an observed follow-up-time column;
+- an event indicator column (`1` event, `0` censored);
+- feature columns.
 
-Use CSV or Excel. Required columns are an observed follow-up time and an event indicator. All remaining columns are used as covariates unless `feature_cols` is given.
+## Semi-synthetic datasets
 
-```yaml
-mode: real
-data:
-  path: data/raw/my_data.csv
-  time_col: time
-  event_col: event
-  feature_cols: [age, biomarker_1, treatment]
+A semi-synthetic file contains real or user-provided covariates plus complete simulated event and censoring times. The loader constructs
+
+```text
+observed_time = min(event_time, censor_time)
+event = 1(event_time <= censor_time)
 ```
 
-Event values may be numeric/Boolean or common labels such as `dead/alive`, `event/censored`, and `yes/no`.
+Run the included format example with:
 
-### Semi-synthetic data
-
-Provide real covariates together with simulated complete event and censoring times. The runner constructs `time = min(event_time, censor_time)` and `event = I(event_time <= censor_time)`.
-
-```yaml
-mode: semi_synthetic
-data:
-  path: data/raw/my_semi_synthetic.csv
-  true_event_time_col: event_time
-  true_censor_time_col: censor_time
-```
-
-### Synthetic data
-
-Synthetic scenarios use the generator in the supplied code. Available mechanisms are `clayton`, `frank`, `gaussian`, `gumbel`, `frailty_mixture`, and `clayton_covdep`.
-
-```yaml
-mode: synthetic
-synthetic:
-  n_samples: 5000
-  n_features: 10
-  scenarios:
-    - {id: S1, copula: clayton, theta: 1, dependence: low}
+```bash
+dvfm-run --config configs/semi_synthetic_example.yaml
 ```
 
 ## Outputs
 
-Each run writes:
+Each experiment writes:
 
-- `results_raw.csv`: every repeat/fold
-- `results_mean.csv`: grouped means
-- `results_std.csv`: grouped standard deviations
-- `resolved_config.json`: exact configuration used
-- optional compressed prediction files when `save_predictions: true`
+- `results_raw.csv`
+- `results_mean.csv`
+- `results_std.csv`
+- `resolved_config.json`
+- optional prediction arrays when enabled
 
 ## Repository structure
 
 ```text
-src/dvfm/model.py       DVFM architecture and C-ELBO
-src/dvfm/training.py    DVFM training
-src/dvfm/prediction.py  aggregate-posterior Monte Carlo prediction
-src/dvfm/synthetic.py   synthetic dependent-censoring generators
-src/dvfm/baselines.py   CoxPH, DeepSurv, MTLR, ClaytonAFT
-src/dvfm/metrics.py     paper metrics
-src/dvfm/runner.py      dataset-independent experiment pipeline
-configs/                reproducible YAML configurations
-reference/              original supplied scripts
-paper/                  supplied manuscript
+src/dvfm/reference_core.py   package-compatible supplied algorithm code
+src/dvfm/runner.py           real/synthetic/semi-synthetic experiment interface
+src/dvfm/metrics.py          paper metrics
+src/dvfm/baselines.py        CoxPH and ClaytonAFT wrappers; reference neural baselines
+configs/                     exact reproducible parameter files
+reference/                   unchanged uploaded scripts
+paper/                       supplied manuscript
+PARAMETER_AUDIT.md           parameter provenance
 ```
-
-## Reproducibility note
-
-The scenario parameters in `configs/paper_synthetic.yaml` reproduce Table 2 of the supplied manuscript. Their interpretation follows the parameterization in the supplied generator exactly; no copula or frailty formulas were redefined during packaging.
 
 ## Citation
 

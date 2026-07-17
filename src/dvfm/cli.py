@@ -2,18 +2,24 @@
 
 import argparse
 
-from .config import apply_quick_mode, load_config
-from .runner import run
+from .config import load_config
+from .runner import run, validate_inputs
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run DVFM survival experiments")
+    parser = argparse.ArgumentParser(description="Run DVFM survival experiments with reference parameters")
     parser.add_argument("--config", required=True, help="Path to a YAML configuration file")
-    parser.add_argument("--quick", action="store_true", help="Use a short smoke-test configuration")
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate configuration and input files without fitting any model",
+    )
     args = parser.parse_args()
     cfg = load_config(args.config)
-    if args.quick:
-        cfg = apply_quick_mode(cfg)
+    if args.validate_only:
+        validate_inputs(cfg)
+        print("Configuration and inputs are valid. No model was trained.")
+        return
     run(cfg)
 
 
