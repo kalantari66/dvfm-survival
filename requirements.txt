@@ -8,3 +8,5 @@ matplotlib>=3.7
 openpyxl>=3.1
 PyYAML>=6.0
 SurvivalEVAL>=0.8.0
+pycop>=0.0.13
+pyarrow>=25.0.0

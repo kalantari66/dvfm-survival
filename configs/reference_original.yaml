@@ -24,7 +24,7 @@ synthetic:
       theta: 1.0
 
 models:
-  enabled: [coxph, deepsurv, mtlr, dvfm]
+  enabled: [dvfm]
   dvfm:
     latent_dim: 20
     epochs: 200

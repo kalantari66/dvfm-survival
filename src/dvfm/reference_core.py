@@ -5,10 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from scipy.stats import weibull_min
-try:
-    from scipy.integrate import trapz
-except ImportError:  # SciPy >= 1.14
-    from numpy import trapz
+from scipy.integrate import trapezoid as trapz
 from sklearn.model_selection import train_test_split
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index

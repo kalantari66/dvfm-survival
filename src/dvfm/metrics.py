@@ -9,10 +9,7 @@ from lifelines.utils import concordance_index
 
 from .prediction import get_median_survival_time
 
-try:
-    from scipy.integrate import trapezoid as trapz
-except ImportError:  # compatibility with older SciPy
-    from scipy.integrate import trapz
+from scipy.integrate import trapezoid as trapz
 
 try:
     from SurvivalEVAL.Evaluations.util import predict_multi_probs_from_curve

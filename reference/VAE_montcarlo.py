@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from scipy.stats import weibull_min
-from scipy.integrate import trapz
+from scipy.integrate import trapezoid as trapz
 from sklearn.model_selection import train_test_split
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index
@@ -489,10 +489,9 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
         val_losses.append(val_loss)
         scheduler.step(val_loss)
         
-        if (epoch + 1) % 100 == 0:
-            print(f"Epoch {epoch+1}/{n_epochs}, Beta: {beta:.3f}, "
-                  f"Train Loss: {train_loss:.4f} (Recon: {train_recon:.4f}, KL: {train_kl:.4f}), "
-                  f"Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch+1}/{n_epochs}, Beta: {beta:.3f}, "
+                f"Train Loss: {train_loss:.4f} (Recon: {train_recon:.4f}, KL: {train_kl:.4f}), "
+                f"Val Loss: {val_loss:.4f}")
     
     return train_losses, val_losses
 
