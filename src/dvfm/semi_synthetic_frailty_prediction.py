@@ -16,7 +16,8 @@ The script:
 6. splits and preprocesses the generated data;
 7. trains DVFM from dvfm.reference_core;
 8. compares the encoder posterior mean with either a dependence proxy or the known subject-level frailty;
-9. writes metrics and per-subject latent predictions.
+9. compares oracle event-time prediction using posterior z against z=0;
+10. writes latent and survival-prediction outputs.
 
 Interpretation
 --------------
@@ -71,6 +72,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from torch.utils.data import DataLoader
 
 from .reference_core import DVFM, SurvivalDataset
+from .survival_prediction import evaluate_survival_prediction
 
 EPS = 1e-10
 ORACLE_COLUMNS = {
@@ -677,6 +679,10 @@ def prepare_model_data(
             "target_z": data.iloc[split_idx][
                 config["latent_recovery"]["target_column"]
             ].to_numpy(dtype=np.float32),
+            "true_event_time": (
+                data.iloc[split_idx]["true_event_time"].to_numpy(dtype=np.float32)
+                / time_scale
+            ),
             "row_index": split_idx,
         }
 
@@ -1103,8 +1109,27 @@ def run(config_path: Path) -> None:
         config,
     )
 
-    print("[5/5] Saving and reporting latent recovery")
+    print("[5/6] Evaluating oracle survival prediction with z and z=0")
+    test_loader = DataLoader(
+        SurvivalDataset(test["X"], test["time"], test["event"]),
+        batch_size=int(config["dvfm"]["batch_size"]),
+        shuffle=False,
+    )
+    survival_results, survival_predictions = evaluate_survival_prediction(
+        model=model,
+        loader=test_loader,
+        test_split=test,
+        train_split=train,
+        time_scale=time_scale,
+        config=config,
+    )
+
+    print("[6/6] Saving and reporting results")
     torch.save(model.state_dict(), output_dir / "dvfm_state_dict.pt")
+    survival_predictions.to_csv(
+        output_dir / "survival_prediction_test.csv",
+        index=False,
+    )
 
     if config["latent_recovery"].get("save_latent_predictions", True):
         validation_latent_predictions.to_csv(
@@ -1126,6 +1151,7 @@ def run(config_path: Path) -> None:
     results = {
         "generation": generation_metrics,
         "latent_recovery": latent_results,
+        "survival_prediction": survival_results,
         "time_scale": time_scale,
         "n_source": len(source),
         "n_train": len(train["time"]),
@@ -1195,6 +1221,18 @@ def run(config_path: Path) -> None:
         f"Best validation NLL:       "
         f"{latent_results['best_validation_reconstruction_nll']:.4f}"
     )
+    print()
+    print("Oracle survival prediction (censored test subjects; primary)")
+    print("-----------------------------------------------------------")
+    primary = survival_results.get("censored_test_primary", {})
+    if primary:
+        print(f"N censored:                 {primary['n']}")
+        print(f"Oracle CI, posterior z:     {primary['posterior_oracle_ci']:.4f}")
+        print(f"Oracle CI, z=0:             {primary['zero_oracle_ci']:.4f}")
+        print(f"Delta CI (z - zero):        {primary['delta_oracle_ci']:+.4f}")
+        print(f"Oracle IBS, posterior z:    {primary['posterior_oracle_ibs']:.4f}")
+        print(f"Oracle IBS, z=0:            {primary['zero_oracle_ibs']:.4f}")
+        print(f"Delta IBS (z - zero):       {primary['delta_oracle_ibs']:+.4f}")
     print()
     print(f"Generated dataset: {generated_path}")
     print(f"Experiment outputs: {output_dir}")
