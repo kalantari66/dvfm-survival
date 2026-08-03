@@ -1,0 +1,77 @@
+# Residual-decoder DVFM latent-input diagnostic.
+#
+# This changes only the decoder. The Gaussian encoder/posterior, N(0,I) prior,
+# C-ELBO, beta schedule, likelihood, data, split, and diagnostics are unchanged.
+#
+# PowerShell:
+# python -m dvfm.residual_latent_prediction_diagnostics --config configs/residual_latent_prediction_diagnostics.yaml
+
+experiment:
+  name: support_clayton_frailty_tau05_residual_decoder_diagnostics
+  seed: 0
+  output_dir: outputs/support_clayton_frailty_tau05_residual_decoder_diagnostics
+
+data:
+  source_path: data/support.feather
+  generated_csv: data/support_clayton_frailty_tau05_residual_decoder_diagnostics.csv
+  source_time_col: duration
+  source_event_col: event
+  numerical_features: [x0, x7, x8, x9, x10, x11, x12, x13]
+  categorical_features: [x1, x2, x3, x4, x5, x6]
+
+generation:
+  mechanism: clayton_frailty
+  copula: clayton
+  kendall_tau: 0.50
+  target_censoring_rate: 0.75
+  coxph_penalizer: 0.001
+  coxph_l1_ratio: 0.0s
+  coxph_tail_points: 10
+  censoring_rate_tolerance: 0.001
+
+split:
+  train_fraction: 0.70
+  validation_fraction: 0.15
+  test_fraction: 0.15
+  stratify_by_event: true
+
+preprocessing:
+  standardize_numerical: true
+  one_hot_categorical: true
+  time_normalization: train_max
+
+dvfm:
+  latent_dim: 1
+  encoder_hidden: [64, 32]
+  decoder_hidden: [32, 64]
+  epochs: 300
+  learning_rate: 0.0005
+  batch_size: 128
+  beta_max: 0.20
+  warmup_epochs: 150
+  free_bits: 0.0
+  device: cpu
+
+no_latent:
+  epochs: 300
+  learning_rate: 0.0005
+  minimum_epochs: 150
+  early_stopping_patience: 35
+  lr_patience: 12
+
+training:
+  minimum_epochs: 150
+  early_stopping_patience: 35
+  lr_patience: 12
+
+latent_recovery:
+  target_column: true_frailty_z
+  selection_metric: validation_likelihood
+  report_subgroups: true
+  save_latent_predictions: true
+
+diagnostics:
+  mc_samples: 500
+  n_time_points: 300
+  grid_max_quantile: 0.95
+  similarity_tolerance_ibs: 0.005
