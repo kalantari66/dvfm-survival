@@ -4,7 +4,7 @@
 
 This report evaluates the contribution of the latent frailty variable in the Deep Variational Frailty Model (DVFM). We compare:
 
-- **DVFM, $d_z=20$:** the complete model, trained with the C-ELBO and predicted using aggregate-posterior marginalization (P2).
+- **DVFM, $d_z=20$:** the complete model, trained with the C-ELBO and predicted using aggregate-posterior marginalization.
 - **DVFM, $d_z=0$:** the original DVFM code with `latent_dim = 0` during both training and testing. In this case, the encoder returns empty latent tensors, the KL term is exactly zero, the decoder receives only $x$, and prediction is deterministic.
 
 The comparison addresses this question:
