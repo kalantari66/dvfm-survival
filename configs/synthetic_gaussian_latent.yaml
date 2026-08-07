@@ -1,18 +1,15 @@
-# Simplified mechanistic benchmark incorporating colleague's prediction settings.
-# Main scientific settings:
-# - beta_max = 1.0
-# - KL warmup reaches beta_max by epoch 50
-# - learning_rate = 0.001
-#
-# Run:
-#   python -m experiments.synthetic_gaussian_latent \
-#       --config configs/experiments/gaussian_latent_mechanistic_simplified.yaml
-#
-# Fits:
-#   3 tau x 2 censoring x 5 seeds x
-#   [1 no-latent + 2 shared dz + 2 separate dz] = 150 fits
+# Mechanistic benchmark: can DVFM exploit a known Gaussian shared latent
+# specifically because it induces dependent censoring?
 
-output_dir: results/dvfm_gaussian_latent_mechanistic_simplified
+gwf:
+  target_name: dvfm_synthetic_gaussian_latent
+  account: c2i-colon
+  cores: 4
+  memory: 25g
+  walltime: "02:00:00"
+  partition: gpu-short
+
+output_dir: results/synthetic_gaussian_latent
 resume: true
 device: auto
 torch_num_threads: 4
