@@ -22,7 +22,7 @@ grid:
   include_separate_latent: true
 
 synthetic:
-  n_samples: 5000
+  n_samples: 10000
   n_features: 10
 
   # True hidden mechanism: scalar Z~N(0,1), independent of X.
@@ -41,8 +41,8 @@ synthetic:
   tau_loading_upper: 16.0
 
 split:
-  validation_fraction: 0.15
-  test_fraction: 0.15
+  validation_fraction: 0.10
+  test_fraction: 0.20
 
 preprocessing:
   standardize_x: true
@@ -53,7 +53,7 @@ model:
   decoder_hidden: [32, 64]
 
 training:
-  epochs: 150
+  epochs: 200
   minimum_epochs: 50
   early_stopping_patience: 20
 

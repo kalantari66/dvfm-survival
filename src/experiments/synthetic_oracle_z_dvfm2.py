@@ -1,32 +1,29 @@
-"""Oracle-Z sanity experiment for the Gaussian-latent DVFM benchmark.
+"""Oracle-Z Gaussian benchmark comparing original DVFM and DVFM2.
 
-Purpose
--------
-Diagnose whether failure in the synthetic Gaussian-latent benchmark comes from
-the DGP / decoder / likelihood / prediction pipeline, or specifically from
-variational latent inference.
+Models fitted on the exact same generated dataset/split for every seed:
 
-For each seed, the exact same synthetic dataset and split are used to train:
+1. no_latent
+2. inferred_dvfm_d1
+3. dvfm2_d1
+   - scalar shared z_s
+   - scalar event-private z_e
+   - scalar censor-private z_c
+4. oracle_z
 
-1. no_latent:
-   x -> Weibull event/censoring parameters.
+The true synthetic frailty is scalar.  The primary DVFM2 recovery target is
+therefore z_s.  z_e and z_c are retained as scalar nuisance/private latents so
+we can explicitly test whether the architecture routes shared dependence into
+z_s rather than duplicating it in the private branches.
 
-2. inferred_dvfm:
-   q(z | x,t,delta), standard Gaussian prior, shared decoder, C-ELBO.
-
-3. oracle_z:
-   the same shared decoder class as DVFM, but the *true simulated scalar z* is
-   supplied during training and validation. There is no encoder and no KL term.
-
-Both latent models are evaluated at baseline by marginalizing the known prior
-z ~ N(0,1). The oracle model therefore tests whether the decoder, observed-data
-likelihood, prior marginalization, and evaluation machinery can recover the
-correct event marginal when the latent variable itself is known.
+All models train for the full configured number of epochs (200 by default).
+Best validation reconstruction NLL is recorded only as a diagnostic; final
+epoch weights are evaluated.
 
 Run from repository root:
-    python -u -m experiments.synthetic_oracle_z \
-        --config configs/synthetic_oracle_z.yaml
+    python -u -m experiments.synthetic_oracle_z_dvfm2 \
+        --config configs/experiments/synthetic_oracle_z_dvfm2.yaml
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,6 +51,14 @@ from torch.utils.data import DataLoader, Dataset
 
 from dvfm.model_variants import NoLatentJointWeibull
 from dvfm.reference_core import DVFM, Decoder, SurvivalDataset
+
+from dvfm2.model import SharedPrivateDVFM
+from dvfm2.training import train_dvfm2
+from dvfm2.prediction import (
+    predict_event_survival_prior as predict_dvfm2_prior,
+    predict_event_survival_qagg as predict_dvfm2_qagg,
+)
+from dvfm2.diagnostics import learned_conditional_tau as learned_dvfm2_tau
 
 EPS = 1e-8
 
@@ -433,14 +438,15 @@ def _validation_objective(
     validation_mc_samples: int,
 ):
     """Use MC averaging for inferred DVFM validation to reduce checkpoint noise."""
-    if architecture != "inferred_dvfm":
+    architecture_family = _architecture_family(architecture)
+    if architecture_family != "inferred_dvfm":
         total = 0.0
         recon_total = 0.0
         kl_total = 0.0
         n_batches = 0
         with torch.no_grad():
             for batch in loader:
-                if architecture == "no_latent":
+                if architecture_family == "no_latent":
                     loss, recon, kl = no_latent_loss(model, batch, device)
                 else:
                     loss, recon, kl = oracle_loss(model, batch, device)
@@ -468,9 +474,18 @@ def _validation_objective(
     return total / n_batches, recon_total / n_batches, kl_total / n_batches
 
 
+def _architecture_family(architecture: str) -> str:
+    if architecture.startswith("inferred_dvfm"):
+        return "inferred_dvfm"
+    if architecture.startswith("dvfm2"):
+        return "dvfm2"
+    return architecture
+
+
 def train_model(model, architecture, train, valid, cfg, device):
+    architecture_family = _architecture_family(architecture)
     batch_size = int(cfg["batch_size"])
-    if architecture == "oracle_z":
+    if architecture_family == "oracle_z":
         train_loader = make_oracle_loader(train, batch_size, True)
         valid_loader = make_oracle_loader(valid, batch_size, False)
     else:
@@ -500,7 +515,7 @@ def train_model(model, architecture, train, valid, cfg, device):
     for epoch in range(epochs):
         beta = (
             min(beta_max, beta_max * (epoch + 1) / max(warmup, 1))
-            if architecture == "inferred_dvfm"
+            if architecture_family == "inferred_dvfm"
             else 0.0
         )
 
@@ -510,9 +525,9 @@ def train_model(model, architecture, train, valid, cfg, device):
 
         for batch in train_loader:
             optimizer.zero_grad()
-            if architecture == "no_latent":
+            if architecture_family == "no_latent":
                 loss, recon, kl = no_latent_loss(model, batch, device)
-            elif architecture == "oracle_z":
+            elif architecture_family == "oracle_z":
                 loss, recon, kl = oracle_loss(model, batch, device)
             else:
                 loss, recon, kl = inferred_loss(model, batch, beta, device)
@@ -595,6 +610,98 @@ def train_model(model, architecture, train, valid, cfg, device):
         "epochs_completed": len(history),
     }
 
+
+
+def train_dvfm2_model(model, train, valid, cfg, device):
+    """Train DVFM2 with the same full-epoch policy as the Oracle experiment."""
+    batch_size = int(cfg["batch_size"])
+    train_loader = make_standard_loader(train, batch_size, True)
+    valid_loader = make_standard_loader(valid, batch_size, False)
+
+    history, info = train_dvfm2(
+        model,
+        train_loader,
+        valid_loader,
+        epochs=int(cfg.get("epochs", 200)),
+        lr=float(cfg["learning_rate"]),
+        warmup_epochs=int(cfg.get("warmup_epochs", 50)),
+        beta_shared_max=float(cfg.get("beta_shared_max", cfg.get("beta_max", 1.0))),
+        private_kl_multiplier=float(cfg.get("private_kl_multiplier", 2.0)),
+        free_bits_shared=float(cfg.get("free_bits_shared", 0.0)),
+        free_bits_private=float(cfg.get("free_bits_private", 0.0)),
+        validation_mc_samples=int(cfg.get("validation_mc_samples", 5)),
+        grad_clip=float(cfg.get("grad_clip", 1.0)),
+        lr_factor=float(cfg.get("lr_factor", 0.5)),
+        lr_patience=int(cfg.get("lr_patience", 10)),
+        device=device,
+        log_every=int(cfg.get("log_every", 25)),
+    )
+
+    # Harmonize key names with the original experiment output.
+    info = {
+        **info,
+        "best_epoch": int(info["best_validation_reconstruction_epoch"]),
+        "best_validation_loss": float(info["best_validation_reconstruction_nll"]),
+    }
+    return history, info
+
+
+def _encode_dvfm2_posterior_means(model, split, batch_size, device):
+    loader = make_standard_loader(split, batch_size, False)
+    collected = {"shared": [], "event_private": [], "censor_private": []}
+    model.eval()
+    with torch.no_grad():
+        for x, time_, event in loader:
+            q = model.encode(x.to(device), time_.to(device), event.to(device))
+            collected["shared"].append(q["mu_s"].cpu().numpy())
+            collected["event_private"].append(q["mu_e"].cpu().numpy())
+            collected["censor_private"].append(q["mu_c"].cpu().numpy())
+    return {
+        key: np.concatenate(parts, axis=0)
+        for key, parts in collected.items()
+    }
+
+
+def _dvfm2_latent_recovery_metrics(
+    model,
+    train,
+    test,
+    batch_size,
+    device,
+    latent_effect,
+):
+    """Oracle-only diagnostics for where the true frailty is routed in DVFM2."""
+    train_mu = _encode_dvfm2_posterior_means(
+        model, train, batch_size, device
+    )
+    test_mu = _encode_dvfm2_posterior_means(
+        model, test, batch_size, device
+    )
+
+    out = {}
+    for component in ("shared", "event_private", "censor_private"):
+        metrics = _aligned_latent_recovery_metrics(
+            train_mu=train_mu[component],
+            test_mu=test_mu[component],
+            train_z=train["true_z"],
+            test_z=test["true_z"],
+            test_event=test["event"],
+            latent_effect=latent_effect,
+        )
+        for key, value in metrics.items():
+            # latent_all_z_spearman -> shared_latent_all_z_spearman
+            out[f"{component}_{key}"] = value
+    return out
+
+
+def _dvfm2_private_posterior_stats(model, train, batch_size, device):
+    """Deployment-available posterior diagnostics: no use of true z."""
+    mus = _encode_dvfm2_posterior_means(model, train, batch_size, device)
+    out = {}
+    for component, arr in mus.items():
+        out[f"{component}_posterior_mu_mean"] = float(np.mean(arr))
+        out[f"{component}_posterior_mu_std"] = float(np.std(arr))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -728,7 +835,8 @@ def predict_prior_marginal(
 ):
     rng = np.random.default_rng(seed)
     # Common random numbers across subjects make the MC comparison cleaner.
-    z_draws = rng.normal(size=(mc_samples, 1)).astype(np.float32)
+    latent_dim = int(model.latent_dim)
+    z_draws = rng.normal(size=(mc_samples, latent_dim)).astype(np.float32)
 
     pieces = []
     model.eval()
@@ -743,7 +851,7 @@ def predict_prior_marginal(
             for z_np in z_draws:
                 z = torch.as_tensor(
                     z_np, dtype=torch.float32, device=device
-                ).reshape(1, 1).expand(len(x), 1)
+                ).reshape(1, latent_dim).expand(len(x), latent_dim)
                 shape_t, scale_t, _, _ = model.decoder(x, z)
                 acc += weibull_survival(
                     grid,
@@ -912,6 +1020,7 @@ def evaluate_survival(survival, true_t, grid):
 
 
 def learned_tau(model, architecture, x_fixed, n_samples, device, seed):
+    architecture_family = _architecture_family(architecture)
     rng = np.random.default_rng(seed)
     x = torch.as_tensor(
         x_fixed, dtype=torch.float32, device=device
@@ -919,7 +1028,7 @@ def learned_tau(model, architecture, x_fixed, n_samples, device, seed):
 
     model.eval()
     with torch.no_grad():
-        if architecture == "no_latent":
+        if architecture_family == "no_latent":
             shape_t, scale_t, shape_c, scale_c = model(x)
         else:
             z = torch.as_tensor(
@@ -950,8 +1059,9 @@ def latent_effect_profile(
     device,
     seed,
 ):
+    architecture_family = _architecture_family(architecture)
     rows = []
-    if architecture == "no_latent":
+    if architecture_family == "no_latent":
         return rows
 
     model.eval()
@@ -989,34 +1099,54 @@ def latent_effect_profile(
 # Experiment
 # ---------------------------------------------------------------------------
 
-def build_models(input_dim, cfg, decoder_init_state, device):
+def build_models(input_dim, cfg, device):
     model_cfg = cfg["model"]
     decoder_hidden = list(model_cfg["decoder_hidden"])
     encoder_hidden = list(model_cfg["encoder_hidden"])
 
-    no_latent = NoLatentJointWeibull(
-        input_dim=input_dim,
-        hidden_dims=decoder_hidden,
-    ).to(device)
-
+    # Original DVFM remains scalar: this experiment is explicitly d_z=1.
     inferred = DVFM(
         input_dim=input_dim,
         latent_dim=1,
         encoder_hidden=encoder_hidden,
         decoder_hidden=decoder_hidden,
     ).to(device)
-    inferred.decoder.load_state_dict(copy.deepcopy(decoder_init_state))
 
-    oracle = OracleZModel(
+    dvfm2_cfg = model_cfg["dvfm2"]
+    # All three DVFM2 factors are scalar. z_s is the shared dependence latent.
+    dims = {
+        "shared_dim": int(dvfm2_cfg.get("shared_dim", 1)),
+        "event_dim": int(dvfm2_cfg.get("event_dim", 1)),
+        "censor_dim": int(dvfm2_cfg.get("censor_dim", 1)),
+    }
+    if dims != {"shared_dim": 1, "event_dim": 1, "censor_dim": 1}:
+        raise ValueError(
+            "This Oracle workflow is intentionally scalar-only: "
+            "shared_dim=event_dim=censor_dim=1."
+        )
+
+    dvfm2 = SharedPrivateDVFM(
         input_dim=input_dim,
-        decoder_hidden=decoder_hidden,
+        shared_dim=1,
+        event_dim=1,
+        censor_dim=1,
+        encoder_hidden=list(dvfm2_cfg.get("encoder_hidden", encoder_hidden)),
+        decoder_hidden=list(dvfm2_cfg.get("decoder_hidden", decoder_hidden)),
+        latent_hidden=list(dvfm2_cfg.get("latent_hidden", [])),
+        shared_same_sign=bool(dvfm2_cfg.get("shared_same_sign", True)),
     ).to(device)
-    oracle.decoder.load_state_dict(copy.deepcopy(decoder_init_state))
 
     return {
-        "no_latent": no_latent,
-        "inferred_dvfm": inferred,
-        "oracle_z": oracle,
+        "no_latent": NoLatentJointWeibull(
+            input_dim=input_dim,
+            hidden_dims=decoder_hidden,
+        ).to(device),
+        "inferred_dvfm_d1": inferred,
+        "dvfm2_d1": dvfm2,
+        "oracle_z": OracleZModel(
+            input_dim=input_dim,
+            decoder_hidden=decoder_hidden,
+        ).to(device),
     }
 
 
@@ -1070,8 +1200,9 @@ def run(cfg: dict[str, Any]):
     device = resolve_device(str(cfg.get("device", "auto")))
     print(f"Device: {device}")
     print(
-        f"Oracle-Z benchmark: tau={target_tau:.2f}, "
-        f"censoring={target_censoring:.0%}, loading={loading:.4f}"
+        f"Oracle-Z + DVFM2 benchmark: tau={target_tau:.2f}, "
+        f"censoring={target_censoring:.0%}, loading={loading:.4f}, "
+        "original_dz=1, dvfm2=(z_s=1,z_e=1,z_c=1), oracle_dz=1"
     )
 
     result_rows = []
@@ -1102,24 +1233,12 @@ def run(cfg: dict[str, Any]):
             cfg["preprocessing"],
         )
 
-        # One shared initialization for the two dz=1 decoders. This removes an
-        # initialization confound between inferred_dvfm and oracle_z.
-        decoder_seed = seed + 50_000
-        seed_everything(decoder_seed)
-        init_decoder = Decoder(
-            input_dim=train["X"].shape[1],
-            latent_dim=1,
-            hidden_dims=list(cfg["model"]["decoder_hidden"]),
-        )
-        decoder_init_state = copy.deepcopy(init_decoder.state_dict())
-
-        # Build each model deterministically. The inferred/oracle decoders start
-        # from exactly the same weights.
+        # Build models deterministically. The inferred model uses the configured
+        # latent dimension (20 for this diagnostic); Oracle-Z remains scalar.
         seed_everything(seed + 60_000)
         models = build_models(
             train["X"].shape[1],
             cfg,
-            decoder_init_state,
             device,
         )
 
@@ -1152,6 +1271,7 @@ def run(cfg: dict[str, Any]):
                 "seed": seed,
                 "architecture": "true_dgp",
                 "prediction_distribution": "true_dgp",
+                "latent_dim": 1,
                 "target_tau": target_tau,
                 "target_censoring": target_censoring,
                 "achieved_censoring": dgp["achieved_censoring"],
@@ -1164,27 +1284,51 @@ def run(cfg: dict[str, Any]):
             }
         )
 
-        for architecture in ("no_latent", "inferred_dvfm", "oracle_z"):
+        architecture_order = [
+            "no_latent",
+            "inferred_dvfm_d1",
+            "dvfm2_d1",
+            "oracle_z",
+        ]
+
+        for architecture in architecture_order:
             print(f"  Training {architecture}")
             model = models[architecture]
+            architecture_family = _architecture_family(architecture)
 
-            # Re-seed training streams. Inferred and oracle use distinct
-            # stochastic streams, while their decoder initialization is matched.
-            seed_everything(seed + {
-                "no_latent": 100_000,
-                "inferred_dvfm": 110_000,
-                "oracle_z": 120_000,
-            }[architecture])
+            # Re-seed each model deterministically. The inferred d=1 and d=20
+            # variants see the exact same data split but have independent
+            # optimization streams.
+            if architecture_family == "no_latent":
+                train_seed_offset = 100_000
+            elif architecture_family == "inferred_dvfm":
+                train_seed_offset = 111_000
+            elif architecture_family == "dvfm2":
+                train_seed_offset = 115_000
+            elif architecture_family == "oracle_z":
+                train_seed_offset = 120_000
+            else:
+                raise ValueError(architecture)
+            seed_everything(seed + train_seed_offset)
 
             start = time.time()
-            history, info = train_model(
-                model,
-                architecture,
-                train,
-                valid,
-                cfg["training"],
-                device,
-            )
+            if architecture_family == "dvfm2":
+                history, info = train_dvfm2_model(
+                    model,
+                    train,
+                    valid,
+                    cfg["training"],
+                    device,
+                )
+            else:
+                history, info = train_model(
+                    model,
+                    architecture,
+                    train,
+                    valid,
+                    cfg["training"],
+                    device,
+                )
             wall = time.time() - start
             history.to_csv(
                 history_dir / f"seed{seed}_{architecture}.csv",
@@ -1194,13 +1338,13 @@ def run(cfg: dict[str, Any]):
             batch_size = int(cfg["training"]["batch_size"])
             mc_samples = int(cfg["evaluation"]["mc_samples"])
 
-            if architecture == "no_latent":
+            if architecture_family == "no_latent":
                 predictions = {
                     "none": predict_no_latent(
                         model, test["X"], grid, batch_size, device
                     )
                 }
-            elif architecture == "inferred_dvfm":
+            elif architecture_family == "inferred_dvfm":
                 predictions = {
                     "prior_N01": predict_prior_marginal(
                         model, test["X"], grid, batch_size, mc_samples,
@@ -1209,6 +1353,31 @@ def run(cfg: dict[str, Any]):
                     "qagg": predict_aggregate_posterior_marginal(
                         model, train, test["X"], grid, batch_size, mc_samples,
                         device, seed + 810_000,
+                    ),
+                }
+            elif architecture_family == "dvfm2":
+                dvfm2_train_loader = make_standard_loader(
+                    train, batch_size, False
+                )
+                predictions = {
+                    "prior_N01": predict_dvfm2_prior(
+                        model,
+                        test["X"],
+                        grid,
+                        n_samples=mc_samples,
+                        batch_size=batch_size,
+                        device=device,
+                        seed=seed + 800_000,
+                    ),
+                    "qagg": predict_dvfm2_qagg(
+                        model,
+                        test["X"],
+                        grid,
+                        dvfm2_train_loader,
+                        n_samples=mc_samples,
+                        batch_size=batch_size,
+                        device=device,
+                        seed=seed + 810_000,
                     ),
                 }
             else:
@@ -1223,17 +1392,27 @@ def run(cfg: dict[str, Any]):
                     ),
                 }
 
-            tau_hat = learned_tau(
-                model,
-                architecture,
-                np.zeros(train["X"].shape[1], dtype=np.float32),
-                int(cfg["evaluation"]["dependence_mc_samples"]),
-                device,
-                seed + 900_000,
-            )
+            if architecture_family == "dvfm2":
+                tau_hat = learned_dvfm2_tau(
+                    model,
+                    np.zeros(train["X"].shape[1], dtype=np.float32),
+                    n_samples=int(cfg["evaluation"]["dependence_mc_samples"]),
+                    device=device,
+                    seed=seed + 900_000,
+                )
+            else:
+                tau_hat = learned_tau(
+                    model,
+                    architecture,
+                    np.zeros(train["X"].shape[1], dtype=np.float32),
+                    int(cfg["evaluation"]["dependence_mc_samples"]),
+                    device,
+                    seed + 900_000,
+                )
 
             latent_metrics = {}
-            if architecture == "inferred_dvfm":
+            posterior_stats = {}
+            if architecture_family == "inferred_dvfm":
                 train_mu = _encode_inferred_mu(model, train, batch_size, device)
                 test_mu = _encode_inferred_mu(model, test, batch_size, device)
                 latent_metrics = _aligned_latent_recovery_metrics(
@@ -1243,6 +1422,18 @@ def run(cfg: dict[str, Any]):
                     test_z=test["true_z"],
                     test_event=test["event"],
                     latent_effect=str(dgp_cfg.get("latent_effect", "tanh")),
+                )
+            elif architecture_family == "dvfm2":
+                latent_metrics = _dvfm2_latent_recovery_metrics(
+                    model=model,
+                    train=train,
+                    test=test,
+                    batch_size=batch_size,
+                    device=device,
+                    latent_effect=str(dgp_cfg.get("latent_effect", "tanh")),
+                )
+                posterior_stats = _dvfm2_private_posterior_stats(
+                    model, train, batch_size, device
                 )
 
             for prediction_distribution, survival in predictions.items():
@@ -1254,6 +1445,15 @@ def run(cfg: dict[str, Any]):
                         "seed": seed,
                         "architecture": architecture,
                         "prediction_distribution": prediction_distribution,
+                        "latent_dim": (
+                            1 if architecture_family in {"inferred_dvfm", "oracle_z"}
+                            else int(getattr(model, "shared_dim", 0))
+                            if architecture_family == "dvfm2"
+                            else 0
+                        ),
+                        "shared_dim": int(getattr(model, "shared_dim", 0)),
+                        "event_private_dim": int(getattr(model, "event_dim", 0)),
+                        "censor_private_dim": int(getattr(model, "censor_dim", 0)),
                         "target_tau": target_tau,
                         "target_censoring": target_censoring,
                         "achieved_censoring": dgp["achieved_censoring"],
@@ -1267,19 +1467,26 @@ def run(cfg: dict[str, Any]):
                         **info,
                         **metrics,
                         **latent_metrics,
+                        **posterior_stats,
                     }
                 )
 
-            profile_rows.extend(
-                latent_effect_profile(
-                    model,
-                    architecture,
-                    np.zeros(train["X"].shape[1], dtype=np.float32),
-                    np.asarray(cfg["evaluation"]["latent_profile_z"], dtype=float),
-                    device,
-                    seed,
+            # The existing latent-effect profile varies a single scalar z.
+            # Keep it for Oracle-Z; skip it for a multi-dimensional inferred model.
+            # Existing profile helper applies to the original scalar joint decoder
+            # and Oracle-Z. DVFM2 has explicit z_s/z_e/z_c paths and is diagnosed
+            # through its dedicated recovery/tau/posterior metrics above.
+            if architecture_family in {"inferred_dvfm", "oracle_z"}:
+                profile_rows.extend(
+                    latent_effect_profile(
+                        model,
+                        architecture,
+                        np.zeros(train["X"].shape[1], dtype=np.float32),
+                        np.asarray(cfg["evaluation"]["latent_profile_z"], dtype=float),
+                        device,
+                        seed,
+                    )
                 )
-            )
 
     results = pd.DataFrame(result_rows)
     profiles = pd.DataFrame(profile_rows)

@@ -1,0 +1,95 @@
+output_dir: results/synthetic_oracle_z_dvfm2
+device: auto
+seeds:
+- 0
+- 1
+- 2
+
+synthetic:
+  n_samples: 10000
+  n_features: 10
+  target_tau: 0.5
+  target_censoring: 0.3
+  latent_effect: linear
+  covariate_effect_scale: 0.6
+  event_shape: 1.5
+  censor_shape: 1.3
+  event_base_scale: 1.0
+  censor_base_scale: 1.0
+  dgp_parameter_seed: 2026
+  tau_calibration_samples: 100000
+  tau_calibration_seed: 12345
+  tau_loading_upper: 16.0
+  tau_calibration_steps: 24
+  censor_calibration_samples: 100000
+  censor_calibration_seed: 54321
+
+split:
+  validation_fraction: 0.15
+  test_fraction: 0.15
+
+preprocessing:
+  standardize_x: true
+  time_normalization: train_max
+
+model:
+  encoder_hidden:
+  - 64
+  - 32
+  decoder_hidden:
+  - 32
+  - 64
+  dvfm2:
+    shared_dim: 1
+    event_dim: 1
+    censor_dim: 1
+    encoder_hidden:
+    - 64
+    - 32
+    decoder_hidden:
+    - 32
+    - 64
+    latent_hidden: []
+    shared_same_sign: true
+
+training:
+  epochs: 200
+  batch_size: 64
+  learning_rate: 0.001
+  warmup_epochs: 50
+  beta_max: 1.0
+  beta_shared_max: 1.0
+  private_kl_multiplier: 2.0
+  free_bits_shared: 0.0
+  free_bits_private: 0.0
+  validation_mc_samples: 5
+  grad_clip: 1.0
+  lr_factor: 0.5
+  lr_patience: 10
+  minimum_improvement: 1.0e-05
+  log_every: 25
+
+evaluation:
+  mc_samples: 200
+  dependence_mc_samples: 5000
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  latent_profile_z:
+  - -3
+  - -2
+  - -1
+  - 0
+  - 1
+  - 2
+  - 3
+  
+gwf:
+  target_name: dvfm2_oracle_gaussian_d1
+  account: c2i-colon
+  partition: gpu-h200
+  cores: 4
+  memory: 50g
+  walltime: 02:00:00
+  gpus: 1
+  conda_env: dvfm
+  experiment_module: experiments.synthetic_oracle_z_dvfm2

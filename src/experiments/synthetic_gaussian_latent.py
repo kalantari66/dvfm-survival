@@ -44,7 +44,7 @@ import torch
 import yaml
 from lifelines.utils import concordance_index
 from scipy.integrate import trapezoid
-from scipy.stats import kendalltau, pearsonr
+from scipy.stats import kendalltau, pearsonr, spearmanr
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score
 from sklearn.model_selection import train_test_split
@@ -423,7 +423,9 @@ def train_model(model, architecture, train, valid, cfg, device):
         val_loss /= denom_v
         val_recon /= denom_v
         val_kl /= denom_v
-        scheduler.step(val_loss)
+        # The beta-weighted ELBO changes during warmup, so compare epochs
+        # using the stationary observed-data reconstruction NLL instead.
+        scheduler.step(val_recon)
 
         history.append({
             "epoch": epoch + 1,
@@ -437,8 +439,8 @@ def train_model(model, architecture, train, valid, cfg, device):
             "learning_rate": optimizer.param_groups[0]["lr"],
         })
 
-        if val_loss < best_val - float(cfg.get("minimum_improvement", 1e-5)):
-            best_val = val_loss
+        if val_recon < best_val - float(cfg.get("minimum_improvement", 1e-5)):
+            best_val = val_recon
             best_epoch = epoch + 1
             best_state = {
                 k: v.detach().cpu().clone()
@@ -464,7 +466,9 @@ def train_model(model, architecture, train, valid, cfg, device):
     model.to(device)
     return pd.DataFrame(history), {
         "best_epoch": int(best_epoch),
-        "best_validation_loss": float(best_val),
+        "best_validation_reconstruction_nll": float(best_val),
+        "best_validation_loss": float(best_val),  # legacy alias; now reconstruction NLL
+        "checkpoint_selection_metric": "validation_reconstruction_nll",
         "epochs_completed": int(len(history)),
     }
 
@@ -606,23 +610,77 @@ def _posterior_arrays(model, architecture, split, batch_size, device):
             result["censor_logvar"] = np.concatenate(lc)
     return result
 
-def _probe_true_z(train_mu, test_mu, train_z, test_z):
+def _safe_corr(fn, x, y):
+    x = np.asarray(x, dtype=float).reshape(-1)
+    y = np.asarray(y, dtype=float).reshape(-1)
+    if len(x) < 3 or np.std(x) < 1e-12 or np.std(y) < 1e-12:
+        return float("nan")
+    return float(fn(x, y).statistic)
+
+
+def _probe_true_z(
+    train_mu,
+    test_mu,
+    train_z,
+    test_z,
+    test_event=None,
+    prefix="latent",
+):
+    """Training-aligned latent recovery, with subgroup rank diagnostics."""
+    train_mu = np.asarray(train_mu, dtype=float)
+    test_mu = np.asarray(test_mu, dtype=float)
+    train_z = np.asarray(train_z, dtype=float).reshape(-1)
+    test_z = np.asarray(test_z, dtype=float).reshape(-1)
+    if train_mu.ndim == 1:
+        train_mu = train_mu[:, None]
+    if test_mu.ndim == 1:
+        test_mu = test_mu[:, None]
+
     ridge = Ridge(alpha=1e-6)
     ridge.fit(train_mu, train_z)
     pred = ridge.predict(test_mu)
-    r = float(pearsonr(pred, test_z).statistic)
+
+    r = _safe_corr(pearsonr, pred, test_z)
     r2 = float(r2_score(test_z, pred))
     dim_corrs = []
     for j in range(test_mu.shape[1]):
-        if np.std(test_mu[:, j]) < 1e-12:
-            dim_corrs.append(0.0)
-        else:
-            dim_corrs.append(abs(float(pearsonr(test_mu[:, j], test_z).statistic)))
-    return {
+        dim_corrs.append(abs(_safe_corr(pearsonr, test_mu[:, j], test_z)))
+
+    out = {
         "latent_probe_pearson": r,
         "latent_probe_r2": r2,
-        "best_single_dim_abs_pearson": float(max(dim_corrs)),
+        "best_single_dim_abs_pearson": float(np.nanmax(dim_corrs)),
     }
+
+    if test_event is None:
+        return out
+
+    test_event = np.asarray(test_event, dtype=int).reshape(-1)
+    tanh_z = np.tanh(test_z)
+    groups = {
+        "all": np.ones(len(test_z), dtype=bool),
+        "uncensored": test_event == 1,
+        "censored": test_event == 0,
+    }
+    for group, mask in groups.items():
+        if np.sum(mask) < 3:
+            continue
+        key = f"{prefix}_{group}"
+        out[f"{key}_n"] = int(np.sum(mask))
+        out[f"{key}_z_pearson"] = _safe_corr(pearsonr, pred[mask], test_z[mask])
+        out[f"{key}_z_spearman"] = _safe_corr(spearmanr, pred[mask], test_z[mask])
+        out[f"{key}_z_kendall"] = _safe_corr(kendalltau, pred[mask], test_z[mask])
+        out[f"{key}_tanhz_pearson"] = _safe_corr(
+            pearsonr, pred[mask], tanh_z[mask]
+        )
+        out[f"{key}_tanhz_spearman"] = _safe_corr(
+            spearmanr, pred[mask], tanh_z[mask]
+        )
+        out[f"{key}_tanhz_kendall"] = _safe_corr(
+            kendalltau, pred[mask], tanh_z[mask]
+        )
+    return out
+
 
 def _kl_dimension_stats(mu, logvar, threshold):
     per_dim = 0.5 * np.mean(
@@ -811,6 +869,8 @@ def run_one(
                     test_post["shared_mu"],
                     train["true_z"],
                     test["true_z"],
+                    test_event=test["event"],
+                    prefix="latent",
                 )
             )
             kl = _kl_dimension_stats(
@@ -827,16 +887,26 @@ def run_one(
         else:
             event_probe = _probe_true_z(
                 train_post["event_mu"], test_post["event_mu"],
-                train["true_z"], test["true_z"]
+                train["true_z"], test["true_z"],
+                test_event=test["event"],
+                prefix="event_latent",
             )
             censor_probe = _probe_true_z(
                 train_post["censor_mu"], test_post["censor_mu"],
-                train["true_z"], test["true_z"]
+                train["true_z"], test["true_z"],
+                test_event=test["event"],
+                prefix="censor_latent",
             )
             for key, value in event_probe.items():
-                row[f"event_{key}"] = value
+                if key.startswith("event_latent_"):
+                    row[key] = value
+                else:
+                    row[f"event_{key}"] = value
             for key, value in censor_probe.items():
-                row[f"censor_{key}"] = value
+                if key.startswith("censor_latent_"):
+                    row[key] = value
+                else:
+                    row[f"censor_{key}"] = value
             kl_e = _kl_dimension_stats(
                 test_post["event_mu"], test_post["event_logvar"], threshold
             )
