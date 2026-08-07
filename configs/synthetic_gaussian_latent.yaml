@@ -7,7 +7,7 @@ gwf:
   cores: 4
   memory: 25g
   walltime: "02:00:00"
-  partition: gpu-short
+  partition: gpu-h200
 
 output_dir: results/synthetic_gaussian_latent
 resume: true
