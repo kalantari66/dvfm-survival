@@ -1,30 +1,27 @@
-# Mechanistic benchmark: can DVFM exploit a *known Gaussian shared latent*
-# specifically because it induces dependent censoring?
+# Simplified mechanistic benchmark incorporating colleague's prediction settings.
+# Main scientific settings:
+# - beta_max = 1.0
+# - KL warmup reaches beta_max by epoch 50
+# - learning_rate = 0.001
 #
-# Run from repository root:
+# Run:
 #   python -m experiments.synthetic_gaussian_latent \
-#       --config configs/experiments/gaussian_latent_mechanistic.yaml
+#       --config configs/experiments/gaussian_latent_mechanistic_simplified.yaml
 #
-# Inspect the grid without training:
-#   python -m experiments.synthetic_gaussian_latent \
-#       --config configs/experiments/gaussian_latent_mechanistic.yaml --dry-run
-#
-# Full grid = 840 fits:
-#   12 DGP conditions (4 tau x 3 censoring)
-#   x 10 seeds
-#   x [1 no-latent + 3 shared dz + 3 separate dz]
+# Fits:
+#   3 tau x 2 censoring x 5 seeds x
+#   [1 no-latent + 2 shared dz + 2 separate dz] = 150 fits
 
-output_dir: results/dvfm_gaussian_latent_mechanistic
+output_dir: results/dvfm_gaussian_latent_mechanistic_simplified
 resume: true
 device: auto
 torch_num_threads: 4
 
 grid:
-  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  kendall_tau: [0.00, 0.25, 0.50, 0.75]
-  censoring_rates: [0.30, 0.50, 0.70]
-  # dz=0 is represented by the matched no_latent fit once per DGP condition.
-  latent_dims: [1, 5, 20]
+  seeds: [0, 1, 2, 3, 4]
+  kendall_tau: [0.00, 0.50, 0.75]
+  censoring_rates: [0.30, 0.70]
+  latent_dims: [1, 20]
   include_separate_latent: true
 
 synthetic:
@@ -41,8 +38,6 @@ synthetic:
   covariate_effect_scale: 0.60
   dgp_parameter_seed: 2026
 
-  # Numerical calibration of the shared loading a so that, at fixed X,
-  # Kendall tau(T,C|X) matches the requested grid value.
   tau_calibration_samples: 100000
   tau_calibration_seed: 12345
   tau_calibration_steps: 24
@@ -61,17 +56,17 @@ model:
   decoder_hidden: [32, 64]
 
 training:
-  epochs: 200
-  minimum_epochs: 75
-  early_stopping_patience: 30
-  learning_rate: 0.001
-  batch_size: 64
+  epochs: 150
+  minimum_epochs: 50
+  early_stopping_patience: 20
 
-  # Match the colleague/paper synthetic setting rather than the SUPPORT run.
+  # Colleague-recommended prediction settings.
+  learning_rate: 0.001
   beta_max: 1.0
   warmup_epochs: 50
-  free_bits: 0.0
 
+  batch_size: 64
+  free_bits: 0.0
   lr_patience: 10
   lr_factor: 0.5
   grad_clip: 1.0
@@ -79,16 +74,10 @@ training:
   log_every: 25
 
 evaluation:
-  # Baseline prediction deliberately marginalizes p(z)=N(0,I), not q_agg.
-  # This exactly matches the true latent prior in this easy-mode benchmark.
+  # Easy-mode test: prior exactly matches true latent-generating distribution.
   latent_distribution: prior
-  mc_samples: 200
-
-  n_time_points: 250
+  mc_samples: 100
+  n_time_points: 150
   grid_max_quantile: 0.95
-
-  # Learned dependence: simulate T,C from trained decoder at fixed x.
-  dependence_mc_samples: 3000
-
-  # Effective latent dimensionality diagnostics.
+  dependence_mc_samples: 1500
   active_dim_kl_threshold: 0.01
