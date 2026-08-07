@@ -1,12 +1,9 @@
-"""Single-job GWF workflow for the DVFM Gaussian-latent benchmark.
-
-The experiment YAML is the single source of truth for both scientific settings
-and scheduler resources. The GWF template is intentionally kept in this file.
+"""Single-job GWF workflow + template for synthetic_oracle_z.
 
 From the repository root:
 
-    gwf -f workflows/dvfm_gaussian_latent/workflow.py status
-    gwf -f workflows/dvfm_gaussian_latent/workflow.py run
+    gwf -f workflows/synthetic_oracle_z/workflow.py status
+    gwf -f workflows/synthetic_oracle_z/workflow.py run
 """
 
 from __future__ import annotations
@@ -17,11 +14,9 @@ import yaml
 from gwf import AnonymousTarget, Workflow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-EXPERIMENT_CONFIG = (
-    PROJECT_ROOT / "configs" / "synthetic_gaussian_latent.yaml"
-)
+EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "synthetic_oracle_z.yaml"
 
-def run_dvfm_experiment(
+def synthetic_oracle_z_template(
     experiment_config: Path,
     result_dir: Path,
     cores: int,
@@ -30,7 +25,11 @@ def run_dvfm_experiment(
     partition: str,
     account: str,
 ) -> AnonymousTarget:
-    """Run the full Gaussian-latent benchmark as one GWF/SLURM target."""
+    """Run the complete oracle-Z sanity experiment as one SLURM job."""
+
+    experiment_script = (
+        PROJECT_ROOT / "src" / "experiments" / "synthetic_oracle_z.py"
+    )
 
     inputs = [
         str(experiment_config),
@@ -40,16 +39,17 @@ def run_dvfm_experiment(
         str(result_dir / "results_raw.csv"),
         str(result_dir / "results_mean.csv"),
         str(result_dir / "results_std.csv"),
-        str(result_dir / "dgp_tau_calibration.csv"),
+        str(result_dir / "latent_effect_profiles.csv"),
+        str(result_dir / "dgp_calibration.json"),
         str(result_dir / "resolved_config.yaml"),
         str(result_dir / "_SUCCESS"),
     ]
 
     options = {
         "cores": str(cores),
-        "memory": memory,
-        "walltime": walltime,
-        "account": account,
+        "memory": str(memory),
+        "walltime": str(walltime),
+        "account": str(account),
         "gres": f"gpu:1 -p {partition}",
     }
 
@@ -59,7 +59,7 @@ def run_dvfm_experiment(
     cd "{PROJECT_ROOT}"
     mkdir -p "{result_dir}"
 
-    echo "[GWF] $(date) starting DVFM Gaussian-latent mechanistic benchmark"
+    echo "[GWF] $(date) starting synthetic_oracle_z"
     echo "[GWF] experiment_config={experiment_config}"
     echo "[GWF] result_dir={result_dir}"
     echo "[GWF] account={account}"
@@ -78,21 +78,20 @@ def run_dvfm_experiment(
     export NUMEXPR_NUM_THREADS="{cores}"
 
     test -s "{experiment_config}"
-    test -s "{PROJECT_ROOT / 'src' / 'experiments' / 'synthetic_gaussian_latent.py'}"
-    test -s "{PROJECT_ROOT / 'src' / 'dvfm' / 'model_variants.py'}"
+    test -s "{experiment_script}"
 
-    python -u -m experiments.synthetic_gaussian_latent \
+    python -u -m experiments.synthetic_oracle_z \
         --config "{experiment_config}"
 
     test -s "{result_dir / 'results_raw.csv'}"
     test -s "{result_dir / 'results_mean.csv'}"
     test -s "{result_dir / 'results_std.csv'}"
-    test -s "{result_dir / 'dgp_tau_calibration.csv'}"
+    test -s "{result_dir / 'latent_effect_profiles.csv'}"
+    test -s "{result_dir / 'dgp_calibration.json'}"
     test -s "{result_dir / 'resolved_config.yaml'}"
 
     touch "{result_dir / '_SUCCESS'}"
-
-    echo "[GWF] $(date) completed DVFM Gaussian-latent mechanistic benchmark"
+    echo "[GWF] $(date) completed synthetic_oracle_z"
     """
 
     return AnonymousTarget(
@@ -105,22 +104,21 @@ def run_dvfm_experiment(
 with EXPERIMENT_CONFIG.open(encoding="utf-8") as handle:
     config = yaml.safe_load(handle)
 
-gwf_config = config["gwf"]
-
+gwf_cfg = config["gwf"]
 result_dir = Path(config["output_dir"])
 if not result_dir.is_absolute():
     result_dir = PROJECT_ROOT / result_dir
 
 gwf = Workflow()
 gwf.target_from_template(
-    name=str(gwf_config["target_name"]),
-    template=run_dvfm_experiment(
+    name=str(gwf_cfg["target_name"]),
+    template=synthetic_oracle_z_template(
         experiment_config=EXPERIMENT_CONFIG,
         result_dir=result_dir,
-        cores=int(gwf_config["cores"]),
-        memory=str(gwf_config["memory"]),
-        walltime=str(gwf_config["walltime"]),
-        partition=str(gwf_config["partition"]),
-        account=str(gwf_config["account"]),
+        cores=int(gwf_cfg["cores"]),
+        memory=str(gwf_cfg["memory"]),
+        walltime=str(gwf_cfg["walltime"]),
+        partition=str(gwf_cfg["partition"]),
+        account=str(gwf_cfg["account"]),
     ),
 )

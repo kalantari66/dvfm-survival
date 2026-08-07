@@ -1,0 +1,89 @@
+# Small oracle-Z sanity check for the Gaussian-latent DVFM experiment.
+#
+# Three trained models per seed:
+#   1) no_latent
+#   2) inferred_dvfm, dz=1
+#   3) oracle_z, true z supplied during train/validation
+#
+# A fourth "true_dgp" row is an evaluation-only reference using the known
+# generative event survival distribution.
+#
+# Total trained fits: 3 seeds x 3 models = 9.
+
+gwf:
+  target_name: synthetic_oracle_z
+  account: c2i-colon
+  cores: 4
+  memory: 25g
+  walltime: "02:00:00"
+  partition: gpu-h200
+
+output_dir: results/synthetic_oracle_z
+device: auto
+torch_num_threads: 4
+
+seeds: [0, 1, 2]
+
+synthetic:
+  n_samples: 5000
+  n_features: 10
+
+  target_tau: 0.50
+  target_censoring: 0.30
+
+  latent_effect: tanh
+  event_shape: 1.5
+  censor_shape: 1.3
+  event_base_scale: 1.0
+  censor_base_scale: 1.0
+  covariate_effect_scale: 0.60
+  dgp_parameter_seed: 2026
+
+  tau_calibration_samples: 100000
+  tau_calibration_seed: 12345
+  tau_calibration_steps: 24
+  tau_loading_upper: 16.0
+
+  # Calibrate censoring on an independent population, not on experiment rows.
+  censor_calibration_samples: 100000
+  censor_calibration_seed: 54321
+
+split:
+  validation_fraction: 0.15
+  test_fraction: 0.15
+
+preprocessing:
+  standardize_x: true
+  time_normalization: train_max
+
+model:
+  encoder_hidden: [64, 32]
+  decoder_hidden: [32, 64]
+
+training:
+  epochs: 150
+  minimum_epochs: 50
+  early_stopping_patience: 20
+
+  # Colleague-recommended predictive DVFM settings.
+  learning_rate: 0.001
+  beta_max: 1.0
+  warmup_epochs: 50
+
+  batch_size: 64
+  lr_patience: 10
+  lr_factor: 0.5
+  grad_clip: 1.0
+  minimum_improvement: 0.00001
+  log_every: 25
+
+  # The old benchmark selected checkpoints from one stochastic q(z) draw.
+  # Average several validation draws here to reduce that noise.
+  validation_mc_samples: 5
+
+evaluation:
+  mc_samples: 200
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  dependence_mc_samples: 5000
+  latent_profile_z: [-3, -2, -1, 0, 1, 2, 3]

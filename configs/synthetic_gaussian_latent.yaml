@@ -2,7 +2,7 @@
 # specifically because it induces dependent censoring?
 
 gwf:
-  target_name: dvfm_synthetic_gaussian_latent
+  target_name: synthetic_gaussian_latent
   account: c2i-colon
   cores: 4
   memory: 25g
