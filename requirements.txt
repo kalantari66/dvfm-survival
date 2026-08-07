@@ -10,3 +10,5 @@ PyYAML>=6.0
 SurvivalEVAL>=0.8.0
 pycop>=0.0.13
 pyarrow>=25.0.0
+scikit-survival>=0.21.0
+scikit-multilearn>=0.2.0
