@@ -28,7 +28,7 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 `configs/synthetic_pilot.yaml` runs five paired repeats over:
 
-- Sample size: `{1000, 5000, 10000}`.
+- Sample size: `10000`.
 - `kendall_tau`: `{0.00, 0.25, 0.50, 0.75}`.
 - Censoring rate: `{0.25, 0.50, 0.75}`.
 - Fitted DVFM latent dimension: `{0, 1, 5}`.

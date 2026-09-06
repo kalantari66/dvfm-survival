@@ -13,10 +13,10 @@ seeds:
 compute: {device: cuda, torch_num_threads: 4}
 data:
   source: gaussian_shared_frailty
+  n_samples: 10000
   n_features: 10
   calibration_samples: 50000
   grid:
-    n_samples: [1000, 5000, 10000]
     kendall_tau: [0.00, 0.25, 0.50, 0.75]
     censoring_rate: [0.25, 0.50, 0.75]
 split:

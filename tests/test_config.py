@@ -36,8 +36,8 @@ def test_missing_synthetic_dependence_parameter_is_rejected(tmp_path):
 def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     cfg = load_config(ROOT / "configs" / "synthetic_pilot.yaml")
     scenarios = expand_scenarios(cfg["data"])
-    assert len(scenarios) == 36
-    assert {item["n_samples"] for item in scenarios} == {1000, 5000, 10000}
+    assert len(scenarios) == 12
+    assert cfg["data"]["n_samples"] == 10000
     assert {item["kendall_tau"] for item in scenarios} == {0.0, 0.25, 0.5, 0.75}
     assert {item["censoring_rate"] for item in scenarios} == {0.25, 0.5, 0.75}
     assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1, 5]
