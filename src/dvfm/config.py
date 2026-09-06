@@ -12,7 +12,7 @@ import yaml
 
 DEFAULTS: dict[str, Any] = {
     "schema_version": 1,
-    "study": {"stage": "exploratory", "output_dir": "outputs/experiment", "seeds": [42]},
+    "study": {"stage": "exploratory", "output_dir": "results/experiment", "seeds": [42]},
     "compute": {"device": "auto", "torch_num_threads": 1},
     "split": {"strategy": "holdout", "test_fraction": 0.30, "folds": 5},
     "preprocessing": {"standardize_x": False, "time_normalization": "none"},

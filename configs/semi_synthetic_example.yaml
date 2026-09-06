@@ -2,7 +2,7 @@ schema_version: 1
 study:
   name: semi-synthetic-smoke
   stage: smoke
-  output_dir: outputs/semi-synthetic-smoke
+  output_dir: results/semi-synthetic-smoke
   seeds: [7]
 compute:
   device: auto

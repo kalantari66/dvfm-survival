@@ -3,7 +3,7 @@ schema_version: 1
 study:
   name: synthetic-smoke
   stage: smoke
-  output_dir: outputs/synthetic-smoke
+  output_dir: results/synthetic-smoke
   seeds: [0]
 
 compute:

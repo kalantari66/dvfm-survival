@@ -43,7 +43,7 @@ dvfm-run --config configs/synthetic_pilot.yaml
 dvfm-run --config configs/semi_synthetic_example.yaml
 ```
 
-Outputs are written below `outputs/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
+Results are written below `results/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
 
 ## Canonical experiment specification
 

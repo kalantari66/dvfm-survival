@@ -2,7 +2,7 @@ schema_version: 1
 study:
   name: reference-original
   stage: reference
-  output_dir: outputs/reference-original
+  output_dir: results/reference-original
   seeds: [42]
 compute:
   device: cuda
@@ -27,4 +27,3 @@ evaluation:
   max_time_factor: 1.5
   save_predictions: false
   primary_metrics: [ibs_oracle, mae_oracle]
-

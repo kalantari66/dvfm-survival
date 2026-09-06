@@ -13,7 +13,7 @@ resources:
 study:
   name: synthetic-copula-pilot
   stage: pilot
-  output_dir: outputs/synthetic-copula-pilot
+  output_dir: results/synthetic-copula-pilot
   seeds: [0, 1, 2]
 compute:
   # Fail loudly if SLURM assigns no usable GPU or PyTorch lacks CUDA support.
