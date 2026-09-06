@@ -12,9 +12,9 @@ import yaml
 
 DEFAULTS: dict[str, Any] = {
     "schema_version": 1,
-    "study": {"stage": "exploratory", "output_dir": "results/experiment", "seeds": [42]},
+    "study": {"stage": "exploratory", "output_dir": "results/experiment"},
     "compute": {"device": "auto", "torch_num_threads": 1},
-    "split": {"strategy": "holdout", "test_fraction": 0.30, "folds": 5},
+    "split": {"strategy": "holdout", "validation_fraction": 0.15, "test_fraction": 0.30, "folds": 5},
     "preprocessing": {"standardize_x": False, "time_normalization": "none"},
     "models": {
         "enabled": ["dvfm"],
@@ -82,13 +82,13 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("resources.cores must be at least 1")
     study = _require(cfg, "study", "config")
     _require(study, "name", "study")
-    seeds = _require(study, "seeds", "study")
-    if not seeds or not all(isinstance(seed, int) for seed in seeds):
-        raise ValueError("study.seeds must be a non-empty list of integers")
 
     data = _require(cfg, "data", "config")
     source = str(_require(data, "source", "data")).lower()
     if source == "synthetic_copula":
+        study_seeds = _require(study, "seeds", "study")
+        if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):
+            raise ValueError("study.seeds must be a non-empty list of integers")
         _require(data, "n_samples", "data")
         _require(data, "n_features", "data")
         scenarios = expand_scenarios(data)
@@ -98,7 +98,33 @@ def validate_config(cfg: dict) -> None:
             _require(scenario, "copula", "data scenario")
             if "theta" not in scenario:
                 raise ValueError("Each current synthetic_copula scenario requires theta; do not substitute Kendall's tau without explicit calibration")
+    elif source == "gaussian_shared_frailty":
+        _require(data, "n_samples", "data"); _require(data, "n_features", "data")
+        for scenario in expand_scenarios(data):
+            kendall_tau = float(_require(scenario, "kendall_tau", "data scenario"))
+            censoring_rate = float(_require(scenario, "censoring_rate", "data scenario"))
+            if not 0.0 <= kendall_tau < 1.0:
+                raise ValueError("data scenario kendall_tau must be in [0, 1)")
+            if not 0.0 < censoring_rate < 1.0:
+                raise ValueError("data scenario censoring_rate must be between 0 and 1")
+        seeds = _require(cfg, "seeds", "config")
+        for key in ("dgp", "sampling", "split", "model"):
+            _require(seeds, key, "seeds")
+        if not isinstance(seeds["dgp"], int):
+            raise ValueError("seeds.dgp must be one integer")
+        for key in ("sampling", "split", "model"):
+            if not seeds[key] or not all(isinstance(seed, int) for seed in seeds[key]):
+                raise ValueError(f"seeds.{key} must be a non-empty list of integers")
+        if len({len(seeds[key]) for key in ("sampling", "split", "model")}) != 1:
+            raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
+        _require(cfg["split"], "validation_fraction", "split")
+        latent_dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
+        if not latent_dims or any(int(value) < 0 for value in latent_dims):
+            raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
     elif source in {"real_file", "semi_synthetic_file"}:
+        study_seeds = _require(study, "seeds", "study")
+        if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):
+            raise ValueError("study.seeds must be a non-empty list of integers")
         _require(data, "path", "data")
         if source == "real_file":
             _require(data, "time_column", "data")
@@ -110,9 +136,14 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(f"Unsupported data.source: {source}")
 
     split = cfg["split"]
+    validation_fraction = float(split["validation_fraction"])
+    if not 0 < validation_fraction < 1:
+        raise ValueError("split.validation_fraction must be between 0 and 1")
     if split["strategy"] == "holdout":
         if not 0 < float(split["test_fraction"]) < 1:
             raise ValueError("split.test_fraction must be between 0 and 1")
+        if validation_fraction + float(split["test_fraction"]) >= 1:
+            raise ValueError("validation and test fractions must sum to less than 1")
     elif split["strategy"] != "kfold":
         raise ValueError("split.strategy must be holdout or kfold")
 

@@ -362,7 +362,9 @@ class DVFM(nn.Module):
     def __init__(self, input_dim, latent_dim=8, encoder_hidden=[64, 32], 
                  decoder_hidden=[32, 64]):
         super(DVFM, self).__init__()
-        self.encoder = Encoder(input_dim, latent_dim, encoder_hidden)
+        if latent_dim < 0:
+            raise ValueError("latent_dim must be nonnegative")
+        self.encoder = None if latent_dim == 0 else Encoder(input_dim, latent_dim, encoder_hidden)
         self.decoder = Decoder(input_dim, latent_dim, decoder_hidden)
         self.latent_dim = latent_dim
     
@@ -383,7 +385,11 @@ class DVFM(nn.Module):
     
     def forward(self, x, time, event):
         # Encode
-        mu, logvar = self.encoder(x, time, event)
+        if self.encoder is None:
+            mu = x.new_empty((x.shape[0], 0))
+            logvar = x.new_empty((x.shape[0], 0))
+        else:
+            mu, logvar = self.encoder(x, time, event)
         
         # Reparameterize
         z = self.reparameterize(mu, logvar)
@@ -428,8 +434,9 @@ class DVFM(nn.Module):
 # 4. TRAINING FUNCTION
 # ============================================================================
 
-def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3, 
-               beta_max=1.0, warmup_epochs=50, free_bits=0.0, device='cpu'):
+def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
+               beta_max=1.0, warmup_epochs=50, free_bits=0.0, device='cpu',
+               return_history=False):
     """
     Train DVFM with KL annealing
     """
@@ -439,12 +446,13 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
     
     train_losses = []
     val_losses = []
+    history = []
     
     model.to(device)
     
     for epoch in range(n_epochs):
         # Update beta (KL annealing)
-        beta = min(beta_max, epoch / warmup_epochs) if warmup_epochs > 0 else beta_max
+        beta = min(beta_max, (epoch + 1) / warmup_epochs) if warmup_epochs > 0 else beta_max
         
         # Training
         model.train()
@@ -476,24 +484,35 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
         # Validation
         model.eval()
         val_loss = 0
+        val_recon = 0
+        val_kl = 0
         with torch.no_grad():
             for x, time, event in val_loader:
                 x, time, event = x.to(device), time.to(device), event.to(device)
                 shape_T, scale_T, shape_C, scale_C, mu, logvar = model(x, time, event)
-                loss, _, _ = model.loss_function(shape_T, scale_T, shape_C, scale_C,
+                loss, recon, kl = model.loss_function(shape_T, scale_T, shape_C, scale_C,
                                                   mu, logvar, time, event, 
                                                   beta, free_bits)
                 val_loss += loss.item()
+                val_recon += recon.item()
+                val_kl += kl.item()
         
         val_loss /= len(val_loader)
+        val_recon /= len(val_loader)
+        val_kl /= len(val_loader)
         val_losses.append(val_loss)
         scheduler.step(val_loss)
+        history.append({"epoch": epoch + 1, "beta": beta, "learning_rate": optimizer.param_groups[0]["lr"],
+                        "train_loss": train_loss, "train_reconstruction": train_recon, "train_kl": train_kl,
+                        "validation_loss": val_loss, "validation_reconstruction": val_recon, "validation_kl": val_kl})
         
         if (epoch + 1) % 100 == 0:
             print(f"Epoch {epoch+1}/{n_epochs}, Beta: {beta:.3f}, "
                   f"Train Loss: {train_loss:.4f} (Recon: {train_recon:.4f}, KL: {train_kl:.4f}), "
                   f"Val Loss: {val_loss:.4f}")
     
+    if return_history:
+        return history
     return train_losses, val_losses
 
 
@@ -587,7 +606,11 @@ def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, 
             delta_batch = delta_batch.to(device)
             
             # Get posterior stats from Encoder
-            mu, logvar = model.encoder(x_batch, t_batch, delta_batch)
+            if model.encoder is None:
+                mu = x_batch.new_empty((x_batch.shape[0], 0))
+                logvar = x_batch.new_empty((x_batch.shape[0], 0))
+            else:
+                mu, logvar = model.encoder(x_batch, t_batch, delta_batch)
             mus.append(mu)
             logvars.append(logvar)
     
@@ -598,6 +621,7 @@ def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, 
 
     # --- 2. Predict for Test Patients ---
     X_tensor = torch.FloatTensor(X).to(device)
+    time_tensor = torch.as_tensor(time_points, dtype=torch.float32, device=device)
     n_patients = X.shape[0]
     n_times = len(time_points)
     
@@ -620,12 +644,9 @@ def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, 
             # C. Decode (Get Weibull Parameters)
             shape_T, scale_T, _, _ = model.decoder(X_tensor, z)
             
-            # D. Compute Survival Function
-            for t_idx, t in enumerate(time_points):
-                t_tensor = torch.FloatTensor([t]).to(device)
-                # Weibull Survival: S(t) = exp(-(t/scale)^shape)
-                S_t = torch.exp(-(t_tensor / scale_T) ** shape_T)
-                survival_curves[:, t_idx] += S_t.cpu().numpy()
+            # D. Compute the complete survival grid in one device operation.
+            S_t = torch.exp(-((time_tensor[None, :] / scale_T[:, None]) ** shape_T[:, None]))
+            survival_curves += S_t.cpu().numpy()
         
         # Average over the Monte Carlo samples
         survival_curves /= n_samples

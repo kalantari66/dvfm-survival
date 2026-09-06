@@ -8,7 +8,7 @@ from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
 from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
 from dvfm.prediction import predict_survival_curves
-from dvfm.synthetic import generate_copula_data
+from dvfm.synthetic import generate_clayton_aft_data, generate_copula_data, generate_gaussian_shared_frailty
 
 
 def test_generator_shapes():
@@ -50,3 +50,38 @@ def test_clayton_prediction_uses_model_device():
     )
     assert curves.shape == (4, 5)
     assert np.all(np.isfinite(curves))
+
+
+def test_gaussian_frailty_generator_is_reproducible_and_hits_targets():
+    kwargs = dict(n_samples=4000, n_features=3, kendall_tau=0.5, censoring_rate=0.25,
+                  dgp_seed=11, sampling_seed=12, calibration_samples=20_000)
+    first = generate_gaussian_shared_frailty(**kwargs)
+    second = generate_gaussian_shared_frailty(**kwargs)
+    np.testing.assert_array_equal(first.observed_time, second.observed_time)
+    np.testing.assert_array_equal(first.event, second.event)
+    assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
+    assert abs(first.achieved_censoring_rate - 0.25) < 1 / len(first.event) + 1e-12
+
+
+def test_clayton_aft_likelihood_matches_its_exact_generator():
+    sample = generate_clayton_aft_data(n_samples=10_000, n_features=3,
+                                       clayton_theta=2.0, seed=19)
+    model = ClaytonWeibullAFT(n_features=3)
+    with torch.no_grad():
+        model.beta_t.copy_(torch.as_tensor(sample.beta_event, dtype=torch.float32))
+        model.beta_c.copy_(torch.as_tensor(sample.beta_censor, dtype=torch.float32))
+        model.log_shape_t.fill_(np.log(sample.shape_event))
+        model.log_shape_c.fill_(np.log(sample.shape_censor))
+        model.raw_theta.fill_(np.log(np.expm1(sample.clayton_theta - 1e-4)))
+    x_aug = np.column_stack([sample.X, np.ones(len(sample.X), dtype=np.float32)])
+    true_nll = model.neg_log_lik(torch.as_tensor(x_aug, dtype=torch.float32),
+                                 torch.as_tensor(sample.observed_time, dtype=torch.float32),
+                                 torch.as_tensor(sample.event, dtype=torch.float32))
+    with torch.no_grad():
+        model.beta_t.add_(0.75)
+        model.beta_c.sub_(0.75)
+        wrong_nll = model.neg_log_lik(torch.as_tensor(x_aug, dtype=torch.float32),
+                                      torch.as_tensor(sample.observed_time, dtype=torch.float32),
+                                      torch.as_tensor(sample.event, dtype=torch.float32))
+    assert torch.isfinite(true_nll)
+    assert true_nll < wrong_nll

@@ -18,6 +18,7 @@ class SurvivalData:
     feature_names: list[str]
     true_event_time: np.ndarray | None = None
     true_censor_time: np.ndarray | None = None
+    true_z: np.ndarray | None = None
 
 
 def _read_table(path: str | Path) -> pd.DataFrame:

@@ -1,47 +1,25 @@
 schema_version: 1
-
-study:
-  name: synthetic-smoke
-  stage: smoke
-  output_dir: results/synthetic-smoke
-  seeds: [0]
-
-compute:
-  device: cuda
-  torch_num_threads: 4
-
+study: {name: synthetic-gaussian-frailty-smoke, stage: smoke, output_dir: results/synthetic-gaussian-frailty-smoke}
+seeds: {dgp: 2026, sampling: [0], split: [100], model: [200]}
+compute: {device: cuda, torch_num_threads: 4}
 data:
-  source: synthetic_copula
+  source: gaussian_shared_frailty
   n_samples: 256
   n_features: 5
-  scenarios:
-    - id: independent
-      copula: frank
-      theta: 0.0
-      dependence: independent
-
-split:
-  strategy: holdout
-  test_fraction: 0.20
-
-preprocessing:
-  standardize_x: true
-  time_normalization: train_max
-
+  calibration_samples: 2000
+  scenarios: [{kendall_tau: 0.50, censoring_rate: 0.50}]
+split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
+preprocessing: {standardize_x: true, time_normalization: train_max}
 models:
   enabled: [dvfm]
-  dvfm:
-    latent_dim: 1
-    epochs: 2
-    learning_rate: 0.001
-    batch_size: 64
-    beta_max: 1.0
-    warmup_epochs: 1
-    free_bits: 0.0
-    mc_samples: 2
-
+  dvfm: {latent_dims: [0, 1], epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, free_bits: 0.0, mc_samples: 2}
 evaluation:
   n_time_points: 20
-  max_time_factor: 1.2
-  save_predictions: false
-  primary_metrics: [ibs_oracle, mae_oracle]
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  prediction_modes: [prior, aggregate_posterior]
+  save_predictions: true
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 200

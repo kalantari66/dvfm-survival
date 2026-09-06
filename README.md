@@ -36,7 +36,7 @@ dvfm-run --config configs/reference_original.yaml --validate-only
 # Preserved reference experiment
 dvfm-run --config configs/reference_original.yaml
 
-# Small multi-mechanism pilot
+# Controlled shared-Gaussian-frailty pilot
 dvfm-run --config configs/synthetic_pilot.yaml
 
 # File-based semi-synthetic smoke example
@@ -53,10 +53,11 @@ Every runnable YAML uses the same top-level sections:
 schema_version: 1
 workflow:       # optional GWF target settings
 resources:      # optional SLURM cores, memory, walltime, partition, account
-study:          # identity, stage, output directory, seeds
+study:          # identity, stage, output directory
+seeds:          # separate DGP, sampling, split, and model seeds for new synthetic runs
 compute:        # device and CPU threading
 data:           # generator/file source and scenarios or grid
-split:          # holdout or cross-validation
+split:          # holdout or cross-validation with a disjoint validation partition
 preprocessing:  # train-fitted feature/time transforms
 models:         # enabled models and settings
 evaluation:     # time grid, primary metrics, saved artifacts

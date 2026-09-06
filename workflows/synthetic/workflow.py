@@ -40,6 +40,9 @@ def run_synthetic_experiment(
         str(result_dir / "results_raw.csv"),
         str(result_dir / "results_mean.csv"),
         str(result_dir / "results_std.csv"),
+        str(result_dir / "training_history.csv"),
+        str(result_dir / "dvfm_diagnostics.csv"),
+        str(result_dir / "calibration_curves.csv"),
         str(result_dir / "resolved_config.json"),
         str(result_dir / "_SUCCESS"),
     ]
@@ -58,7 +61,7 @@ def run_synthetic_experiment(
     cd "{PROJECT_ROOT}"
     mkdir -p "{result_dir}"
 
-    echo "[GWF] $(date) starting DVFM synthetic pilot"
+    echo "[GWF] $(date) starting DVFM Gaussian-frailty pilot"
     echo "[GWF] experiment_config={experiment_config}"
     echo "[GWF] result_dir={result_dir}"
     echo "[GWF] account={account}"
@@ -89,10 +92,13 @@ def run_synthetic_experiment(
     test -s "{result_dir / 'results_raw.csv'}"
     test -s "{result_dir / 'results_mean.csv'}"
     test -s "{result_dir / 'results_std.csv'}"
+    test -s "{result_dir / 'training_history.csv'}"
+    test -s "{result_dir / 'dvfm_diagnostics.csv'}"
+    test -s "{result_dir / 'calibration_curves.csv'}"
     test -s "{result_dir / 'resolved_config.json'}"
 
     touch "{result_dir / '_SUCCESS'}"
-    echo "[GWF] $(date) completed DVFM synthetic pilot"
+    echo "[GWF] $(date) completed DVFM Gaussian-frailty pilot"
     """
 
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)

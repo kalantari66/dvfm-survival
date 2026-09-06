@@ -368,7 +368,7 @@ class ClaytonWeibullAFT(nn.Module):
         return surv
 
 
-def fit_clayton_weibull_aft(X_train, t_train, e_train, X_test, time_points, epochs=400, lr=5e-3, device="cpu"):
+def fit_clayton_weibull_aft(X_train, t_train, e_train, X_test, time_points, epochs=400, lr=5e-3, device="cpu", return_model=False):
     x_train = np.asarray(X_train, dtype=np.float32)
     x_aug = np.concatenate([x_train, np.ones((x_train.shape[0], 1), dtype=np.float32)], axis=1)
     t_obs = np.asarray(t_train, dtype=np.float32)
@@ -395,6 +395,8 @@ def fit_clayton_weibull_aft(X_train, t_train, e_train, X_test, time_points, epoc
         idx = np.where(surv[i] <= 0.5)[0]
         medians[i] = time_points[idx[0]] if len(idx) > 0 else max_train_time
 
+    if return_model:
+        return medians, surv, model
     return medians, surv
 
 

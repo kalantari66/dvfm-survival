@@ -144,6 +144,7 @@ def _collect_metrics(
     true_c_train=None,
     dep_copula_name=None,
     dep_alpha=None,
+    oracle_only=False,
 ):
     out = {}
     out[f"{prefix} C-Idx"] = float(concordance_index(t_test, medians, e_test))
@@ -159,11 +160,22 @@ def _collect_metrics(
     if true_t_test is not None:
         _, ibs_oracle = compute_oracle_brier_ibs(surv_curves, time_points, true_t_test)
         out[f"{prefix} IBS Oracle"] = float(ibs_oracle)
+        out[f"{prefix} CI Oracle"] = float(concordance_index(true_t_test, medians))
     else:
         out[f"{prefix} IBS Oracle"] = np.nan
+        out[f"{prefix} CI Oracle"] = np.nan
+    if oracle_only:
+        return {
+            f"{prefix} IBS Oracle": out[f"{prefix} IBS Oracle"],
+            f"{prefix} CI Oracle": out[f"{prefix} CI Oracle"],
+            f"{prefix} MAE Oracle": out[f"{prefix} MAE Oracle"],
+            f"{prefix} MAE Oracle Censored": out[f"{prefix} MAE Censored"],
+            f"{prefix} MAE Oracle Uncensored": out[f"{prefix} MAE Uncensored"],
+        }
     _, ibs_ipcw, tau_used = compute_ipcw_brier_ibs(surv_curves, time_points, t_test, e_test, tau=tau)
     out[f"{prefix} IBS IPCW"] = float(ibs_ipcw)
-    out["Eval Tau"] = float(tau_used)
+    # This is the upper evaluation-time horizon, not Kendall's tau.
+    out["evaluation_time_horizon"] = float(tau_used)
     dep_metrics = _collect_dep_metrics(
         prefix=prefix,
         medians=medians,

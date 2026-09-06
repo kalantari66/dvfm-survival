@@ -30,6 +30,23 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 ## Stage 1: mechanistic synthetic benchmark (about 25% of paper evidence)
 
+### Current shared-Gaussian-frailty pilot
+
+`configs/synthetic_pilot.yaml` runs the first controlled pilot with 1,000
+subjects per generated cohort: 5 paired repeats
+over `kendall_tau = {0, 0.25, 0.50, 0.75}`, `censoring_rate = {0.25, 0.50,
+0.75}`, and fitted `latent_dim = {0, 1, 5}`. The DGP coefficients are fixed by
+`dgp_seed`; independent seed streams control sampling, splitting, and model
+optimization. Each scenario/repeat is generated and censored once, then the
+identical train/validation/test cohort is reused for every latent dimension.
+
+The synthetic result table contains only oracle IBS, oracle concordance index,
+and oracle MAE (overall and by observed censoring status). Separate artifacts
+store training reconstruction/KL trajectories, active latent dimensions,
+learned conditional `kendall_tau`, population calibration curves, prior versus
+aggregate-posterior predictions, posterior parameters, and the held-out true
+frailty `z`.
+
 ### Data-generating mechanisms
 
 1. Gaussian shared frailty with known `z_shared`.
@@ -130,7 +147,8 @@ All runnable configs use these top-level sections:
 schema_version: 1
 workflow:       # optional GWF target settings
 resources:      # optional SLURM cores, memory, walltime, partition, account
-study:          # name, stage, output_dir, seeds
+study:          # name, stage, output_dir
+seeds:          # separate dgp, sampling, split, and model seeds for new synthetic runs
 compute:        # device, torch_num_threads
 data:           # source, dimensions/path, scenarios or grid
 split:          # strategy, test_fraction/folds
