@@ -7,18 +7,23 @@ data:
   n_samples: 256
   n_features: 5
   calibration_samples: 2000
-  scenarios: [{kendall_tau: 0.50, censoring_rate: 0.50}]
+  scenarios:
+    - {kendall_tau: 0.00, censoring_rate: 0.50}
+    - {kendall_tau: 0.50, censoring_rate: 0.50}
 split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
 preprocessing: {zscore_x: false}
 models:
-  enabled: [dvfm]
-  dvfm: {latent_dims: [0, 1], epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, free_bits: 0.0, mc_samples: 2}
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
+  deepsurv: {epochs: 2, learning_rate: 0.001, batch_size: 64}
+  mtlr: {epochs: 2, learning_rate: 0.005, bins: 10}
+  clayton_aft: {epochs: 2, learning_rate: 0.005}
+  dvfm: {latent_dims: [0, 1], epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, checkpoint_min_epoch: 1, free_bits: 0.0, mc_samples: 2}
 evaluation:
   n_time_points: 20
   grid_max_quantile: 0.95
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
   prediction_modes: [prior, aggregate_posterior]
-  save_predictions: true
+  save_predictions: false
   save_training_history: true
   save_calibration_curves: true
   active_kl_threshold: 0.01

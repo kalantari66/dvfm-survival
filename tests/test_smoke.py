@@ -8,6 +8,7 @@ from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
 from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
 from dvfm.prediction import predict_survival_curves
+from dvfm.training import train_dvfm
 from dvfm.synthetic import (
     generate_clayton_aft_data,
     generate_clayton_gamma_frailty,
@@ -44,6 +45,21 @@ def test_dvfm_forward_prediction_and_metrics():
     _, ipcw, _ = compute_ipcw_brier_ibs(curves, grid, time[:8], event[:8])
     assert np.isfinite(oracle)
     assert np.isfinite(ipcw)
+
+
+def test_dvfm_post_warmup_elbo_checkpoint_respects_minimum_epoch():
+    X, time, event, _, _ = generate_copula_data(
+        n_samples=96, n_features=3, copula_type="clayton", theta=1.0, seed=31
+    )
+    loader = DataLoader(SurvivalDataset(X, time, event), batch_size=32, shuffle=False)
+    model = DVFM(input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8])
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=3, warmup_epochs=2,
+        checkpoint_min_epoch=2, return_artifacts=True,
+    )
+    assert len(artifacts["history"]) == 3
+    assert artifacts["best_validation_elbo_epoch"] in {2, 3}
+    assert set(artifacts["final_state"]) == set(artifacts["best_validation_elbo_state"])
 
 
 def test_clayton_prediction_uses_model_device():

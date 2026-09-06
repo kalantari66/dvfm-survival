@@ -101,9 +101,12 @@ def validate_config(cfg: dict) -> None:
             if "theta" not in scenario:
                 raise ValueError("Each current synthetic_copula scenario requires theta; do not substitute Kendall's tau without explicit calibration")
     elif source in {"gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
-        _require(data, "n_samples", "data"); _require(data, "n_features", "data")
+        _require(data, "n_features", "data")
         scenarios = expand_scenarios(data) if source == "gaussian_shared_frailty" else [data]
         for scenario in scenarios:
+            n_samples = scenario.get("n_samples", data.get("n_samples"))
+            if n_samples is None or int(n_samples) < 10:
+                raise ValueError("Each Gaussian frailty scenario requires n_samples >= 10")
             kendall_tau = float(_require(scenario, "kendall_tau", "data scenario"))
             censoring_rate = float(_require(scenario, "censoring_rate", "data scenario"))
             if not 0.0 <= kendall_tau < 1.0:
@@ -125,6 +128,18 @@ def validate_config(cfg: dict) -> None:
             latent_dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
             if not latent_dims or any(int(value) < 0 for value in latent_dims):
                 raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+            dvfm = cfg["models"]["dvfm"]
+            checkpoint_min_epoch = int(_require(
+                dvfm, "checkpoint_min_epoch", "models.dvfm"
+            ))
+            if checkpoint_min_epoch < int(dvfm["warmup_epochs"]):
+                raise ValueError(
+                    "models.dvfm.checkpoint_min_epoch must be at or after warmup_epochs"
+                )
+            if checkpoint_min_epoch > int(dvfm["epochs"]):
+                raise ValueError(
+                    "models.dvfm.checkpoint_min_epoch cannot exceed epochs"
+                )
         else:
             mechanisms = _require(data, "mechanisms", "data")
             allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}

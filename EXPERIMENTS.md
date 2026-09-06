@@ -25,9 +25,22 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 ## Stage 1: mechanistic synthetic benchmark (about 25% of paper evidence)
 ### Current shared-Gaussian-frailty pilot
-`configs/synthetic_pilot.yaml` runs the first controlled pilot with 1,000 subjects per generated cohort: 5 paired repeats over `kendall_tau = {0, 0.25, 0.50, 0.75}`, `censoring_rate = {0.25, 0.50, 0.75}`, and fitted `latent_dim = {0, 1, 5}`. The DGP coefficients are fixed by `dgp_seed`; independent seed streams control sampling, splitting, and model optimization. Each scenario/repeat is generated and censored once, then the identical train/validation/test cohort is reused for every latent dimension.
 
-The synthetic result table contains only oracle IBS, oracle concordance index, and oracle MAE (overall and by observed censoring status). Separate artifacts store training reconstruction/KL trajectories, active latent dimensions, learned conditional `kendall_tau`, population calibration curves, prior versus aggregate-posterior predictions, posterior parameters, and the held-out true frailty `z`.
+`configs/synthetic_pilot.yaml` runs five paired repeats over:
+
+- Sample size: `{1000, 5000, 10000}`.
+- `kendall_tau`: `{0.00, 0.25, 0.50, 0.75}`.
+- Censoring rate: `{0.25, 0.50, 0.75}`.
+- Fitted DVFM latent dimension: `{0, 1, 5}`.
+- Models: `{CoxPH, DeepSurv, MTLR, ClaytonAFT, DVFM}`.
+
+The DGP coefficients are fixed by `dgp_seed`; independent seed streams control sampling, splitting, and model optimization. Each sample-size/tau/censoring/repeat cohort is generated and censored once, then the identical train/validation/test subjects are reused by every model and latent dimension.
+
+DVFM uses the recovery-validated default: 200 fixed epochs, `beta_max = 1`, warmup 50, and learning rate `0.001`. The final epoch remains the prespecified primary checkpoint. A candidate checkpoint minimizes validation ELBO among epochs 50--200, after beta has reached its final value. Reconstruction NLL is recorded but is never used for stopping or checkpoint selection. The legacy low-beta/reconstruction-checkpoint rule is not part of this pilot.
+
+At `kendall_tau = 0`, true-frailty correlation is undefined as a recovery target; those cells evaluate learned dependence, latent collapse, and predictive safety under independence. For positive tau, the best latent coordinate, its sign, and its affine calibration are selected using validation subjects only before held-out test recovery is calculated.
+
+The result table contains oracle IBS, oracle concordance index, and oracle MAE overall and by observed censoring status. Separate compact artifacts store ELBO/reconstruction/KL trajectories, final-versus-post-warmup-ELBO checkpoint diagnostics, active latent dimensions, learned conditional `kendall_tau`, frailty recovery by censoring subgroup, and population calibration curves. Full per-subject survival NPZ files are not produced.
 
 ### Focused frailty-recovery training diagnostic
 

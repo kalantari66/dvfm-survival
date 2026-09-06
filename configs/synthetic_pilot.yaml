@@ -1,10 +1,10 @@
 schema_version: 1
-workflow: {target_name: synthetic_gaussian_frailty_pilot}
+workflow: {target_name: synthetic_gaussian_frailty_grid_pilot}
 resources: {cores: 4, memory: 25g, walltime: "02:00:00", partition: gpu-h200, account: c2i-colon}
 study:
-  name: synthetic-gaussian-frailty-pilot
+  name: synthetic-gaussian-frailty-grid-pilot
   stage: pilot
-  output_dir: results/synthetic-gaussian-frailty-pilot
+  output_dir: results/synthetic-gaussian-frailty-grid-pilot
 seeds:
   dgp: 2026
   sampling: [0, 1, 2, 3, 4]
@@ -13,10 +13,10 @@ seeds:
 compute: {device: cuda, torch_num_threads: 4}
 data:
   source: gaussian_shared_frailty
-  n_samples: 1000
   n_features: 10
   calibration_samples: 50000
   grid:
+    n_samples: [1000, 5000, 10000]
     kendall_tau: [0.00, 0.25, 0.50, 0.75]
     censoring_rate: [0.25, 0.50, 0.75]
 split:
@@ -25,7 +25,10 @@ split:
   test_fraction: 0.20
 preprocessing: {zscore_x: false}
 models:
-  enabled: [dvfm]
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
+  deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: 64}
+  mtlr: {epochs: 200, learning_rate: 0.005, bins: 50}
+  clayton_aft: {epochs: 100, learning_rate: 0.005}
   dvfm:
     latent_dims: [0, 1, 5]
     epochs: 200
@@ -33,6 +36,7 @@ models:
     batch_size: 64
     beta_max: 1.0
     warmup_epochs: 50
+    checkpoint_min_epoch: 50
     free_bits: 0.0
     mc_samples: 100
 evaluation:
@@ -40,7 +44,7 @@ evaluation:
   grid_max_quantile: 0.95
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
   prediction_modes: [prior, aggregate_posterior]
-  save_predictions: true
+  save_predictions: false
   save_training_history: true
   save_calibration_curves: true
   active_kl_threshold: 0.01

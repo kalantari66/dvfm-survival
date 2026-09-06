@@ -36,7 +36,7 @@ dvfm-run --config configs/reference_original.yaml --validate-only
 # Preserved reference experiment
 dvfm-run --config configs/reference_original.yaml
 
-# Controlled shared-Gaussian-frailty pilot
+# Controlled size × tau × censoring × latent-dimension pilot
 dvfm-run --config configs/synthetic_pilot.yaml
 
 # Two-epoch CUDA smoke test for the focused recovery diagnostic
@@ -81,7 +81,9 @@ conda activate dvfm
 gwf --version
 ```
 
-The synthetic YAML owns its SLURM resource settings:
+The synthetic YAML owns its SLURM resource settings. The workflow expands the
+36 sample-size/tau/censoring scenarios and five paired repeats into 180
+independent GPU jobs, then runs one final aggregation target:
 
 ```bash
 gwf -f workflows/synthetic/workflow.py status

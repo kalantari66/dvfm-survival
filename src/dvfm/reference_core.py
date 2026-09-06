@@ -436,7 +436,8 @@ class DVFM(nn.Module):
 
 def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
                beta_max=1.0, warmup_epochs=50, free_bits=0.0, device='cpu',
-               return_history=False):
+               return_history=False, checkpoint_min_epoch=None,
+               return_artifacts=False):
     """
     Train DVFM with KL annealing
     """
@@ -447,6 +448,9 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
     train_losses = []
     val_losses = []
     history = []
+    best_validation_elbo = float('inf')
+    best_validation_elbo_epoch = None
+    best_validation_elbo_state = None
     
     model.to(device)
     
@@ -505,12 +509,32 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
         history.append({"epoch": epoch + 1, "beta": beta, "learning_rate": optimizer.param_groups[0]["lr"],
                         "train_loss": train_loss, "train_reconstruction": train_recon, "train_kl": train_kl,
                         "validation_loss": val_loss, "validation_reconstruction": val_recon, "validation_kl": val_kl})
+
+        eligible_epoch = checkpoint_min_epoch is None or (epoch + 1) >= int(checkpoint_min_epoch)
+        if eligible_epoch and np.isfinite(val_loss) and val_loss < best_validation_elbo:
+            best_validation_elbo = val_loss
+            best_validation_elbo_epoch = epoch + 1
+            best_validation_elbo_state = {
+                key: value.detach().cpu().clone() for key, value in model.state_dict().items()
+            }
         
         if (epoch + 1) % 100 == 0:
             print(f"Epoch {epoch+1}/{n_epochs}, Beta: {beta:.3f}, "
                   f"Train Loss: {train_loss:.4f} (Recon: {train_recon:.4f}, KL: {train_kl:.4f}), "
                   f"Val Loss: {val_loss:.4f}")
     
+    if return_artifacts:
+        if best_validation_elbo_state is None:
+            raise RuntimeError("No finite validation ELBO was available for checkpointing")
+        return {
+            "history": history,
+            "final_state": {
+                key: value.detach().cpu().clone() for key, value in model.state_dict().items()
+            },
+            "best_validation_elbo_state": best_validation_elbo_state,
+            "best_validation_elbo_epoch": best_validation_elbo_epoch,
+            "best_validation_elbo": best_validation_elbo,
+        }
     if return_history:
         return history
     return train_losses, val_losses

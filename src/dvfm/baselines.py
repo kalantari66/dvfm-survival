@@ -55,7 +55,9 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
 
     # Prepare data
     train_dataset = SurvivalDataset(X_train, time_train, event_train)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # Cox risk sets must span the complete cohort. Minibatch-local risk sets
+    # optimize a different objective and make the baseline batch-dependent.
+    train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=False)
     
     input_dim = X_train.shape[1]
     model = DeepSurv(input_dim).to(device)
@@ -141,10 +143,7 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
 
 def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
                n_epochs=200, lr=0.005, device='cpu', eval_time_points=None):
-    """
-    Simplified Neural MTLR. Discretizes time and predicts probability of 
-    event occurring in specific bins.
-    """
+    """Neural MTLR with an explicit tail category and censored likelihood."""
     # 1. Discretize Time
     # Use quantiles of observed events to define bins
     events_only = time_train[event_train == 1]
@@ -164,13 +163,7 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
             bin_idx = np.digitize(t, bins) - 1
             bin_idx = min(max(0, bin_idx), actual_num_bins - 1)
             
-            if e == 1:
-                y_class[i] = bin_idx # Event happened in this bin
-            else:
-                # Censored in this bin implies it survived this bin
-                # In standard N-MTLR, this is handled in loss. 
-                # Here we use a simplification: Censored data creates a mask.
-                y_class[i] = bin_idx 
+            y_class[i] = bin_idx
         return torch.LongTensor(y_class)
 
     y_train_bins = encode_target(time_train, event_train)
@@ -188,7 +181,15 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
                 nn.Linear(32, num_bins)
             )
         def forward(self, x):
-            return self.net(x) # Logits
+            # MTLR converts interval scores to density logits by reverse
+            # cumulative summation and appends an explicit beyond-grid tail.
+            scores = self.net(x)
+            interval_logits = torch.flip(
+                torch.cumsum(torch.flip(scores, dims=[1]), dim=1), dims=[1]
+            )
+            return torch.cat(
+                [interval_logits, torch.zeros((len(x), 1), device=x.device)], dim=1
+            )
     
     model = N_MTLR(X_train.shape[1], actual_num_bins).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -197,29 +198,25 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
     y_train_t = y_train_bins.to(device)
     event_t = torch.FloatTensor(event_train).to(device)
     
-    # 4. MTLR Loss (Simplified Log-Likelihood)
-    # Ideally: P(T > t) = sum_{k>j} P(T in bin k).
-    # We use a masked CrossEntropy approach for simplicity in this demo.
-    # For events: CrossEntropy.
-    # For censored: We want to maximize probability of sum(bins > current).
-    # Standard N-MTLR loss implementation is complex; we use a simpler discrete approximation.
-    
-    criterion = nn.CrossEntropyLoss(reduction='none')
-    
+    # 4. Observed-data MTLR likelihood.
     model.train()
     for epoch in range(n_epochs):
         optimizer.zero_grad()
         logits = model(X_train_t)
-        
-        # Standard Cross Entropy for everyone (treating censored as event for a moment)
-        ce_loss = criterion(logits, y_train_t)
-        
-        # Reweight or modify for censored
-        # For censored data, the "label" is the bin censoring occurred.
-        # We know true event is > bin. 
-        # A proper MTLR loss requires summation. Here we simply downweight censored loss
-        # to focus learning on observed events, which is a naive heuristic but functional for a quick baseline.
-        loss = (ce_loss * event_t).mean() + 0.1 * (ce_loss * (1-event_t)).mean()
+        log_probs = torch.log_softmax(logits, dim=1)
+        event_log_likelihood = log_probs.gather(1, y_train_t[:, None]).squeeze(1)
+        # A censored subject contributes log P(T > c). With discretized
+        # intervals this is the log-sum of all later intervals and the tail.
+        category = torch.arange(actual_num_bins + 1, device=device)[None, :]
+        later = category > y_train_t[:, None]
+        censored_log_likelihood = torch.logsumexp(
+            log_probs.masked_fill(~later, float('-inf')), dim=1
+        )
+        log_likelihood = (
+            event_t * event_log_likelihood
+            + (1 - event_t) * censored_log_likelihood
+        )
+        loss = -log_likelihood.mean()
         
         loss.backward()
         optimizer.step()
@@ -233,13 +230,15 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
         probs = torch.softmax(logits, dim=1).cpu().numpy()
         
         # Survival Function S(t) = 1 - CDF(t)
-        cdf = np.cumsum(probs, axis=1)
+        cdf = np.cumsum(probs[:, :-1], axis=1)
         survival_probs = 1.0 - cdf
         
         # Calculate Risk Score (Expected Time)
         # Midpoints of bins
         bin_mids = (bins[:-1] + bins[1:]) / 2
-        predicted_means = np.sum(probs * bin_mids, axis=1)
+        tail_time = bins[-1] + max(bins[-1] - bins[-2], 1e-5)
+        category_times = np.r_[bin_mids, tail_time]
+        predicted_means = np.sum(probs * category_times, axis=1)
         
         # Median Survival
         predicted_medians = np.zeros(len(X_test))
