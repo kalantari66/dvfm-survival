@@ -1,47 +1,44 @@
 schema_version: 1
-workflow: {target_name: synthetic_gaussian_frailty_pilot}
-resources: {cores: 4, memory: 25g, walltime: "02:00:00", partition: gpu-h200, account: c2i-colon}
+
+workflow:
+  target_name: synthetic_copula_pilot
+
+resources:
+  cores: 4
+  memory: 25g
+  walltime: "02:00:00"
+  partition: gpu-l40s
+  account: c2i-colon
+
 study:
-  name: synthetic-gaussian-frailty-pilot
+  name: synthetic-copula-pilot
   stage: pilot
-  output_dir: results/synthetic-gaussian-frailty-pilot
-seeds:
-  dgp: 2026
-  sampling: [0, 1, 2, 3, 4]
-  split: [100, 101, 102, 103, 104]
-  model: [200, 201, 202, 203, 204]
-compute: {device: cuda, torch_num_threads: 4}
+  output_dir: outputs/synthetic-copula-pilot
+  seeds: [0, 1, 2]
+compute:
+  # Fail loudly if SLURM assigns no usable GPU or PyTorch lacks CUDA support.
+  device: cuda
+  torch_num_threads: 4
 data:
-  source: gaussian_shared_frailty
-  n_samples: 1000
+  source: synthetic_copula
+  n_samples: 2000
   n_features: 10
-  calibration_samples: 50000
-  grid:
-    kendall_tau: [0.00, 0.25, 0.50, 0.75]
-    censoring_rate: [0.25, 0.50, 0.75]
+  scenarios:
+    - {id: independent, copula: frank, theta: 0.0, dependence: independent}
+    - {id: clayton-moderate, copula: clayton, theta: 2.0, dependence: moderate}
+    - {id: frank-strong, copula: frank, theta: 10.0, dependence: strong}
+    - {id: gumbel-strong, copula: gumbel, theta: 4.0, dependence: strong}
 split:
   strategy: holdout
-  validation_fraction: 0.15
   test_fraction: 0.20
-preprocessing: {standardize_x: true, time_normalization: train_max}
+preprocessing:
+  standardize_x: true
+  time_normalization: train_max
 models:
-  enabled: [dvfm]
-  dvfm:
-    latent_dims: [0, 1, 5]
-    epochs: 200
-    learning_rate: 0.001
-    batch_size: 64
-    beta_max: 1.0
-    warmup_epochs: 50
-    free_bits: 0.0
-    mc_samples: 100
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
+  dvfm: {latent_dim: 1, epochs: 200, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 50, free_bits: 0.0, mc_samples: 100}
 evaluation:
   n_time_points: 200
-  grid_max_quantile: 0.95
-  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
-  prediction_modes: [prior, aggregate_posterior]
-  save_predictions: true
-  save_training_history: true
-  save_calibration_curves: true
-  active_kl_threshold: 0.01
-  dependence_samples: 2000
+  max_time_factor: 1.2
+  save_predictions: false
+  primary_metrics: [ibs_oracle, mae_oracle]
