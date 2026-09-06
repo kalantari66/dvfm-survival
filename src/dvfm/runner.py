@@ -80,19 +80,10 @@ def _three_way_split(data: SurvivalData, split_cfg: dict, seed: int):
 
 
 def _preprocess_three(train, validation, test, cfg):
-    if bool(cfg.get("standardize_x", False)):
+    if bool(cfg.get("zscore_x", False)):
         scaler = StandardScaler().fit(train.X)
         train.X = scaler.transform(train.X); validation.X = scaler.transform(validation.X); test.X = scaler.transform(test.X)
-    scale = 1.0
-    if cfg.get("time_normalization", "none") == "train_max":
-        scale = max(float(np.max(train.time)), 1e-8)
-    for part in (train, validation, test):
-        part.time /= scale
-        if part.true_event_time is not None:
-            part.true_event_time /= scale
-        if part.true_censor_time is not None:
-            part.true_censor_time /= scale
-    return train, validation, test, scale
+    return train, validation, test
 
 
 def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
@@ -105,31 +96,6 @@ def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
         true_censor_time=None if data.true_censor_time is None else data.true_censor_time[idx].copy(),
         true_z=None if data.true_z is None else data.true_z[idx].copy(),
     )
-
-
-def _preprocess(
-    train: SurvivalData, test: SurvivalData, cfg: dict
-) -> tuple[SurvivalData, SurvivalData, float]:
-    if bool(cfg.get("standardize_x", False)):
-        scaler = StandardScaler()
-        train.X = scaler.fit_transform(train.X)
-        test.X = scaler.transform(test.X)
-
-    method = str(cfg.get("time_normalization", "none")).lower()
-    scale = 1.0
-    if method == "train_max":
-        scale = max(float(np.max(train.time)), 1e-8)
-    elif method != "none":
-        raise ValueError(f"Unsupported time_normalization method: {method}")
-
-    if scale != 1.0:
-        for part in (train, test):
-            part.time = part.time / scale
-            if part.true_event_time is not None:
-                part.true_event_time = part.true_event_time / scale
-            if part.true_censor_time is not None:
-                part.true_censor_time = part.true_censor_time / scale
-    return train, test, scale
 
 
 def _fit_one_split(
@@ -336,7 +302,10 @@ def _run_gaussian_frailty(cfg: dict, out_dir: Path, device: torch.device) -> pd.
                                 [f"X{i}" for i in range(generated.X.shape[1])], generated.event_time,
                                 generated.censor_time, generated.true_z)
             train_i, val_i, test_i = _three_way_split(full, split_cfg, int(split_seed))
-            train, validation, test, scale = _preprocess_three(_subset(full, train_i), _subset(full, val_i), _subset(full, test_i), cfg["preprocessing"])
+            train, validation, test = _preprocess_three(
+                _subset(full, train_i), _subset(full, val_i), _subset(full, test_i),
+                cfg["preprocessing"],
+            )
             grid = np.linspace(0.0, float(np.quantile(train.true_event_time, eval_cfg.get("grid_max_quantile", .95))), int(eval_cfg["n_time_points"]))
             for latent_dim in model_cfg["dvfm"]["latent_dims"]:
                 seed_everything(int(model_seed))
@@ -438,7 +407,7 @@ def run(cfg: dict) -> pd.DataFrame:
                     true_c,
                 )
                 for fold, (train_idx, validation_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
-                    train, validation, test, _ = _preprocess_three(
+                    train, validation, test = _preprocess_three(
                         _subset(data, train_idx), _subset(data, validation_idx),
                         _subset(data, test_idx), cfg["preprocessing"]
                     )
@@ -464,7 +433,7 @@ def run(cfg: dict) -> pd.DataFrame:
         for repeat, seed in enumerate(study_cfg["seeds"]):
             seed_everything(seed)
             for fold, (train_idx, validation_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
-                train, validation, test, scale = _preprocess_three(
+                train, validation, test = _preprocess_three(
                     _subset(data, train_idx), _subset(data, validation_idx),
                     _subset(data, test_idx), cfg["preprocessing"]
                 )
@@ -480,7 +449,6 @@ def run(cfg: dict) -> pd.DataFrame:
                     "Repeat": repeat,
                     "Fold": fold,
                     "Seed": seed,
-                    "Time Scale": scale,
                 }
                 split_rows, preds = _fit_one_split(train, validation, test, cfg, device, context)
                 rows.extend(split_rows)

@@ -16,8 +16,7 @@ split:
   strategy: holdout
   test_fraction: 0.30
 preprocessing:
-  standardize_x: true
-  time_normalization: train_max
+  zscore_x: true
 models:
   enabled: [dvfm]
   dvfm: {latent_dim: 1, epochs: 200, learning_rate: 0.001, batch_size: 32, beta_max: 1.0, warmup_epochs: 50, free_bits: 0.0, mc_samples: 20}

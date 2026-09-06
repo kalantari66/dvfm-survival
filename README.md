@@ -58,7 +58,7 @@ seeds:          # separate DGP, sampling, split, and model seeds for new synthet
 compute:        # device and CPU threading
 data:           # generator/file source and scenarios or grid
 split:          # holdout or cross-validation with a disjoint validation partition
-preprocessing:  # train-fitted feature/time transforms
+preprocessing:  # train-fitted covariate transforms
 models:         # enabled models and settings
 evaluation:     # time grid, primary metrics, saved artifacts
 ```

@@ -9,7 +9,7 @@ data:
   calibration_samples: 2000
   scenarios: [{kendall_tau: 0.50, censoring_rate: 0.50}]
 split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
-preprocessing: {standardize_x: true, time_normalization: train_max}
+preprocessing: {zscore_x: false}
 models:
   enabled: [dvfm]
   dvfm: {latent_dims: [0, 1], epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, free_bits: 0.0, mc_samples: 2}

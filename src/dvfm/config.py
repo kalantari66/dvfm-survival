@@ -15,7 +15,7 @@ DEFAULTS: dict[str, Any] = {
     "study": {"stage": "exploratory", "output_dir": "results/experiment"},
     "compute": {"device": "auto", "torch_num_threads": 1},
     "split": {"strategy": "holdout", "validation_fraction": 0.15, "test_fraction": 0.30, "folds": 5},
-    "preprocessing": {"standardize_x": False, "time_normalization": "none"},
+    "preprocessing": {"zscore_x": False},
     "models": {
         "enabled": ["dvfm"],
         "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100},
@@ -82,6 +82,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("resources.cores must be at least 1")
     study = _require(cfg, "study", "config")
     _require(study, "name", "study")
+    if "standardize_x" in cfg["preprocessing"]:
+        raise ValueError("preprocessing.standardize_x was renamed to preprocessing.zscore_x")
 
     data = _require(cfg, "data", "config")
     source = str(_require(data, "source", "data")).lower()
