@@ -19,6 +19,7 @@ from .baselines import (
     train_deepsurv,
     train_mtlr,
 )
+from .config import expand_scenarios
 from .data import SurvivalData, load_real_data, load_semi_synthetic_data
 from .metrics import _censoring_rate, collect_metrics
 from .model import DVFM, SurvivalDataset
@@ -55,7 +56,7 @@ def _splits(data: SurvivalData, split_cfg: dict, seed: int):
     # The supplied synthetic reference code uses train_test_split without stratification.
     train_idx, test_idx = train_test_split(
         indices,
-        test_size=float(split_cfg.get("test_size", 0.30)),
+        test_size=float(split_cfg.get("test_fraction", 0.30)),
         random_state=seed,
     )
     yield train_idx, test_idx
@@ -75,17 +76,17 @@ def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
 def _preprocess(
     train: SurvivalData, test: SurvivalData, cfg: dict
 ) -> tuple[SurvivalData, SurvivalData, float]:
-    if bool(cfg.get("standardize", False)):
+    if bool(cfg.get("standardize_x", False)):
         scaler = StandardScaler()
         train.X = scaler.fit_transform(train.X)
         test.X = scaler.transform(test.X)
 
-    method = str(cfg.get("time_normalize", "none")).lower()
+    method = str(cfg.get("time_normalization", "none")).lower()
     scale = 1.0
     if method == "train_max":
         scale = max(float(np.max(train.time)), 1e-8)
     elif method != "none":
-        raise ValueError(f"Unsupported time_normalize method: {method}")
+        raise ValueError(f"Unsupported time_normalization method: {method}")
 
     if scale != 1.0:
         for part in (train, test):
@@ -103,7 +104,7 @@ def _fit_one_split(
     cfg: dict,
     device: torch.device,
     context: dict,
-) -> tuple[dict, dict]:
+) -> tuple[list[dict], dict]:
     eval_cfg = cfg["evaluation"]
     model_cfg = cfg["models"]
     enabled = {str(x).lower() for x in model_cfg["enabled"]}
@@ -132,7 +133,7 @@ def _fit_one_split(
             test.X,
             n_epochs=int(c["epochs"]),
             batch_size=int(c["batch_size"]),
-            lr=float(c["lr"]),
+            lr=float(c["learning_rate"]),
             device=device,
             eval_time_points=time_points,
         )
@@ -147,7 +148,7 @@ def _fit_one_split(
             test.X,
             num_bins=int(c["bins"]),
             n_epochs=int(c["epochs"]),
-            lr=float(c["lr"]),
+            lr=float(c["learning_rate"]),
             device=device,
             eval_time_points=time_points,
         )
@@ -162,7 +163,7 @@ def _fit_one_split(
             test.X,
             time_points,
             epochs=int(c["epochs"]),
-            lr=float(c["lr"]),
+            lr=float(c["learning_rate"]),
             device=device,
         )
         predictions["ClaytonAFT"] = {"median": median, "survival": survival}
@@ -185,7 +186,7 @@ def _fit_one_split(
             train_loader,
             val_loader,
             n_epochs=int(c["epochs"]),
-            lr=float(c["lr"]),
+            lr=float(c["learning_rate"]),
             beta_max=float(c["beta_max"]),
             warmup_epochs=int(c["warmup_epochs"]),
             free_bits=float(c["free_bits"]),
@@ -202,8 +203,8 @@ def _fit_one_split(
         median = get_median_survival_time(survival, time_points)
         predictions["DVFM"] = {"median": median, "survival": survival}
 
-    row = dict(context)
-    row.update(
+    metadata = dict(context)
+    metadata.update(
         {
             "Num Samples": int(len(train.time) + len(test.time)),
             "Num Features": int(train.X.shape[1]),
@@ -216,6 +217,7 @@ def _fit_one_split(
         }
     )
 
+    rows: list[dict] = []
     tau = None
     dep_copula = context.get("Copula")
     dep_theta = context.get("Theta")
@@ -236,10 +238,14 @@ def _fit_one_split(
             dep_copula_name=dep_copula,
             dep_alpha=dep_theta,
         )
-        row.update(metrics)
+        row = dict(metadata)
+        row["Model"] = name
+        prefix = f"{name} "
+        row.update({key.removeprefix(prefix): value for key, value in metrics.items()})
+        rows.append(row)
         tau = metrics.get("Eval Tau", tau)
 
-    return row, {
+    return rows, {
         "time_points": time_points,
         "test_time": test.time,
         "test_event": test.event,
@@ -247,65 +253,53 @@ def _fit_one_split(
     }
 
 
-def _load_dataset(spec: dict, mode: str) -> SurvivalData:
-    if mode == "real":
+def _load_dataset(spec: dict, source: str) -> SurvivalData:
+    if source == "real_file":
         return load_real_data(
-            spec["path"], spec["time_col"], spec["event_col"], spec.get("feature_cols")
+            spec["path"], spec["time_column"], spec["event_column"], spec.get("feature_columns")
         )
-    if mode == "semi_synthetic":
+    if source == "semi_synthetic_file":
         return load_semi_synthetic_data(
             spec["path"],
-            spec["true_event_time_col"],
-            spec["true_censor_time_col"],
-            spec.get("feature_cols"),
+            spec["true_event_time_column"],
+            spec["true_censor_time_column"],
+            spec.get("feature_columns"),
         )
-    raise ValueError(mode)
+    raise ValueError(source)
 
 
 def validate_inputs(cfg: dict) -> None:
-    mode = str(cfg.get("mode", "synthetic")).lower()
-    if mode == "synthetic":
-        scenarios = cfg.get("synthetic", {}).get("scenarios", [])
-        if not scenarios:
-            raise ValueError("Synthetic mode requires synthetic.scenarios")
-        for scenario in scenarios:
-            if "copula" not in scenario or "theta" not in scenario:
-                raise ValueError(f"Invalid synthetic scenario: {scenario}")
+    data_cfg = cfg["data"]
+    source = str(data_cfg["source"]).lower()
+    if source == "synthetic_copula":
         return
-    if mode not in {"real", "semi_synthetic"}:
-        raise ValueError(f"Unknown mode: {mode}")
-    specs = cfg.get("datasets") or [cfg.get("data", {})]
-    for spec in specs:
-        path = Path(spec.get("path", ""))
-        if not path.exists():
-            raise FileNotFoundError(path)
-        _load_dataset(spec, mode)
+    path = Path(data_cfg["path"])
+    if not path.exists():
+        raise FileNotFoundError(path)
+    _load_dataset(data_cfg, source)
 
 
 def run(cfg: dict) -> pd.DataFrame:
     validate_inputs(cfg)
-    mode = str(cfg.get("mode", "synthetic")).lower()
-    out_dir = Path(cfg["output_dir"])
+    study_cfg = cfg["study"]
+    data_cfg = cfg["data"]
+    source = str(data_cfg["source"]).lower()
+    out_dir = Path(study_cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    device = resolve_device(str(cfg.get("device", "auto")))
+    device = resolve_device(str(cfg["compute"].get("device", "auto")))
     if device.type == "cpu":
-        torch.set_num_threads(max(1, int(cfg.get("torch_num_threads", 1))))
+        torch.set_num_threads(max(1, int(cfg["compute"].get("torch_num_threads", 1))))
     print(f"Using device: {device}")
     rows: list[dict] = []
 
-    if mode == "synthetic":
-        scenarios = cfg["synthetic"]["scenarios"]
+    if source == "synthetic_copula":
+        scenarios = expand_scenarios(data_cfg)
         for scenario in scenarios:
-            for repeat in range(int(cfg.get("repeats", 1))):
-                seed = int(cfg.get("seed", 42)) + repeat
+            for repeat, seed in enumerate(study_cfg["seeds"]):
                 seed_everything(seed)
                 X, time, event, true_t, true_c = generate_copula_data(
-                    n_samples=int(
-                        scenario.get("n_samples", cfg["synthetic"].get("n_samples", 10000))
-                    ),
-                    n_features=int(
-                        scenario.get("n_features", cfg["synthetic"].get("n_features", 10))
-                    ),
+                    n_samples=int(scenario.get("n_samples", data_cfg["n_samples"])),
+                    n_features=int(scenario.get("n_features", data_cfg["n_features"])),
                     copula_type=str(scenario["copula"]),
                     theta=float(scenario["theta"]),
                     seed=seed,
@@ -323,7 +317,9 @@ def run(cfg: dict) -> pd.DataFrame:
                         _subset(data, train_idx), _subset(data, test_idx), cfg["preprocessing"]
                     )
                     context = {
-                        "Dataset Type": "synthetic",
+                        "Study": study_cfg["name"],
+                        "Stage": study_cfg["stage"],
+                        "Dataset Type": source,
                         "Dataset": scenario.get("name", scenario["copula"]),
                         "Scenario": scenario.get("id", scenario.get("name", scenario["copula"])),
                         "Copula": scenario["copula"],
@@ -333,37 +329,36 @@ def run(cfg: dict) -> pd.DataFrame:
                         "Fold": fold,
                         "Seed": seed,
                     }
-                    row, preds = _fit_one_split(train, test, cfg, device, context)
-                    rows.append(row)
+                    split_rows, preds = _fit_one_split(train, test, cfg, device, context)
+                    rows.extend(split_rows)
                     if cfg["evaluation"].get("save_predictions", False):
                         _save_predictions(out_dir, context, preds)
     else:
-        specs = cfg.get("datasets") or [cfg.get("data", {})]
-        for spec in specs:
-            data = _load_dataset(spec, mode)
-            for repeat in range(int(cfg.get("repeats", 1))):
-                seed = int(cfg.get("seed", 42)) + repeat
-                seed_everything(seed)
-                for fold, (train_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
-                    train, test, scale = _preprocess(
-                        _subset(data, train_idx), _subset(data, test_idx), cfg["preprocessing"]
-                    )
-                    context = {
-                        "Dataset Type": mode,
-                        "Dataset": spec.get("name", Path(spec["path"]).stem),
-                        "Source Path": str(spec["path"]),
-                        "Copula": None,
-                        "Dependence": mode,
-                        "Theta": None,
-                        "Repeat": repeat,
-                        "Fold": fold,
-                        "Seed": seed,
-                        "Time Scale": scale,
-                    }
-                    row, preds = _fit_one_split(train, test, cfg, device, context)
-                    rows.append(row)
-                    if cfg["evaluation"].get("save_predictions", False):
-                        _save_predictions(out_dir, context, preds)
+        data = _load_dataset(data_cfg, source)
+        for repeat, seed in enumerate(study_cfg["seeds"]):
+            seed_everything(seed)
+            for fold, (train_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
+                train, test, scale = _preprocess(
+                    _subset(data, train_idx), _subset(data, test_idx), cfg["preprocessing"]
+                )
+                context = {
+                    "Study": study_cfg["name"],
+                    "Stage": study_cfg["stage"],
+                    "Dataset Type": source,
+                    "Dataset": data_cfg.get("name", Path(data_cfg["path"]).stem),
+                    "Source Path": str(data_cfg["path"]),
+                    "Copula": None,
+                    "Dependence": source,
+                    "Theta": None,
+                    "Repeat": repeat,
+                    "Fold": fold,
+                    "Seed": seed,
+                    "Time Scale": scale,
+                }
+                split_rows, preds = _fit_one_split(train, test, cfg, device, context)
+                rows.extend(split_rows)
+                if cfg["evaluation"].get("save_predictions", False):
+                    _save_predictions(out_dir, context, preds)
 
     results = pd.DataFrame(rows)
     if results.empty:
@@ -372,7 +367,7 @@ def run(cfg: dict) -> pd.DataFrame:
 
     group_cols = [
         c
-        for c in ("Dataset", "Scenario", "Copula", "Dependence", "Theta")
+        for c in ("Study", "Stage", "Dataset", "Scenario", "Copula", "Dependence", "Theta", "Model")
         if c in results and not results[c].isna().all()
     ]
     numeric = results.select_dtypes(include=[np.number]).columns.tolist()

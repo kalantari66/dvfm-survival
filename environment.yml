@@ -1,0 +1,12 @@
+name: dvfm
+channels:
+  - gwforg
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - gwf=2.0.5
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu130
+      - torch==2.14.0+cu130
+      - -e .[test]

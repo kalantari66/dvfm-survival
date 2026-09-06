@@ -1,150 +1,100 @@
-# DVFM Survival — Reference-Parameter Repository
+# DVFM Survival
 
-Clean GitHub repository for **Deep Variational Frailty Models (DVFM)** under dependent censoring.
+Research code for **Deep Variational Frailty Models (DVFM)** under dependent right censoring.
 
-This revision uses the supplied implementation directly and restores the active reference settings, especially **200 DVFM epochs**. The earlier five-epoch/sixty-epoch smoke configuration has been removed because it was not suitable for comparing model performance.
+The repository asks one falsifiable question: under which structural conditions can a shared-latent generative model recover the event-time distribution or dependence-generating frailty from right-censored observations? See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the experimental design, metrics, ablations, and claim-adjustment rules.
 
-## What is unchanged
+## Install with Conda
 
-The following are imported from `src/dvfm/reference_core.py`, which is a package-compatible copy of the supplied `VAE_montcarlo.py`:
-
-- DVFM encoder and decoder
-- Weibull event/censoring likelihood
-- censored ELBO
-- KL annealing and optimizer loop
-- aggregate-posterior Monte Carlo prediction
-- synthetic dependent-censoring generators
-- DeepSurv implementation
-- MTLR implementation
-- oracle and IPCW Brier-score functions
-
-The only compatibility edit in the package copy is a fallback from SciPy's removed `trapz` import to NumPy's equivalent. The original uploaded scripts are preserved unchanged in `reference/`.
-
-## Reference parameters
-
-The main values are:
-
-```text
-DVFM epochs       200
-DVFM learning rate 0.001
-latent dimension   20
-batch size          64
-beta max             1.0
-warm-up epochs      50
-free bits             0
-MC samples          100
-DeepSurv epochs     200
-MTLR epochs         200
-MTLR bins           200
-synthetic N       10000
-features             10
-test fraction       0.30
-time-grid points    1000
+```powershell
+conda env create -f environment.yml
+conda activate dvfm
 ```
 
-See [`PARAMETER_AUDIT.md`](PARAMETER_AUDIT.md) for the complete mapping.
-
-## Installation
-
-```bash
-python -m venv .venv
-```
-
-Windows:
+If `conda` is not on `PATH` in Windows Command Prompt, activate it directly:
 
 ```bat
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -e ".[test]"
+deactivate
+CALL C:\Users\cml\miniconda3\condabin\conda.bat activate dvfm
 ```
 
-macOS/Linux:
+The prompt should then begin with `(dvfm)`. Opening an **Anaconda Prompt** also makes `conda activate dvfm` available normally.
 
-```bash
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e ".[test]"
+This single environment contains GWF, the editable project, tests, and the CUDA 13.0 PyTorch build. Verify it with:
+
+```powershell
+gwf --version
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
-## Check the installation without changing parameters
+## Run
 
-```bash
+```powershell
+# Validate without training
 dvfm-run --config configs/reference_original.yaml --validate-only
-pytest -v
-```
 
-`--validate-only` checks the configuration and dataset paths. It does not fit models or generate performance numbers.
-
-## Reproduce the active uploaded experiment
-
-```bash
+# Preserved reference experiment
 dvfm-run --config configs/reference_original.yaml
-```
 
-This configuration reproduces the active settings in `VAE_montcarlo.py`: Gaussian generator, theta 1, 10,000 samples, 70/30 split, 1,000 time points, and 200 epochs for DVFM/DeepSurv/MTLR.
+# Small multi-mechanism pilot
+dvfm-run --config configs/synthetic_pilot.yaml
 
-## Full synthetic benchmark
-
-```bash
-dvfm-run --config configs/paper_synthetic.yaml
-```
-
-This is computationally expensive: 10 scenarios × 5 repetitions, with 200 training epochs and 100 Monte Carlo samples.
-
-## Real datasets
-
-Place the datasets in `data/raw/` with the names and columns listed in `configs/paper_real.yaml`, then run:
-
-```bash
-dvfm-run --config configs/paper_real.yaml
-```
-
-The repository does not redistribute restricted real datasets.
-
-A generic real dataset can be CSV or Excel and must include:
-
-- an observed follow-up-time column;
-- an event indicator column (`1` event, `0` censored);
-- feature columns.
-
-## Semi-synthetic datasets
-
-A semi-synthetic file contains real or user-provided covariates plus complete simulated event and censoring times. The loader constructs
-
-```text
-observed_time = min(event_time, censor_time)
-event = 1(event_time <= censor_time)
-```
-
-Run the included format example with:
-
-```bash
+# File-based semi-synthetic smoke example
 dvfm-run --config configs/semi_synthetic_example.yaml
 ```
 
-## Outputs
+Outputs are written below `outputs/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
 
-Each experiment writes:
+## Canonical experiment specification
 
-- `results_raw.csv`
-- `results_mean.csv`
-- `results_std.csv`
-- `resolved_config.json`
-- optional prediction arrays when enabled
+Every runnable YAML uses the same top-level sections:
 
-## Repository structure
-
-```text
-src/dvfm/reference_core.py   package-compatible supplied algorithm code
-src/dvfm/runner.py           real/synthetic/semi-synthetic experiment interface
-src/dvfm/metrics.py          paper metrics
-src/dvfm/baselines.py        CoxPH and ClaytonAFT wrappers; reference neural baselines
-configs/                     exact reproducible parameter files
-reference/                   unchanged uploaded scripts
-paper/                       supplied manuscript
-PARAMETER_AUDIT.md           parameter provenance
+```yaml
+schema_version: 1
+workflow:       # optional GWF target settings
+resources:      # optional SLURM cores, memory, walltime, partition, account
+study:          # identity, stage, output directory, seeds
+compute:        # device and CPU threading
+data:           # generator/file source and scenarios or grid
+split:          # holdout or cross-validation
+preprocessing:  # train-fitted feature/time transforms
+models:         # enabled models and settings
+evaluation:     # time grid, primary metrics, saved artifacts
 ```
 
-## Citation
+The loader supplies shared defaults, validates the schema, and expands `data.grid` into deterministic atomic scenarios. New generators should expose Kendall's tau and target censoring rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.
 
-Please cite the accompanying manuscript, *Deep Variational Frailty Models for Survival Prediction Under Dependent Censoring*.
+## Run the synthetic pilot with GWF
+
+Create and activate the project environment on the cluster login node:
+
+```bash
+conda env create -f environment.yml
+conda activate dvfm
+gwf --version
+```
+
+The synthetic YAML owns its SLURM resource settings:
+
+```bash
+gwf -f workflows/synthetic/workflow.py status
+gwf -f workflows/synthetic/workflow.py run
+```
+
+The workflow activates the same `dvfm` environment on the compute node. Its experiment config sets `compute.device: cuda`, causing the job to fail instead of silently falling back to CPU.
+
+## Layout
+
+```text
+configs/                 canonical runnable configurations
+docs/                    manuscript and research notes
+notebooks/               retained analysis and calibration notebooks
+reference/               unchanged source implementation and provenance
+src/dvfm/                runner, models, data handling, metrics, baselines
+tests/                   configuration and functional smoke tests
+EXPERIMENTS.md            exact experimental and reporting design
+```
+
+## Interpretation
+
+Dependent censoring is non-identifiable from right-censored observations without structural assumptions. DVFM is evaluated as an inductive bias, not as a universal identification theorem or a test for informative censoring. Baseline prediction from `x`, retrospective frailty inference from `(x,t,event)`, and population dependence recovery are separate tasks.

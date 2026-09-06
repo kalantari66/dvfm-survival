@@ -1,52 +1,30 @@
-# Exact active run_experiment() parameters from reference/VAE_montcarlo.py
-mode: synthetic
-seed: 42
-repeats: 1
-output_dir: outputs/reference_original
-device: auto
-
-split:
-  strategy: holdout
-  test_size: 0.30
-
-preprocessing:
-  standardize: false
-  time_normalize: none
-
-synthetic:
+schema_version: 1
+study:
+  name: reference-original
+  stage: reference
+  output_dir: outputs/reference-original
+  seeds: [42]
+compute:
+  device: cuda
+  torch_num_threads: 1
+data:
+  source: synthetic_copula
   n_samples: 10000
   n_features: 10
   scenarios:
-    - id: reference_gaussian
-      name: gaussian_theta_1
-      copula: gaussian
-      dependence: reference
-      theta: 1.0
-
+    - {id: gaussian-theta-1, name: gaussian-theta-1, copula: gaussian, theta: 1.0, dependence: reference}
+split:
+  strategy: holdout
+  test_fraction: 0.30
+preprocessing:
+  standardize_x: false
+  time_normalization: none
 models:
   enabled: [dvfm]
-  dvfm:
-    latent_dim: 20
-    epochs: 200
-    lr: 0.001
-    batch_size: 64
-    beta_max: 1.0
-    warmup_epochs: 50
-    free_bits: 0.0
-    mc_samples: 100
-  deepsurv:
-    epochs: 200
-    lr: 0.001
-    batch_size: 64
-  mtlr:
-    epochs: 200
-    lr: 0.005
-    bins: 200
-  clayton_aft:
-    epochs: 100
-    lr: 0.005
-
+  dvfm: {latent_dim: 20, epochs: 200, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 50, free_bits: 0.0, mc_samples: 100}
 evaluation:
   n_time_points: 1000
   max_time_factor: 1.5
   save_predictions: false
+  primary_metrics: [ibs_oracle, mae_oracle]
+
