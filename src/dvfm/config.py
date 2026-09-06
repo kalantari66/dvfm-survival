@@ -100,9 +100,10 @@ def validate_config(cfg: dict) -> None:
             _require(scenario, "copula", "data scenario")
             if "theta" not in scenario:
                 raise ValueError("Each current synthetic_copula scenario requires theta; do not substitute Kendall's tau without explicit calibration")
-    elif source == "gaussian_shared_frailty":
+    elif source in {"gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
         _require(data, "n_samples", "data"); _require(data, "n_features", "data")
-        for scenario in expand_scenarios(data):
+        scenarios = expand_scenarios(data) if source == "gaussian_shared_frailty" else [data]
+        for scenario in scenarios:
             kendall_tau = float(_require(scenario, "kendall_tau", "data scenario"))
             censoring_rate = float(_require(scenario, "censoring_rate", "data scenario"))
             if not 0.0 <= kendall_tau < 1.0:
@@ -120,9 +121,36 @@ def validate_config(cfg: dict) -> None:
         if len({len(seeds[key]) for key in ("sampling", "split", "model")}) != 1:
             raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
         _require(cfg["split"], "validation_fraction", "split")
-        latent_dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
-        if not latent_dims or any(int(value) < 0 for value in latent_dims):
-            raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+        if source == "gaussian_shared_frailty":
+            latent_dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
+            if not latent_dims or any(int(value) < 0 for value in latent_dims):
+                raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+        else:
+            mechanisms = _require(data, "mechanisms", "data")
+            allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}
+            if not mechanisms or set(mechanisms) - allowed_mechanisms:
+                raise ValueError(f"data.mechanisms must contain only {sorted(allowed_mechanisms)}")
+            if int(_require(cfg["models"]["dvfm"], "latent_dim", "models.dvfm")) != 1:
+                raise ValueError("Frailty recovery diagnostic requires models.dvfm.latent_dim = 1")
+            variants = _require(cfg, "training_variants", "config")
+            required_variant_keys = {
+                "name", "maximum_epochs", "learning_rate", "beta_max", "warmup_epochs",
+                "lr_patience", "minimum_learning_rate", "scheduler_metric", "checkpoint_selection",
+            }
+            if not variants or len({item.get("name") for item in variants}) != len(variants):
+                raise ValueError("training_variants must have unique names")
+            for variant in variants:
+                missing = required_variant_keys - set(variant)
+                if missing:
+                    raise ValueError(f"Training variant is missing keys: {sorted(missing)}")
+                if variant["scheduler_metric"] not in {"validation_elbo", "validation_reconstruction_nll"}:
+                    raise ValueError("Invalid training variant scheduler_metric")
+                if variant["checkpoint_selection"] not in {"final", "best_validation_reconstruction_nll"}:
+                    raise ValueError("Invalid training variant checkpoint_selection")
+            _require(cfg["models"], "oracle_z_decoder", "models")
+            for key in ("dependence_samples_per_epoch", "dependence_samples_checkpoint"):
+                if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
+                    raise ValueError(f"evaluation.{key} must be at least 2")
     elif source in {"real_file", "semi_synthetic_file"}:
         study_seeds = _require(study, "seeds", "study")
         if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):

@@ -39,6 +39,12 @@ dvfm-run --config configs/reference_original.yaml
 # Controlled shared-Gaussian-frailty pilot
 dvfm-run --config configs/synthetic_pilot.yaml
 
+# Two-epoch CUDA smoke test for the focused recovery diagnostic
+dvfm-run --config configs/frailty_recovery_smoke.yaml
+
+# Prespecified four-variant frailty-recovery diagnostic
+dvfm-run --config configs/frailty_recovery_diagnostic.yaml
+
 # File-based semi-synthetic smoke example
 dvfm-run --config configs/semi_synthetic_example.yaml
 ```
@@ -80,6 +86,13 @@ The synthetic YAML owns its SLURM resource settings:
 ```bash
 gwf -f workflows/synthetic/workflow.py status
 gwf -f workflows/synthetic/workflow.py run
+```
+
+The focused frailty-recovery diagnostic has its own target:
+
+```bash
+gwf -f workflows/frailty_recovery/workflow.py status
+gwf -f workflows/frailty_recovery/workflow.py run
 ```
 
 The workflow activates the same `dvfm` environment on the compute node. Its experiment config sets `compute.device: cuda`, causing the job to fail instead of silently falling back to CPU.

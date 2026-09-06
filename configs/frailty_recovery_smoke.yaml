@@ -1,0 +1,24 @@
+schema_version: 1
+study: {name: frailty-recovery-smoke, stage: smoke, output_dir: results/frailty-recovery-smoke}
+seeds: {dgp: 2026, sampling: [0], split: [100], model: [200]}
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: frailty_recovery_diagnostic
+  mechanisms: [gaussian_shared_frailty, clayton_gamma_frailty]
+  n_samples: 256
+  n_features: 5
+  kendall_tau: 0.50
+  censoring_rate: 0.50
+  calibration_samples: 2000
+split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.15}
+preprocessing: {zscore_x: false}
+models:
+  enabled: [dvfm]
+  dvfm: {latent_dim: 1, encoder_hidden: [16, 8], decoder_hidden: [8, 16], batch_size: 64, free_bits: 0.0}
+  oracle_z_decoder: {decoder_hidden: [8, 16], maximum_epochs: 2, minimum_epochs: 1, learning_rate: 0.0005, batch_size: 64, lr_patience: 1, early_stopping_patience: 1, minimum_learning_rate: 0.000001}
+training_variants:
+  - {name: current, maximum_epochs: 2, minimum_epochs: 0, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, lr_patience: 1, early_stopping_patience: null, minimum_learning_rate: 0.000001, scheduler_metric: validation_elbo, checkpoint_selection: final}
+  - {name: checkpoint_fix, maximum_epochs: 2, minimum_epochs: 0, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, lr_patience: 1, early_stopping_patience: null, minimum_learning_rate: 0.000001, scheduler_metric: validation_elbo, checkpoint_selection: best_validation_reconstruction_nll}
+  - {name: old_training, maximum_epochs: 2, minimum_epochs: 1, learning_rate: 0.0005, batch_size: 64, beta_max: 0.2, warmup_epochs: 2, lr_patience: 1, early_stopping_patience: 1, minimum_learning_rate: 0.000001, scheduler_metric: validation_reconstruction_nll, checkpoint_selection: best_validation_reconstruction_nll}
+  - {name: schedule_isolation, maximum_epochs: 2, minimum_epochs: 1, learning_rate: 0.0005, batch_size: 64, beta_max: 1.0, warmup_epochs: 2, lr_patience: 1, early_stopping_patience: 1, minimum_learning_rate: 0.000001, scheduler_metric: validation_reconstruction_nll, checkpoint_selection: best_validation_reconstruction_nll}
+evaluation: {n_time_points: 20, grid_max_quantile: 0.95, mc_samples: 2, dependence_samples_per_epoch: 100, dependence_samples_checkpoint: 200, save_prediction_curves: false, save_subject_latents: true, primary_metrics: [frailty_spearman, absolute_conditional_kendall_tau_error, oracle_ibs]}

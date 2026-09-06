@@ -43,3 +43,19 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     assert set(cfg["seeds"]) == {"dgp", "sampling", "split", "model"}
     assert len(cfg["seeds"]["sampling"]) == 5
     assert "seeds" not in cfg["study"]
+
+
+def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():
+    cfg = load_config(ROOT / "configs" / "frailty_recovery_diagnostic.yaml")
+    variants = {item["name"]: item for item in cfg["training_variants"]}
+    assert set(variants) == {"current", "checkpoint_fix", "old_training", "schedule_isolation"}
+    assert cfg["data"]["kendall_tau"] == 0.5
+    assert cfg["data"]["censoring_rate"] == 0.5
+    assert cfg["models"]["dvfm"]["latent_dim"] == 1
+    assert variants["current"]["checkpoint_selection"] == "final"
+    assert variants["checkpoint_fix"]["checkpoint_selection"] == "best_validation_reconstruction_nll"
+    assert variants["old_training"]["beta_max"] == 0.2
+    assert variants["old_training"]["warmup_epochs"] == 150
+    assert variants["old_training"]["learning_rate"] == 0.0005
+    assert variants["schedule_isolation"]["beta_max"] == 1.0
+    assert len(cfg["seeds"]["sampling"]) == 5

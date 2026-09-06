@@ -8,7 +8,12 @@ from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
 from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
 from dvfm.prediction import predict_survival_curves
-from dvfm.synthetic import generate_clayton_aft_data, generate_copula_data, generate_gaussian_shared_frailty
+from dvfm.synthetic import (
+    generate_clayton_aft_data,
+    generate_clayton_gamma_frailty,
+    generate_copula_data,
+    generate_gaussian_shared_frailty,
+)
 
 
 def test_generator_shapes():
@@ -61,6 +66,19 @@ def test_gaussian_frailty_generator_is_reproducible_and_hits_targets():
     np.testing.assert_array_equal(first.event, second.event)
     assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
     assert abs(first.achieved_censoring_rate - 0.25) < 1 / len(first.event) + 1e-12
+
+
+def test_clayton_gamma_generator_exposes_true_frailty_and_hits_targets():
+    kwargs = dict(n_samples=5000, n_features=3, kendall_tau=0.5, censoring_rate=0.5,
+                  dgp_seed=21, sampling_seed=22)
+    first = generate_clayton_gamma_frailty(**kwargs)
+    second = generate_clayton_gamma_frailty(**kwargs)
+    np.testing.assert_array_equal(first.true_z, second.true_z)
+    np.testing.assert_array_equal(first.event, second.event)
+    assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
+    assert abs(first.achieved_censoring_rate - 0.5) < 1 / len(first.event) + 1e-12
+    assert abs(float(first.true_z.mean())) < 1e-6
+    assert abs(float(first.true_z.std()) - 1.0) < 1e-6
 
 
 def test_clayton_aft_likelihood_matches_its_exact_generator():

@@ -29,6 +29,39 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 The synthetic result table contains only oracle IBS, oracle concordance index, and oracle MAE (overall and by observed censoring status). Separate artifacts store training reconstruction/KL trajectories, active latent dimensions, learned conditional `kendall_tau`, population calibration curves, prior versus aggregate-posterior predictions, posterior parameters, and the held-out true frailty `z`.
 
+### Focused frailty-recovery training diagnostic
+
+Before extending the grid, `configs/frailty_recovery_diagnostic.yaml` freezes one condition: `kendall_tau = 0.50`, 50% censoring, fitted latent dimension 1, 8,873 subjects, and five independent sampling/split/model seeds. It runs both the shared-Gaussian DGP and a Marshall--Olkin Clayton construction whose standardized log-Gamma frailty is observed by the evaluator. The Clayton construction reproduces the latent mechanism used by the earlier successful SUPPORT experiment, but uses synthetic Weibull margins; it is therefore a mechanism replication, not a literal reproduction of the SUPPORT cohort.
+
+The four DVFM variants isolate checkpointing and optimization:
+
+| Variant | `beta_max` | Warmup | Learning rate | LR scheduler | Primary checkpoint |
+| --- | ---: | ---: | ---: | --- | --- |
+| `current` | 1.0 | 50 | 0.001 | validation ELBO | final |
+| `checkpoint_fix` | 1.0 | 50 | 0.001 | validation ELBO | best validation reconstruction NLL |
+| `old_training` | 0.2 | 150 | 0.0005 | validation reconstruction NLL | best validation reconstruction NLL |
+| `schedule_isolation` | 1.0 | 150 | 0.0005 | validation reconstruction NLL | best validation reconstruction NLL |
+
+Both final and best-reconstruction checkpoints are retained for every variant. Checkpoint selection, sign alignment, and affine latent calibration use validation data only. The untouched test partition supplies frailty Pearson/Spearman, validation-calibrated RMSE/R-squared, and oracle prediction metrics. An oracle-Z decoder determines whether the decoder and DGP can recover event-time behavior when the true subject frailty is supplied.
+
+Every epoch records training and validation reconstruction NLL, ELBO, KL, validation frailty Pearson/Spearman, active latent dimensions, learned conditional `kendall_tau`, beta, and learning rate. Compact CSV/GZIP artifacts replace full prediction NPZ files:
+
+- `training_history.csv.gz`: epoch trajectories.
+- `frailty_recovery.csv`: checkpoint-level recovery, alignment, and subgroup metrics.
+- `subject_latent_diagnostics.csv.gz`: held-out posterior means/standard deviations and calibrated frailty estimates.
+- `results_raw.csv`: prior, aggregate-posterior, and oracle-Z prediction metrics.
+- `calibration_curves.csv.gz`: population survival calibration summaries.
+- `run_manifest.csv`: successes, failures, and runtimes.
+- `checkpoints/`: final and best-reconstruction states.
+
+Run the local CUDA smoke test first, then submit the diagnostic:
+
+```bash
+dvfm-run --config configs/frailty_recovery_smoke.yaml
+gwf -f workflows/frailty_recovery/workflow.py status
+gwf -f workflows/frailty_recovery/workflow.py run
+```
+
 ### Data-generating mechanisms
 1. Gaussian shared frailty with known `z_shared`.
 2. Clayton copula (lower-tail dependence).

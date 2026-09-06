@@ -363,7 +363,7 @@ def _run_gaussian_frailty(cfg: dict, out_dir: Path, device: torch.device) -> pd.
 def validate_inputs(cfg: dict) -> None:
     data_cfg = cfg["data"]
     source = str(data_cfg["source"]).lower()
-    if source in {"synthetic_copula", "gaussian_shared_frailty"}:
+    if source in {"synthetic_copula", "gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
         return
     path = Path(data_cfg["path"])
     if not path.exists():
@@ -386,6 +386,10 @@ def run(cfg: dict) -> pd.DataFrame:
 
     if source == "gaussian_shared_frailty":
         rows = _run_gaussian_frailty(cfg, out_dir, device).to_dict("records")
+    elif source == "frailty_recovery_diagnostic":
+        from .frailty_diagnostic import run_frailty_recovery_diagnostic
+
+        return run_frailty_recovery_diagnostic(cfg, out_dir, device)
     elif source == "synthetic_copula":
         scenarios = expand_scenarios(data_cfg)
         for scenario in scenarios:

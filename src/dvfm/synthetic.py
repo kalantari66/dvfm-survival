@@ -38,6 +38,78 @@ class ClaytonAFTSample:
     clayton_theta: float
 
 
+@dataclass
+class ClaytonGammaFrailtySample:
+    """Marshall--Olkin Clayton sample with its generating Gamma frailty."""
+
+    X: np.ndarray
+    observed_time: np.ndarray
+    event: np.ndarray
+    event_time: np.ndarray
+    censor_time: np.ndarray
+    true_z: np.ndarray
+    true_frailty: np.ndarray
+    clayton_theta: float
+    censor_intercept: float
+    empirical_conditional_kendall_tau: float
+    empirical_marginal_kendall_tau: float
+    achieved_censoring_rate: float
+
+
+def generate_clayton_gamma_frailty(
+    *,
+    n_samples: int,
+    n_features: int,
+    kendall_tau: float,
+    censoring_rate: float,
+    dgp_seed: int,
+    sampling_seed: int,
+) -> ClaytonGammaFrailtySample:
+    """Reproduce the historical Clayton Gamma-frailty construction.
+
+    ``true_z`` is standardized log Gamma frailty, matching the target used in
+    the earlier successful subject-level recovery experiment. The marginal
+    Weibull regression is synthetic here; the historical SUPPORT experiment
+    used fitted Cox margins with the same Marshall--Olkin latent construction.
+    """
+    tau = float(kendall_tau)
+    if not 0.0 < tau < 1.0:
+        raise ValueError("Clayton Gamma frailty requires kendall_tau in (0, 1)")
+    if not 0.0 < float(censoring_rate) < 1.0:
+        raise ValueError("censoring_rate must be between 0 and 1")
+    theta = 2.0 * tau / (1.0 - tau)
+    parameter_rng = np.random.default_rng(dgp_seed)
+    beta_event = parameter_rng.normal(0.0, 0.25, size=n_features)
+    beta_censor = parameter_rng.normal(0.0, 0.25, size=n_features)
+    rng = np.random.default_rng(sampling_seed)
+    X = rng.normal(size=(n_samples, n_features))
+    frailty = rng.gamma(shape=1.0 / theta, scale=1.0, size=n_samples)
+    event_noise = rng.exponential(size=n_samples)
+    censor_noise = rng.exponential(size=n_samples)
+    u_event = np.clip((1.0 + event_noise / frailty) ** (-1.0 / theta), 1e-8, 1.0 - 1e-8)
+    u_censor = np.clip((1.0 + censor_noise / frailty) ** (-1.0 / theta), 1e-8, 1.0 - 1e-8)
+    event_time = np.exp(X @ beta_event) * (-np.log(u_event)) ** (1.0 / 1.5)
+    censor_base = np.exp(X @ beta_censor) * (-np.log(u_censor)) ** (1.0 / 1.3)
+    censor_intercept = float(np.quantile(
+        np.log(event_time) - np.log(censor_base), 1.0 - float(censoring_rate)
+    ))
+    censor_time = np.exp(censor_intercept) * censor_base
+    event = (event_time <= censor_time).astype(int)
+    log_frailty = np.log(np.clip(frailty, 1e-12, None))
+    true_z = (log_frailty - log_frailty.mean()) / max(log_frailty.std(), 1e-12)
+    event_residual = np.log(event_time) - X @ beta_event
+    censor_residual = np.log(censor_time) - X @ beta_censor - censor_intercept
+    return ClaytonGammaFrailtySample(
+        X=X.astype(np.float32), observed_time=np.minimum(event_time, censor_time),
+        event=event, event_time=event_time, censor_time=censor_time,
+        true_z=true_z, true_frailty=frailty, clayton_theta=theta,
+        censor_intercept=censor_intercept,
+        empirical_conditional_kendall_tau=float(kendalltau(event_residual, censor_residual).statistic),
+        empirical_marginal_kendall_tau=float(kendalltau(event_time, censor_time).statistic),
+        achieved_censoring_rate=float(1.0 - event.mean()),
+    )
+
+
 def generate_clayton_aft_data(
     *,
     n_samples: int,
@@ -148,6 +220,7 @@ def generate_gaussian_shared_frailty(*, n_samples: int, n_features: int, kendall
     )
 
 
-__all__ = ["ClaytonAFTSample", "GaussianFrailtySample", "generate_clayton_aft_data",
+__all__ = ["ClaytonAFTSample", "ClaytonGammaFrailtySample", "GaussianFrailtySample",
+           "generate_clayton_aft_data", "generate_clayton_gamma_frailty",
            "calibrate_gaussian_frailty_loading", "generate_gaussian_shared_frailty",
            "generate_copula_data"]
