@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
+from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
 from dvfm.prediction import predict_survival_curves
 from dvfm.synthetic import generate_copula_data
@@ -38,3 +39,14 @@ def test_dvfm_forward_prediction_and_metrics():
     _, ipcw, _ = compute_ipcw_brier_ibs(curves, grid, time[:8], event[:8])
     assert np.isfinite(oracle)
     assert np.isfinite(ipcw)
+
+
+def test_clayton_prediction_uses_model_device():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ClaytonWeibullAFT(n_features=3).to(device)
+    curves = model.predict_survival(
+        np.zeros((4, 3), dtype=np.float32),
+        np.linspace(0.0, 2.0, 5),
+    )
+    assert curves.shape == (4, 5)
+    assert np.all(np.isfinite(curves))

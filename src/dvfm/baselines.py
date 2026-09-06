@@ -354,7 +354,9 @@ class ClaytonWeibullAFT(nn.Module):
         eps = 1e-8
         x = np.asarray(x, dtype=np.float32)
         x_aug = np.concatenate([x, np.ones((x.shape[0], 1), dtype=np.float32)], axis=1)
-        x_t = torch.from_numpy(x_aug)
+        # Prediction must follow the fitted module. In particular, a CUDA-fitted
+        # model cannot multiply CPU covariates by CUDA parameters.
+        x_t = torch.from_numpy(x_aug).to(self.beta_t.device)
 
         with torch.no_grad():
             scale_t = torch.exp(x_t @ self.beta_t).cpu().numpy() + eps
