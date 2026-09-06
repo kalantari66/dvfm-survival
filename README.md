@@ -81,9 +81,8 @@ conda activate dvfm
 gwf --version
 ```
 
-The synthetic YAML owns its SLURM resource settings. The workflow expands the
-36 sample-size/tau/censoring scenarios and five paired repeats into 180
-independent GPU jobs, then runs one final aggregation target:
+The synthetic YAML owns its SLURM resource settings. The complete grid runs in
+one GPU target:
 
 ```bash
 gwf -f workflows/synthetic/workflow.py status

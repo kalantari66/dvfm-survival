@@ -222,7 +222,6 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
         for repeat, (sampling_seed, split_seed, model_seed) in enumerate(zip(
             seed_cfg["sampling"], seed_cfg["split"], seed_cfg["model"]
         )):
-            repeat = int(cfg.get("_repeat_index", repeat))
             generated = generate_gaussian_shared_frailty(
                 n_samples=n_samples, n_features=int(data_cfg["n_features"]),
                 kendall_tau=float(scenario["kendall_tau"]),
