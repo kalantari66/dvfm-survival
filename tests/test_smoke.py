@@ -8,6 +8,10 @@ from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
 from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
 from dvfm.hacsurv import HACSurv2D
+from dvfm.joint_metrics import (
+    JointSurvivalEvaluation,
+    oracle_joint_survival_ise,
+)
 from dvfm.prediction import predict_survival_curves
 from dvfm.training import train_dvfm
 from dvfm.synthetic import (
@@ -122,6 +126,17 @@ def test_hacsurv_2d_has_finite_likelihood_gradients_and_monotone_survival():
         early = model.event_survival(x, torch.full((32,), 0.25, dtype=torch.float64))
         late = model.event_survival(x, torch.full((32,), 2.5, dtype=torch.float64))
     assert torch.all(early >= late)
+
+
+def test_oracle_joint_survival_ise_is_zero_for_truth():
+    event_grid = np.linspace(0.0, 2.0, 5)
+    censor_grid = np.linspace(0.0, 3.0, 6)
+    truth = np.linspace(1.0, 0.0, 30).reshape(1, 5, 6)
+    evaluation = JointSurvivalEvaluation(
+        X=np.zeros((1, 2)), event_grid=event_grid,
+        censor_grid=censor_grid, truth=truth,
+    )
+    assert oracle_joint_survival_ise(truth, evaluation) == 0.0
 
 
 def test_clayton_prediction_uses_model_device():

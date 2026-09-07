@@ -217,6 +217,33 @@ class HACSurv2D(nn.Module):
     def event_survival(self, x: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
         return self.event_margin.survival(x, time)
 
+    def joint_survival_grid(
+        self, x: torch.Tensor, event_grid: torch.Tensor,
+        censor_grid: torch.Tensor, generator_samples: int,
+    ) -> torch.Tensor:
+        """Evaluate C_phi(S_T(t|x), S_C(c|x)) on a two-dimensional grid."""
+        self.generator.resample(int(generator_samples))
+        event_survival = torch.stack([
+            self.event_margin.survival(x, point.expand(len(x)))
+            for point in event_grid
+        ], dim=1)
+        censor_survival = torch.stack([
+            self.censor_margin.survival(x, point.expand(len(x)))
+            for point in censor_grid
+        ], dim=1)
+        eps = torch.finfo(x.dtype).eps ** 0.5
+        event_inverse = _newton_inverse(
+            self.generator, event_survival.clamp(eps, 1.0 - eps),
+            self.inverse_iterations, self.inverse_tolerance,
+        )
+        censor_inverse = _newton_inverse(
+            self.generator, censor_survival.clamp(eps, 1.0 - eps),
+            self.inverse_iterations, self.inverse_tolerance,
+        )
+        return self.generator(
+            event_inverse[:, :, None] + censor_inverse[:, None, :]
+        )
+
     def kendall_tau(self, points: int = 2000) -> float:
         """Numerically evaluate tau=1-4 integral t[phi'(t)]^2 dt."""
         self.generator.resample(max(self.generator.samples, 1000))
@@ -366,7 +393,7 @@ def fit_hacsurv_2d(
         "checkpoint_validation_negative_log_likelihood": float(best_loss),
         "learned_conditional_kendall_tau": model.kendall_tau(),
         "epochs_completed": len(history),
-    }, history
+    }, history, model
 
 
 __all__ = ["HACSurv2D", "fit_hacsurv_2d"]

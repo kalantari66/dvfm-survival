@@ -309,3 +309,15 @@ def validate_config(cfg: dict) -> None:
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")
+    if cfg["evaluation"].get("compute_oracle_joint_survival_ise", False):
+        for key in (
+            "joint_n_time_points", "joint_n_subjects", "joint_dgp_samples",
+            "joint_model_samples", "joint_model_batch_size",
+        ):
+            if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
+                raise ValueError(f"evaluation.{key} must be at least 2")
+        quantile = float(_require(
+            cfg["evaluation"], "joint_grid_max_quantile", "evaluation"
+        ))
+        if not 0.0 < quantile <= 1.0:
+            raise ValueError("evaluation.joint_grid_max_quantile must be in (0, 1]")

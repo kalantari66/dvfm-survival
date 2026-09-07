@@ -104,7 +104,17 @@ gwf -f workflows/hacsurv_synthetic/workflow.py run
 
 At `kendall_tau = 0`, true-frailty correlation is undefined as a recovery target; those cells evaluate learned dependence, latent collapse, and predictive safety under independence. For positive tau, the best latent coordinate, its sign, and its affine calibration are selected using validation subjects only before held-out test recovery is calculated.
 
-The result table contains oracle IBS, oracle concordance index, and oracle MAE overall and by observed censoring status. Separate compact artifacts store ELBO/reconstruction/KL trajectories, final-versus-post-warmup-ELBO checkpoint diagnostics, active latent dimensions, learned conditional `kendall_tau`, frailty recovery by censoring subgroup, and population calibration curves. Full per-subject survival NPZ files are not produced.
+The result table contains oracle IBS, oracle concordance index, oracle MAE, and
+`oracle_joint_survival_ise`. The latter is the subject-averaged, area-normalized
+two-dimensional integrated squared error between the learned and true
+conditional joint survival $P(T>t,C>c\mid X)$ on held-out synthetic subjects.
+For DVFM this integrates over the prior latent distribution; for HACSurv it
+evaluates the learned survival copula on its learned margins. Separate compact
+artifacts store ELBO/reconstruction/KL trajectories,
+final-versus-post-warmup-ELBO checkpoint diagnostics, active latent dimensions,
+learned conditional `kendall_tau`, frailty recovery by censoring subgroup, and
+population calibration curves. Full per-subject survival NPZ files are not
+produced.
 
 ### Focused frailty-recovery training diagnostic
 

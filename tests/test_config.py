@@ -83,6 +83,7 @@ def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     assert len(expand_scenarios(cfg["data"])) == 1
     assert len(cfg["seeds"]["sampling"]) == 1
     assert cfg["models"]["hacsurv_2d"]["checkpoint_min_epoch"] > cfg["models"]["hacsurv_2d"]["copula_start_epoch"]
+    assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
 
 
 def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():

@@ -20,6 +20,10 @@ class GaussianFrailtySample:
     empirical_conditional_kendall_tau: float
     empirical_marginal_kendall_tau: float
     achieved_censoring_rate: float
+    beta_event: np.ndarray
+    beta_censor: np.ndarray
+    shape_event: float
+    shape_censor: float
 
 
 @dataclass
@@ -54,6 +58,10 @@ class ClaytonGammaFrailtySample:
     empirical_conditional_kendall_tau: float
     empirical_marginal_kendall_tau: float
     achieved_censoring_rate: float
+    beta_event: np.ndarray
+    beta_censor: np.ndarray
+    shape_event: float
+    shape_censor: float
 
 
 def generate_clayton_gamma_frailty(
@@ -107,6 +115,8 @@ def generate_clayton_gamma_frailty(
         empirical_conditional_kendall_tau=float(kendalltau(event_residual, censor_residual).statistic),
         empirical_marginal_kendall_tau=float(kendalltau(event_time, censor_time).statistic),
         achieved_censoring_rate=float(1.0 - event.mean()),
+        beta_event=beta_event, beta_censor=beta_censor,
+        shape_event=1.5, shape_censor=1.3,
     )
 
 
@@ -217,6 +227,8 @@ def generate_gaussian_shared_frailty(*, n_samples: int, n_features: int, kendall
         empirical_conditional_kendall_tau=float(kendalltau(event_residual, censor_residual).statistic),
         empirical_marginal_kendall_tau=float(kendalltau(event_time, censor_time).statistic),
         achieved_censoring_rate=float(1.0 - event.mean()),
+        beta_event=beta_event, beta_censor=beta_censor,
+        shape_event=1.5, shape_censor=1.3,
     )
 
 

@@ -28,6 +28,12 @@ from .data import SurvivalData
 from .metrics import compute_oracle_brier_ibs
 from .model import DVFM, SurvivalDataset
 from .hacsurv import fit_hacsurv_2d
+from .joint_metrics import (
+    oracle_joint_survival_ise,
+    predict_dvfm_joint_survival,
+    predict_hacsurv_joint_survival,
+    prepare_joint_survival_evaluation,
+)
 from .prediction import (
     get_median_survival_time,
     learned_conditional_kendall_tau,
@@ -248,6 +254,7 @@ def _write_hyperparameter_comparison(
     summary = selection.groupby("hyperparameter_variant", as_index=False).agg(
         mean_validation_oracle_ibs=("oracle_ibs", "mean"),
         mean_validation_oracle_ci=("oracle_ci", "mean"),
+        mean_oracle_joint_survival_ise=("oracle_joint_survival_ise", "mean"),
         mean_validation_ibs_rank=("validation_ibs_rank", "mean"),
         mean_validation_ci_rank=("validation_ci_rank", "mean"),
         mean_absolute_kendall_tau_error=("absolute_conditional_kendall_tau_error", "mean"),
@@ -260,6 +267,7 @@ def _write_hyperparameter_comparison(
         mean_validation_oracle_ibs=("oracle_ibs", "mean"),
         std_validation_oracle_ibs=("oracle_ibs", "std"),
         mean_validation_oracle_ci=("oracle_ci", "mean"),
+        mean_oracle_joint_survival_ise=("oracle_joint_survival_ise", "mean"),
         mean_absolute_kendall_tau_error=("absolute_conditional_kendall_tau_error", "mean"),
         seeds=("oracle_ibs", "size"),
     )
@@ -315,11 +323,15 @@ def _write_hyperparameter_comparison(
 
     reference = selection.loc[
         selection["hyperparameter_variant"].eq(reference_name),
-        cell + ["oracle_ibs", "oracle_ci", "oracle_mae"],
+        cell + [
+            "oracle_ibs", "oracle_ci", "oracle_mae",
+            "oracle_joint_survival_ise",
+        ],
     ].rename(columns={
         "oracle_ibs": "reference_oracle_ibs",
         "oracle_ci": "reference_oracle_ci",
         "oracle_mae": "reference_oracle_mae",
+        "oracle_joint_survival_ise": "reference_oracle_joint_survival_ise",
     })
     if len(reference) != selection[cell].drop_duplicates().shape[0]:
         raise RuntimeError("Reference variant is missing from one or more tuning cells")
@@ -333,10 +345,17 @@ def _write_hyperparameter_comparison(
     paired["delta_oracle_mae_vs_reference"] = (
         paired["oracle_mae"] - paired["reference_oracle_mae"]
     )
+    paired["delta_oracle_joint_survival_ise_vs_reference"] = (
+        paired["oracle_joint_survival_ise"]
+        - paired["reference_oracle_joint_survival_ise"]
+    )
     paired.to_csv(out_dir / "hyperparameter_paired_deltas.csv", index=False)
 
 
-def _fit_baseline(name, train, validation, test, grid, cfg, device, model_seed):
+def _fit_baseline(
+    name, train, validation, test, grid, cfg, device, model_seed,
+    joint_evaluation=None,
+):
     fit_info, history = {}, []
     if name == "coxph":
         _, survival = _fit_cox_and_predict_survival(
@@ -365,7 +384,7 @@ def _fit_baseline(name, train, validation, test, grid, cfg, device, model_seed):
         )
     elif name == "hacsurv_2d":
         settings = cfg["models"]["hacsurv_2d"]
-        survival, fit_info, history = fit_hacsurv_2d(
+        survival, fit_info, history, fitted_model = fit_hacsurv_2d(
             train.X, train.time, train.event,
             validation.X, validation.time, validation.event,
             test.X, grid,
@@ -387,6 +406,16 @@ def _fit_baseline(name, train, validation, test, grid, cfg, device, model_seed):
             numerical_failure_threshold=float(settings["numerical_failure_threshold"]),
             dtype=str(settings["dtype"]), seed=int(model_seed), device=device,
         )
+        if joint_evaluation is not None:
+            joint_prediction = predict_hacsurv_joint_survival(
+                fitted_model, joint_evaluation,
+                generator_samples=int(cfg["evaluation"]["joint_model_samples"]),
+                batch_size=int(cfg["evaluation"]["joint_model_batch_size"]),
+                device=device,
+            )
+            fit_info["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+                joint_prediction, joint_evaluation
+            )
     else:
         raise ValueError(f"Unsupported synthetic baseline: {name}")
     return survival, fit_info, history
@@ -416,6 +445,17 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                 float(np.quantile(train.true_event_time, evaluation["grid_max_quantile"])),
                 int(evaluation["n_time_points"]),
             )
+            joint_evaluation = None
+            if evaluation.get("compute_oracle_joint_survival_ise", False):
+                joint_evaluation = prepare_joint_survival_evaluation(
+                    generated, mechanism, test.X,
+                    train.true_event_time, train.true_censor_time,
+                    n_time_points=int(evaluation["joint_n_time_points"]),
+                    max_quantile=float(evaluation["joint_grid_max_quantile"]),
+                    n_subjects=int(evaluation["joint_n_subjects"]),
+                    dgp_samples=int(evaluation["joint_dgp_samples"]),
+                    seed=int(split_seed) + 70_000,
+                )
             base = {
                 "study": cfg["study"]["name"],
                 "scenario": scenario.get(
@@ -441,7 +481,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     _seed(int(model_seed))
                     survival, fit_info, baseline_history = _fit_baseline(
                         baseline, train, validation, test, grid, cfg, device,
-                        int(model_seed),
+                        int(model_seed), joint_evaluation,
                     )
                     histories.extend([
                         {**fit_context, **item} for item in baseline_history
@@ -585,6 +625,20 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                 "conditional_kendall_tau_error": learned_tau - float(scenario["kendall_tau"]),
                                 "absolute_conditional_kendall_tau_error": abs(learned_tau - float(scenario["kendall_tau"])),
                             }
+                            if is_primary and joint_evaluation is not None:
+                                joint_prediction = predict_dvfm_joint_survival(
+                                    model, joint_evaluation,
+                                    mc_samples=int(evaluation["joint_model_samples"]),
+                                    batch_size=int(evaluation["joint_model_batch_size"]),
+                                    seed=int(model_seed) + 90_000, device=device,
+                                )
+                                checkpoint_context["oracle_joint_survival_ise"] = (
+                                    oracle_joint_survival_ise(
+                                        joint_prediction, joint_evaluation
+                                    )
+                                )
+                            else:
+                                checkpoint_context["oracle_joint_survival_ise"] = np.nan
                             diagnostics.extend([{
                                 **checkpoint_context, **item,
                             } for item in _frailty_diagnostics(

@@ -36,7 +36,7 @@ hyperparameter_sweep: {reference_variant: reference, frailty_spearman_tolerance:
 evaluation:
   n_time_points: 10
   grid_max_quantile: 0.95
-  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   prediction_modes: [prior]
   evaluate_partitions: [validation, test]
   save_predictions: false
@@ -44,3 +44,10 @@ evaluation:
   save_calibration_curves: true
   active_kl_threshold: 0.01
   dependence_samples: 20
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 5
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 16
+  joint_dgp_samples: 50
+  joint_model_samples: 20
+  joint_model_batch_size: 8

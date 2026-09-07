@@ -44,10 +44,17 @@ models:
 evaluation:
   n_time_points: 200
   grid_max_quantile: 0.95
-  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   prediction_modes: [prior, aggregate_posterior]
   save_predictions: false
   save_training_history: true
   save_calibration_curves: true
   active_kl_threshold: 0.01
   dependence_samples: 2000
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 15
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 128
+  joint_dgp_samples: 2000
+  joint_model_samples: 500
+  joint_model_batch_size: 32

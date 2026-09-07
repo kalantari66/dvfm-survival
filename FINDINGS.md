@@ -21,6 +21,7 @@
 ## Current decisions
 
 - Use oracle IBS as the primary synthetic prediction metric, with oracle CI and MAE as secondary metrics. Do not use IBS-Dep for now.
+- Report `oracle_joint_survival_ise` for DVFM and HACSurv to evaluate the full conditional event--censoring distribution beyond Kendall's tau.
 - Use separate DGP, sampling, split, and model seeds, and reuse identical censored cohorts across all compared models.
 - Keep train, validation, and test partitions separate; all checkpointing and hyperparameter selection must use validation data only.
 - Reject non-finite objectives/gradients and epochs with absolute ELBO, reconstruction NLL, or KL above 100.
