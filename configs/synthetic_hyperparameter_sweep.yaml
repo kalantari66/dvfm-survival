@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: dvfm_synthetic_hyperparameter_sweep}
-resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-h200, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-l40s, account: c2i-colon}
 study:
   name: synthetic-hyperparameter-sweep
   stage: screening
