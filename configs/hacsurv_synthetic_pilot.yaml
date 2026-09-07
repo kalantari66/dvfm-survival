@@ -1,0 +1,50 @@
+schema_version: 1
+workflow: {target_name: hacsurv_gaussian_reference_pilot}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-h200, account: c2i-colon}
+study:
+  name: hacsurv-gaussian-reference-pilot
+  stage: pilot
+  output_dir: results/hacsurv-gaussian-reference-pilot
+seeds:
+  dgp: 2026
+  sampling: [0]
+  split: [100]
+  model: [200]
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 10000
+  n_features: 10
+  calibration_samples: 50000
+  scenarios:
+    # Matches the condition in which DVFM recovered subject frailty reliably.
+    - {name: gaussian_reference_c50, kendall_tau: 0.50, censoring_rate: 0.50}
+split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
+preprocessing: {zscore_x: false}
+models:
+  enabled: [hacsurv_2d]
+  hacsurv_2d:
+    epochs: 1000
+    batch_size: 512
+    learning_rate: 0.0001
+    copula_learning_rate: 0.0001
+    copula_start_epoch: 200
+    checkpoint_min_epoch: 201
+    minimum_epochs: 400
+    early_stopping_patience: 200
+    generator_samples: 200
+    validation_generator_samples: 500
+    hidden_size: 32
+    hidden_survival: 32
+    inverse_iterations: 200
+    inverse_tolerance: 0.00000001
+    scale_regularization: 1.0
+    numerical_failure_threshold: 100.0
+    dtype: float64
+evaluation:
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true

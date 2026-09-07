@@ -27,6 +27,7 @@ from .config import expand_scenarios
 from .data import SurvivalData
 from .metrics import compute_oracle_brier_ibs
 from .model import DVFM, SurvivalDataset
+from .hacsurv import fit_hacsurv_2d
 from .prediction import (
     get_median_survival_time,
     learned_conditional_kendall_tau,
@@ -335,7 +336,8 @@ def _write_hyperparameter_comparison(
     paired.to_csv(out_dir / "hyperparameter_paired_deltas.csv", index=False)
 
 
-def _fit_baseline(name, train, test, grid, cfg, device):
+def _fit_baseline(name, train, validation, test, grid, cfg, device, model_seed):
+    fit_info, history = {}, []
     if name == "coxph":
         _, survival = _fit_cox_and_predict_survival(
             train.X, train.time, train.event, test.X, grid
@@ -361,9 +363,33 @@ def _fit_baseline(name, train, test, grid, cfg, device):
             epochs=int(settings["epochs"]), lr=float(settings["learning_rate"]),
             device=device,
         )
+    elif name == "hacsurv_2d":
+        settings = cfg["models"]["hacsurv_2d"]
+        survival, fit_info, history = fit_hacsurv_2d(
+            train.X, train.time, train.event,
+            validation.X, validation.time, validation.event,
+            test.X, grid,
+            epochs=int(settings["epochs"]),
+            batch_size=int(settings["batch_size"]),
+            learning_rate=float(settings["learning_rate"]),
+            copula_learning_rate=float(settings["copula_learning_rate"]),
+            copula_start_epoch=int(settings["copula_start_epoch"]),
+            early_stopping_patience=int(settings["early_stopping_patience"]),
+            minimum_epochs=int(settings.get("minimum_epochs", 0)),
+            checkpoint_min_epoch=int(settings.get("checkpoint_min_epoch", 0)),
+            generator_samples=int(settings["generator_samples"]),
+            validation_generator_samples=int(settings["validation_generator_samples"]),
+            hidden_size=int(settings["hidden_size"]),
+            hidden_survival=int(settings["hidden_survival"]),
+            inverse_iterations=int(settings["inverse_iterations"]),
+            inverse_tolerance=float(settings["inverse_tolerance"]),
+            scale_regularization=float(settings["scale_regularization"]),
+            numerical_failure_threshold=float(settings["numerical_failure_threshold"]),
+            dtype=str(settings["dtype"]), seed=int(model_seed), device=device,
+        )
     else:
         raise ValueError(f"Unsupported synthetic baseline: {name}")
-    return survival
+    return survival, fit_info, history
 
 
 def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.DataFrame:
@@ -413,12 +439,31 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                 fit_context = {**base, "model": baseline, "latent_dim": np.nan}
                 try:
                     _seed(int(model_seed))
-                    survival = _fit_baseline(baseline, train, test, grid, cfg, device)
+                    survival, fit_info, baseline_history = _fit_baseline(
+                        baseline, train, validation, test, grid, cfg, device,
+                        int(model_seed),
+                    )
+                    histories.extend([
+                        {**fit_context, **item} for item in baseline_history
+                    ])
+                    if "learned_conditional_kendall_tau" in fit_info:
+                        fit_info["conditional_kendall_tau_error"] = (
+                            float(fit_info["learned_conditional_kendall_tau"])
+                            - float(scenario["kendall_tau"])
+                        )
+                        fit_info["absolute_conditional_kendall_tau_error"] = abs(
+                            fit_info["conditional_kendall_tau_error"]
+                        )
                     context = {
-                        **fit_context, "checkpoint": "fixed_epochs",
-                        "checkpoint_epoch": model_cfg.get(baseline, {}).get("epochs", np.nan),
+                        **fit_context,
+                        "checkpoint": fit_info.get("checkpoint", "fixed_epochs"),
+                        "checkpoint_epoch": fit_info.get(
+                            "checkpoint_epoch",
+                            model_cfg.get(baseline, {}).get("epochs", np.nan),
+                        ),
                         "is_primary_checkpoint": True, "prediction_mode": "standard",
                         "partition": "test",
+                        **fit_info,
                     }
                     rows.append(_prediction_row(survival, grid, test, context))
                     calibration.extend(_calibration_rows(
@@ -426,6 +471,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     ))
                     manifest.append({
                         **fit_context, "status": "success",
+                        **fit_info,
                         "runtime_seconds": time.perf_counter() - started, "error": "",
                     })
                 except Exception as error:
@@ -436,7 +482,9 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     })
 
             shared_settings = model_cfg["dvfm"]
-            settings_and_latent_dims = [
+            settings_and_latent_dims = [] if "dvfm" not in {
+                str(name).lower() for name in model_cfg["enabled"]
+            } else [
                 (settings, latent_dim)
                 for settings in _dvfm_variants(shared_settings)
                 for latent_dim in settings.get(

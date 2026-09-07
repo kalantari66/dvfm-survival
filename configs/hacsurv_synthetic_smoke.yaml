@@ -1,0 +1,40 @@
+schema_version: 1
+study: {name: hacsurv-synthetic-smoke, stage: smoke, output_dir: results/hacsurv-synthetic-smoke}
+seeds: {dgp: 2026, sampling: [0], split: [100], model: [200]}
+compute: {device: auto, torch_num_threads: 1}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 256
+  n_features: 4
+  calibration_samples: 1000
+  scenarios:
+    - {name: gaussian_reference_c50, kendall_tau: 0.50, censoring_rate: 0.50}
+split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
+preprocessing: {zscore_x: false}
+models:
+  enabled: [hacsurv_2d]
+  hacsurv_2d:
+    epochs: 20
+    batch_size: 64
+    learning_rate: 0.001
+    copula_learning_rate: 0.001
+    copula_start_epoch: 5
+    checkpoint_min_epoch: 6
+    minimum_epochs: 20
+    early_stopping_patience: 0
+    generator_samples: 20
+    validation_generator_samples: 40
+    hidden_size: 8
+    hidden_survival: 8
+    inverse_iterations: 100
+    inverse_tolerance: 0.000001
+    scale_regularization: 1.0
+    numerical_failure_threshold: 100.0
+    dtype: float64
+evaluation:
+  n_time_points: 20
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true

@@ -22,6 +22,17 @@ DEFAULTS: dict[str, Any] = {
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
         "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
+        "hacsurv_2d": {
+            "epochs": 1000, "batch_size": 512, "learning_rate": 1e-4,
+            "copula_learning_rate": 1e-4, "copula_start_epoch": 200,
+            "minimum_epochs": 400, "checkpoint_min_epoch": 201,
+            "early_stopping_patience": 200,
+            "generator_samples": 200, "validation_generator_samples": 500,
+            "hidden_size": 32, "hidden_survival": 32,
+            "inverse_iterations": 200, "inverse_tolerance": 1e-8,
+            "scale_regularization": 1.0, "numerical_failure_threshold": 100.0,
+            "dtype": "float64",
+        },
     },
     "evaluation": {"n_time_points": 200, "max_time_factor": 1.2, "save_predictions": False, "primary_metrics": ["ibs_oracle", "mae_oracle"]},
 }
@@ -136,32 +147,34 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
         _require(cfg["split"], "validation_fraction", "split")
         if source == "gaussian_shared_frailty":
-            latent_dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
-            if not latent_dims or any(int(value) < 0 for value in latent_dims):
-                raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
             dvfm = cfg["models"]["dvfm"]
-            checkpoint_min_epoch = int(_require(
-                dvfm, "checkpoint_min_epoch", "models.dvfm"
-            ))
-            if checkpoint_min_epoch < int(dvfm["warmup_epochs"]):
-                raise ValueError(
-                    "models.dvfm.checkpoint_min_epoch must be at or after warmup_epochs"
-                )
-            if checkpoint_min_epoch > int(dvfm["epochs"]):
-                raise ValueError(
-                    "models.dvfm.checkpoint_min_epoch cannot exceed epochs"
-                )
-            if _require(dvfm, "primary_checkpoint", "models.dvfm") not in {
-                "final", "best_validation_elbo_post_warmup"
-            }:
-                raise ValueError("Invalid models.dvfm.primary_checkpoint")
-            if float(_require(
-                dvfm, "numerical_failure_threshold", "models.dvfm"
-            )) <= 0:
-                raise ValueError(
-                    "models.dvfm.numerical_failure_threshold must be positive"
-                )
-            variants = dvfm.get("variants", [])
+            variants = []
+            if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+                latent_dims = _require(dvfm, "latent_dims", "models.dvfm")
+                if not latent_dims or any(int(value) < 0 for value in latent_dims):
+                    raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+                checkpoint_min_epoch = int(_require(
+                    dvfm, "checkpoint_min_epoch", "models.dvfm"
+                ))
+                if checkpoint_min_epoch < int(dvfm["warmup_epochs"]):
+                    raise ValueError(
+                        "models.dvfm.checkpoint_min_epoch must be at or after warmup_epochs"
+                    )
+                if checkpoint_min_epoch > int(dvfm["epochs"]):
+                    raise ValueError(
+                        "models.dvfm.checkpoint_min_epoch cannot exceed epochs"
+                    )
+                if _require(dvfm, "primary_checkpoint", "models.dvfm") not in {
+                    "final", "best_validation_elbo_post_warmup"
+                }:
+                    raise ValueError("Invalid models.dvfm.primary_checkpoint")
+                if float(_require(
+                    dvfm, "numerical_failure_threshold", "models.dvfm"
+                )) <= 0:
+                    raise ValueError(
+                        "models.dvfm.numerical_failure_threshold must be positive"
+                    )
+                variants = dvfm.get("variants", [])
             if variants:
                 names = [item.get("name") for item in variants]
                 if any(not name for name in names) or len(set(names)) != len(names):
@@ -209,6 +222,37 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(
                         "DVFM sweeps must evaluate both validation and test partitions"
                     )
+            if "hacsurv_2d" in {
+                str(name).lower() for name in cfg["models"]["enabled"]
+            }:
+                hac = cfg["models"]["hacsurv_2d"]
+                required = {
+                    "epochs", "batch_size", "learning_rate",
+                    "copula_learning_rate", "copula_start_epoch",
+                    "minimum_epochs", "checkpoint_min_epoch",
+                    "early_stopping_patience",
+                    "generator_samples", "validation_generator_samples",
+                    "hidden_size", "hidden_survival", "inverse_iterations",
+                    "inverse_tolerance", "scale_regularization",
+                    "numerical_failure_threshold", "dtype",
+                }
+                missing = required - set(hac)
+                if missing:
+                    raise ValueError(
+                        f"models.hacsurv_2d is missing keys: {sorted(missing)}"
+                    )
+                if int(hac["epochs"]) < 1 or int(hac["batch_size"]) < 2:
+                    raise ValueError("HACSurv epochs and batch_size must be positive")
+                if not 0 <= int(hac["copula_start_epoch"]) < int(hac["epochs"]):
+                    raise ValueError("HACSurv copula_start_epoch must precede epochs")
+                if not 0 <= int(hac["minimum_epochs"]) <= int(hac["epochs"]):
+                    raise ValueError("HACSurv minimum_epochs must be within training")
+                if not int(hac["copula_start_epoch"]) < int(hac["checkpoint_min_epoch"]) <= int(hac["epochs"]):
+                    raise ValueError(
+                        "HACSurv checkpoint_min_epoch must follow copula_start_epoch"
+                    )
+                if str(hac["dtype"]) not in {"float32", "float64"}:
+                    raise ValueError("HACSurv dtype must be float32 or float64")
         else:
             mechanisms = _require(data, "mechanisms", "data")
             allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}
@@ -261,7 +305,7 @@ def validate_config(cfg: dict) -> None:
     elif split["strategy"] != "kfold":
         raise ValueError("split.strategy must be holdout or kfold")
 
-    supported = {"coxph", "deepsurv", "mtlr", "clayton_aft", "dvfm"}
+    supported = {"coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm"}
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")

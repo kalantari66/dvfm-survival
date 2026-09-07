@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
 from dvfm.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM, SurvivalDataset
+from dvfm.hacsurv import HACSurv2D
 from dvfm.prediction import predict_survival_curves
 from dvfm.training import train_dvfm
 from dvfm.synthetic import (
@@ -96,6 +97,31 @@ def test_dvfm_supports_dropout_and_adam_weight_decay():
     assert any(isinstance(layer, torch.nn.Dropout) for layer in model.encoder.network)
     assert any(isinstance(layer, torch.nn.Dropout) for layer in model.decoder.network)
     assert artifacts["best_validation_elbo_epoch"] in {1, 2}
+
+
+def test_hacsurv_2d_has_finite_likelihood_gradients_and_monotone_survival():
+    torch.manual_seed(41)
+    model = HACSurv2D(
+        input_dim=3, hidden_size=8, hidden_survival=8,
+        generator_samples=20, inverse_iterations=100, inverse_tolerance=1e-6,
+    ).double()
+    x = torch.randn(32, 3, dtype=torch.float64)
+    time = torch.linspace(0.2, 2.0, 32, dtype=torch.float64)
+    event = torch.arange(32).remainder(2).double()
+    model.generator.resample(20)
+    loss = -model.log_likelihood(x, time, event)
+    loss.backward()
+    generator_gradients = [
+        parameter.grad for parameter in model.generator.parameters()
+        if parameter.grad is not None
+    ]
+    assert torch.isfinite(loss)
+    assert generator_gradients
+    assert all(torch.isfinite(value).all() for value in generator_gradients)
+    with torch.no_grad():
+        early = model.event_survival(x, torch.full((32,), 0.25, dtype=torch.float64))
+        late = model.event_survival(x, torch.full((32,), 2.5, dtype=torch.float64))
+    assert torch.all(early >= late)
 
 
 def test_clayton_prediction_uses_model_device():

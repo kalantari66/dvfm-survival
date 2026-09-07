@@ -76,6 +76,15 @@ def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():
     assert len(cfg["seeds"]["sampling"]) == 3
 
 
+def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
+    cfg = load_config(ROOT / "configs" / "hacsurv_synthetic_pilot.yaml")
+    assert cfg["models"]["enabled"] == ["hacsurv_2d"]
+    assert cfg["data"]["n_samples"] == 10000
+    assert len(expand_scenarios(cfg["data"])) == 1
+    assert len(cfg["seeds"]["sampling"]) == 1
+    assert cfg["models"]["hacsurv_2d"]["checkpoint_min_epoch"] > cfg["models"]["hacsurv_2d"]["copula_start_epoch"]
+
+
 def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():
     cfg = load_config(ROOT / "configs" / "frailty_recovery_diagnostic.yaml")
     variants = {item["name"]: item for item in cfg["training_variants"]}

@@ -42,6 +42,9 @@ dvfm-run --config configs/synthetic_pilot.yaml
 # Fast local check of the predictive hyperparameter machinery
 dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
 
+# Short HACSurv-2D integration check
+dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
+
 # Two-epoch CUDA smoke test for the focused recovery diagnostic
 dvfm-run --config configs/frailty_recovery_smoke.yaml
 
@@ -59,6 +62,12 @@ The complete hyperparameter screen is submitted as one GWF target:
 ```bash
 gwf -f workflows/synthetic_hyperparameter/workflow.py status
 gwf -f workflows/synthetic_hyperparameter/workflow.py run
+```
+
+The focused HACSurv feasibility run is also one GWF target:
+
+```bash
+gwf -f workflows/hacsurv_synthetic/workflow.py run
 ```
 
 ## Canonical experiment specification

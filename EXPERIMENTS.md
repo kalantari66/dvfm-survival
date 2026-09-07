@@ -79,6 +79,29 @@ gwf -f workflows/synthetic_hyperparameter/workflow.py status
 gwf -f workflows/synthetic_hyperparameter/workflow.py run
 ```
 
+### HACSurv-2D feasibility baseline
+
+HACSurv's bivariate single-event model is included as `hacsurv_2d` with
+authorization from the upstream repository owner. It fits neural event and
+censoring margins jointly with a learned mixture-of-exponentials Archimedean
+copula. Because there are only two times, this is the non-hierarchical 2D member
+of HACSurv rather than its competing-risks hierarchy.
+
+`configs/hacsurv_synthetic_pilot.yaml` is deliberately a feasibility run: one
+10,000-subject Gaussian shared-frailty cohort at `kendall_tau = 0.5` and 50%
+censoring, using the same DGP, split, and model seed as the DVFM pilot. It runs
+only HACSurv-2D. The model checkpoint is selected by validation likelihood only
+after copula optimization begins. Evaluation reports marginal event-survival
+oracle IBS, CI, MAE, calibration, learned Kendall's tau, training history,
+runtime, and numerical failures. HACSurv does not produce subject-level frailty.
+
+Run the quick CUDA check and the one-target cluster pilot with:
+
+```bash
+dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
+gwf -f workflows/hacsurv_synthetic/workflow.py run
+```
+
 At `kendall_tau = 0`, true-frailty correlation is undefined as a recovery target; those cells evaluate learned dependence, latent collapse, and predictive safety under independence. For positive tau, the best latent coordinate, its sign, and its affine calibration are selected using validation subjects only before held-out test recovery is calculated.
 
 The result table contains oracle IBS, oracle concordance index, and oracle MAE overall and by observed censoring status. Separate compact artifacts store ELBO/reconstruction/KL trajectories, final-versus-post-warmup-ELBO checkpoint diagnostics, active latent dimensions, learned conditional `kendall_tau`, frailty recovery by censoring subgroup, and population calibration curves. Full per-subject survival NPZ files are not produced.
