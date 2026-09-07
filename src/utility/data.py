@@ -1,4 +1,4 @@
-"""Generic CSV/XLSX loaders for real and semi-synthetic survival data."""
+"""Generic CSV/XLSX loaders and survival-data container."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+import torch
+from torch.utils.data import Dataset
 
 
 @dataclass
@@ -19,6 +21,21 @@ class SurvivalData:
     true_event_time: np.ndarray | None = None
     true_censor_time: np.ndarray | None = None
     true_z: np.ndarray | None = None
+
+
+class SurvivalDataset(Dataset):
+    """Torch dataset for covariates, observed time, and event indicator."""
+
+    def __init__(self, X, time, event):
+        self.X = torch.as_tensor(X, dtype=torch.float32)
+        self.time = torch.as_tensor(time, dtype=torch.float32)
+        self.event = torch.as_tensor(event, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, index):
+        return self.X[index], self.time[index], self.event[index]
 
 
 def _read_table(path: str | Path) -> pd.DataFrame:

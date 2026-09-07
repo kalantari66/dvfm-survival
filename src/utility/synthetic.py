@@ -1,10 +1,10 @@
-"""Controlled synthetic data generators for DVFM experiments."""
+"""Controlled synthetic survival data generators."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
 from scipy.stats import kendalltau
-from .reference_core import generate_copula_data
+from .legacy_synthetic import generate_copula_data
 
 
 @dataclass

@@ -59,8 +59,8 @@ def run_sweep(config_path: Path, result_dir: Path, resources: dict) -> Anonymous
 
     source "$HOME/miniconda3/etc/profile.d/conda.sh"
     conda activate dvfm
-    python -m dvfm.cli --config "{config_path}" --validate-only
-    python -m dvfm.cli --config "{config_path}"
+    python -m experiments.cli --config "{config_path}" --validate-only
+    python -m experiments.cli --config "{config_path}"
 
     {output_checks}
     touch "{outputs[-1]}"
@@ -68,7 +68,11 @@ def run_sweep(config_path: Path, result_dir: Path, resources: dict) -> Anonymous
     """
     inputs = [
         config_path, PROJECT_ROOT / "environment.yml", PROJECT_ROOT / "pyproject.toml",
-        *sorted((PROJECT_ROOT / "src" / "dvfm").glob("*.py")),
+        *sorted(
+            path
+            for package in ("dvfm", "experiments", "sota", "utility")
+            for path in (PROJECT_ROOT / "src" / package).glob("*.py")
+        ),
     ]
     return AnonymousTarget(
         inputs=[str(path) for path in inputs], outputs=[str(path) for path in outputs],

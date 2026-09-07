@@ -31,7 +31,11 @@ def run_frailty_recovery_diagnostic(
         str(experiment_config),
         str(PROJECT_ROOT / "environment.yml"),
         str(PROJECT_ROOT / "pyproject.toml"),
-        *sorted(str(path) for path in (PROJECT_ROOT / "src" / "dvfm").glob("*.py")),
+        *sorted(
+            str(path)
+            for package in ("dvfm", "experiments", "sota", "utility")
+            for path in (PROJECT_ROOT / "src" / package).glob("*.py")
+        ),
     ]
     outputs = [
         str(result_dir / "results_raw.csv"),
@@ -77,8 +81,8 @@ def run_frailty_recovery_diagnostic(
     source "$HOME/miniconda3/etc/profile.d/conda.sh"
     conda activate dvfm
 
-    python -m dvfm.cli --config "{experiment_config}" --validate-only
-    python -m dvfm.cli --config "{experiment_config}"
+    python -m experiments.cli --config "{experiment_config}" --validate-only
+    python -m experiments.cli --config "{experiment_config}"
 
     test -s "{result_dir / 'results_raw.csv'}"
     test -s "{result_dir / 'frailty_recovery.csv'}"

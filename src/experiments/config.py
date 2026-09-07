@@ -1,4 +1,4 @@
-"""Load and validate the canonical DVFM experiment specification."""
+"""Load and validate the canonical experiment specification."""
 
 from __future__ import annotations
 
@@ -22,6 +22,24 @@ DEFAULTS: dict[str, Any] = {
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
         "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
+        "deephit": {
+            "epochs": 200, "batch_size": 256, "learning_rate": 1e-3,
+            "time_bins": 100, "num_nodes_shared": [64, 32],
+            "batch_norm": True, "dropout": 0.1, "alpha": 0.2,
+            "sigma": 0.1, "early_stop": True, "patience": 10,
+            "verbose": False,
+        },
+        "gbsa": {
+            "n_estimators": 100, "learning_rate": 0.1, "max_depth": 3,
+            "loss": "coxph", "min_samples_split": 2, "min_samples_leaf": 1,
+            "max_features": "sqrt", "subsample": 0.8, "random_state": 0,
+        },
+        "rsf": {
+            "n_estimators": 100, "max_depth": 3, "min_samples_split": 2,
+            "min_samples_leaf": 1, "max_features": "sqrt",
+            "random_state": 0, "n_jobs": 1,
+        },
+        "weibull_aft": {"penalizer": 0.0, "l1_ratio": 0.0},
         "hacsurv_2d": {
             "epochs": 1000, "batch_size": 512, "learning_rate": 1e-4,
             "copula_learning_rate": 1e-4, "copula_start_epoch": 200,
@@ -305,7 +323,10 @@ def validate_config(cfg: dict) -> None:
     elif split["strategy"] != "kfold":
         raise ValueError("split.strategy must be holdout or kfold")
 
-    supported = {"coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm"}
+    supported = {
+        "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm",
+        "deephit", "gbsa", "rsf", "weibull_aft",
+    }
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")

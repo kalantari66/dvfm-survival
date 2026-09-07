@@ -21,6 +21,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function, grad
 from torch.utils.data import DataLoader, TensorDataset
+from utility.metrics import hacsurv_kendall_tau
 
 
 class PositiveLinear(nn.Module):
@@ -244,20 +245,6 @@ class HACSurv2D(nn.Module):
             event_inverse[:, :, None] + censor_inverse[:, None, :]
         )
 
-    def kendall_tau(self, points: int = 2000) -> float:
-        """Numerically evaluate tau=1-4 integral t[phi'(t)]^2 dt."""
-        self.generator.resample(max(self.generator.samples, 1000))
-        rates = self.generator._rates().detach()
-        lower_rate = max(float(rates.min().cpu()), 1e-8)
-        upper = min(25.0 / lower_rate, 1e6)
-        device, dtype = rates.device, rates.dtype
-        positive = torch.logspace(-7, np.log10(upper), points, device=device, dtype=dtype)
-        grid = torch.cat((torch.zeros(1, device=device, dtype=dtype), positive))
-        derivative = self.generator.derivative(grid, order=1)
-        integral = torch.trapz(grid * derivative.square(), grid)
-        return float(torch.clamp(1.0 - 4.0 * integral, -1.0, 1.0).cpu())
-
-
 def _as_loader(X, time, event, batch_size: int, shuffle: bool, seed: int, dtype):
     dataset = TensorDataset(
         torch.as_tensor(X, dtype=dtype), torch.as_tensor(time, dtype=dtype),
@@ -391,7 +378,7 @@ def fit_hacsurv_2d(
         "checkpoint": "best_validation_log_likelihood",
         "checkpoint_epoch": int(best_epoch),
         "checkpoint_validation_negative_log_likelihood": float(best_loss),
-        "learned_conditional_kendall_tau": model.kendall_tau(),
+        "learned_conditional_kendall_tau": hacsurv_kendall_tau(model),
         "epochs_completed": len(history),
     }, history, model
 

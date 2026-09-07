@@ -4,17 +4,20 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
-from dvfm.baselines import ClaytonWeibullAFT
-from dvfm.model import DVFM, SurvivalDataset
-from dvfm.hacsurv import HACSurv2D
-from dvfm.joint_metrics import (
+from utility.metrics import (
     JointSurvivalEvaluation,
+    compute_ipcw_brier_ibs,
+    compute_oracle_brier_ibs,
+    collect_metrics,
     oracle_joint_survival_ise,
 )
+from sota.baselines import ClaytonWeibullAFT
+from dvfm.model import DVFM
+from sota.hacsurv import HACSurv2D
+from utility.data import SurvivalDataset
 from dvfm.prediction import predict_survival_curves
 from dvfm.training import train_dvfm
-from dvfm.synthetic import (
+from utility.synthetic import (
     generate_clayton_aft_data,
     generate_clayton_gamma_frailty,
     generate_copula_data,
@@ -50,6 +53,26 @@ def test_dvfm_forward_prediction_and_metrics():
     _, ipcw, _ = compute_ipcw_brier_ibs(curves, grid, time[:8], event[:8])
     assert np.isfinite(oracle)
     assert np.isfinite(ipcw)
+
+
+def test_censored_metrics_are_survivaleval_based_and_exclude_ibs_dep():
+    rng = np.random.default_rng(18)
+    train_time = rng.uniform(0.2, 4.0, size=80)
+    train_event = rng.integers(0, 2, size=80)
+    test_time = rng.uniform(0.2, 4.0, size=30)
+    test_event = rng.integers(0, 2, size=30)
+    grid = np.linspace(0.0, 4.0, 30)
+    curves = np.exp(-grid[None, :] / (1.0 + test_time[:, None]))
+    medians = np.full(len(test_time), np.log(2.0) * 2.0)
+    metrics = collect_metrics(
+        "Model", medians, curves, test_time, test_event, None, grid,
+        t_train=train_time, e_train=train_event,
+    )
+    assert np.isfinite(metrics["Model C-Idx"])
+    assert np.isfinite(metrics["Model CI IPCW"])
+    assert np.isfinite(metrics["Model IBS IPCW"])
+    assert np.isfinite(metrics["Model MAE Margin"])
+    assert not any("DEP" in name for name in metrics)
 
 
 def test_dvfm_post_warmup_elbo_checkpoint_respects_minimum_epoch():

@@ -37,8 +37,8 @@ def run_hacsurv(config_path: Path, result_dir: Path, resources: dict) -> Anonymo
     export OPENBLAS_NUM_THREADS="{resources['cores']}"
     echo "[GWF] $(date) starting HACSurv-2D synthetic pilot"
     echo "[GWF] host=$(hostname) CUDA_VISIBLE_DEVICES=${{CUDA_VISIBLE_DEVICES:-unset}}"
-    python -m dvfm.cli --config "{config_path}" --validate-only
-    python -m dvfm.cli --config "{config_path}"
+    python -m experiments.cli --config "{config_path}" --validate-only
+    python -m experiments.cli --config "{config_path}"
     {checks}
     touch "{outputs[-1]}"
     echo "[GWF] $(date) completed HACSurv-2D synthetic pilot"
@@ -46,7 +46,11 @@ def run_hacsurv(config_path: Path, result_dir: Path, resources: dict) -> Anonymo
     return AnonymousTarget(
         inputs=[
             str(config_path), str(PROJECT_ROOT / "environment.yml"),
-            *sorted(str(path) for path in (PROJECT_ROOT / "src" / "dvfm").glob("*.py")),
+            *sorted(
+                str(path)
+                for package in ("dvfm", "experiments", "sota", "utility")
+                for path in (PROJECT_ROOT / "src" / package).glob("*.py")
+            ),
         ],
         outputs=[str(path) for path in outputs],
         options=dict(

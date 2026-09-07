@@ -8,7 +8,7 @@ import torch.optim as optim
 from lifelines import CoxPHFitter
 from torch.utils.data import DataLoader
 
-from .model import SurvivalDataset
+from utility.data import SurvivalDataset
 
 def train_deepsurv(X_train, time_train, event_train, X_test,
                    n_epochs=200, batch_size=64, lr=1e-3, device='cpu',
@@ -398,9 +398,5 @@ def fit_clayton_weibull_aft(X_train, t_train, e_train, X_test, time_points, epoc
         return medians, surv, model
     return medians, surv
 
-
-# The functions below are imported last so the exact supplied implementations are used.
-from .reference_core import train_deepsurv as train_deepsurv
-from .reference_core import train_mtlr as train_mtlr
 
 __all__ = ["train_deepsurv", "train_mtlr", "_fit_cox_and_predict_survival", "ClaytonWeibullAFT", "fit_clayton_weibull_aft"]

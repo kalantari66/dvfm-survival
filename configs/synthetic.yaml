@@ -22,16 +22,48 @@ data:
     censoring_rate: [0.25, 0.50, 0.75]
 split:
   strategy: holdout
-  validation_fraction: 0.15
+  validation_fraction: 0.10
   test_fraction: 0.20
 preprocessing: {zscore_x: false}
 models:
-  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, dvfm]
+  enabled: [coxph, deepsurv, mtlr, deephit, gbsa, rsf, weibull_aft, clayton_aft, hacsurv_2d, dvfm]
   # Baseline settings are the implementation defaults, stated explicitly so the
   # submitted experiment remains reproducible if global defaults later change.
   deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: 64}
   mtlr: {epochs: 200, learning_rate: 0.005, bins: 200}
   clayton_aft: {epochs: 100, learning_rate: 0.005}
+  deephit:
+    epochs: 200
+    batch_size: 256
+    learning_rate: 0.001
+    time_bins: 100
+    num_nodes_shared: [64, 32]
+    batch_norm: true
+    dropout: 0.1
+    alpha: 0.2
+    sigma: 0.1
+    early_stop: true
+    patience: 10
+    verbose: false
+  gbsa:
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 3
+    loss: coxph
+    min_samples_split: 2
+    min_samples_leaf: 1
+    max_features: sqrt
+    subsample: 0.8
+    random_state: 0
+  rsf:
+    n_estimators: 100
+    max_depth: 3
+    min_samples_split: 2
+    min_samples_leaf: 1
+    max_features: sqrt
+    random_state: 0
+    n_jobs: 1
+  weibull_aft: {penalizer: 0.0, l1_ratio: 0.0}
   hacsurv_2d:
     epochs: 1000
     batch_size: 512

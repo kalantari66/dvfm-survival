@@ -100,6 +100,10 @@ evaluation:     # time grid, primary metrics, saved artifacts
 
 The loader supplies shared defaults, validates the schema, and expands `data.grid` into deterministic atomic scenarios. New generators should expose Kendall's tau and target censoring rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.
 
+Comparison models live under `src/sota/`. See
+[`src/sota/README.md`](src/sota/README.md) for provenance and the comparison
+between overlapping implementations.
+
 ## Run the synthetic pilot with GWF
 
 Create and activate the project environment on the cluster login node:
@@ -134,7 +138,10 @@ configs/                 canonical runnable configurations
 docs/                    manuscript and research notes
 notebooks/               retained analysis and calibration notebooks
 reference/               unchanged source implementation and provenance
-src/dvfm/                runner, models, data handling, metrics, baselines
+src/dvfm/                DVFM model, training, and prediction only
+src/experiments/         configuration and experiment orchestration
+src/sota/                competing survival-model implementations
+src/utility/             generic data, splitting, runtime, and metrics tools
 tests/                   configuration and functional smoke tests
 EXPERIMENTS.md            exact experimental and reporting design
 ```

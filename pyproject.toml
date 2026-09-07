@@ -19,16 +19,22 @@ dependencies = [
   "openpyxl>=3.1",
   "PyYAML>=6.0",
   "SurvivalEVAL>=0.8.0",
+  "scikit-survival>=0.22",
+  "pycox>=0.3.0",
+  "torchtuples>=0.2.2",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7.4"]
 
 [project.scripts]
-dvfm-run = "dvfm.cli:main"
+dvfm-run = "experiments.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+sota = ["README.md", "LICENSE.survival-copula"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

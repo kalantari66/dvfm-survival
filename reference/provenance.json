@@ -13,13 +13,6 @@
       "sha256": "c3bb6fe7bebce148530f0999c505b6f20be839d8017e8d1759e9c8440992b9f9"
     }
   ],
-  "package_core": {
-    "path": "src/dvfm/reference_core.py",
-    "bytes": 70850,
-    "lines": 1783,
-    "sha256": "e841b3c414b7c2482a24a8ddfa5d95c552c228338026c1b739e3fd6853b097f9"
-  },
-  "package_core_change": "Import-only SciPy trapz compatibility fallback; algorithms unchanged.",
   "reference_parameters": {
     "dvfm_epochs": 200,
     "dvfm_lr": 0.001,

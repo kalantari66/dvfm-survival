@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import random
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -11,51 +10,38 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from lifelines.utils import concordance_index
-from scipy.stats import kendalltau, pearsonr, spearmanr
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from .data import SurvivalData
-from .metrics import compute_oracle_brier_ibs
-from .model import DVFM, SurvivalDataset
-from .prediction import (
-    get_median_survival_time,
-    learned_conditional_kendall_tau,
+from utility.data import SurvivalData
+from utility.metrics import (
+    compute_oracle_metrics, frailty_regression_metrics,
+    learned_conditional_kendall_tau, pearson_correlation,
+    spearman_correlation,
+)
+from dvfm.model import DVFM
+from utility.data import SurvivalDataset
+from dvfm.prediction import (
     predict_survival_curves,
     predict_survival_from_prior,
 )
-from .reference_core import Decoder
-from .synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
+from dvfm.model import Decoder
+from utility.synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
+from utility.runtime import clone_state, seed_everything
+from utility.splitting import three_way_split_indices
 
 
 def _seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    seed_everything(seed)
 
 
 def _clone_state(model: nn.Module) -> dict[str, torch.Tensor]:
-    return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+    return clone_state(model)
 
 
 def _split(data: SurvivalData, cfg: dict, seed: int):
-    indices = np.arange(len(data.time))
-    train_val, test = train_test_split(
-        indices, test_size=float(cfg["test_fraction"]), random_state=seed,
-        stratify=data.event,
-    )
-    relative_validation = float(cfg["validation_fraction"]) / (1.0 - float(cfg["test_fraction"]))
-    train, validation = train_test_split(
-        train_val, test_size=relative_validation, random_state=seed + 1,
-        stratify=data.event[train_val],
-    )
-    return train, validation, test
+    return three_way_split_indices(data, cfg, seed)
 
 
 def _part(data: SurvivalData, index: np.ndarray) -> dict[str, np.ndarray]:
@@ -83,13 +69,6 @@ def _loader(part: dict, batch_size: int, shuffle: bool, seed: int) -> DataLoader
     )
 
 
-def _safe_correlation(function, x, y) -> float:
-    x, y = np.asarray(x).reshape(-1), np.asarray(y).reshape(-1)
-    if len(x) < 3 or np.std(x) < 1e-12 or np.std(y) < 1e-12:
-        return float("nan")
-    return float(function(x, y).statistic)
-
-
 def _evaluate_dvfm(model, loader, beta, free_bits, device):
     totals = {"loss": 0.0, "reconstruction_nll": 0.0, "kl": 0.0, "n": 0}
     mus, logvars, targets = [], [], []
@@ -114,8 +93,8 @@ def _evaluate_dvfm(model, loader, beta, free_bits, device):
     mu, logvar, target = np.concatenate(mus), np.concatenate(logvars), np.concatenate(targets)
     per_dimension_kl = np.mean(-0.5 * (1 + logvar - mu ** 2 - np.exp(logvar)), axis=0)
     result.update({
-        "frailty_pearson": _safe_correlation(pearsonr, mu[:, 0], target),
-        "frailty_spearman": _safe_correlation(spearmanr, mu[:, 0], target),
+        "frailty_pearson": pearson_correlation(mu[:, 0], target),
+        "frailty_spearman": spearman_correlation(mu[:, 0], target),
         "active_latent_dimensions": int(np.sum(per_dimension_kl > 0.01)),
     })
     return result
@@ -260,7 +239,7 @@ def _encode(model, part, batch_size, device):
 def _recovery_for_checkpoint(model, validation, test, batch_size, device, context):
     validation_mu, validation_std = _encode(model, validation, batch_size, device)
     test_mu, test_std = _encode(model, test, batch_size, device)
-    raw_validation_pearson = _safe_correlation(pearsonr, validation_mu, validation["true_z"])
+    raw_validation_pearson = pearson_correlation(validation_mu, validation["true_z"])
     sign = 1.0 if not np.isfinite(raw_validation_pearson) or raw_validation_pearson >= 0 else -1.0
     validation_aligned, test_aligned = sign * validation_mu, sign * test_mu
     calibrator = LinearRegression().fit(validation_aligned.reshape(-1, 1), validation["true_z"])
@@ -288,10 +267,9 @@ def _recovery_for_checkpoint(model, validation, test, batch_size, device, contex
             truth, estimate = part["true_z"][mask], calibrated[mask]
             metric_rows.append({
                 **context, "split": split_name, "subgroup": subgroup, "n": int(mask.sum()),
-                "frailty_pearson": _safe_correlation(pearsonr, aligned[mask], truth),
-                "frailty_spearman": _safe_correlation(spearmanr, aligned[mask], truth),
-                "frailty_r2_calibrated": float(r2_score(truth, estimate)),
-                "frailty_rmse_calibrated": float(mean_squared_error(truth, estimate) ** 0.5),
+                "frailty_pearson": pearson_correlation(aligned[mask], truth),
+                "frailty_spearman": spearman_correlation(aligned[mask], truth),
+                **frailty_regression_metrics(truth, estimate),
                 "validation_alignment_sign": sign,
                 "validation_calibration_intercept": float(calibrator.intercept_),
                 "validation_calibration_slope": float(calibrator.coef_[0]),
@@ -318,14 +296,11 @@ def _prediction_rows(model, train, test, cfg, device, context):
     }
     rows, calibration = [], []
     for mode, survival in predictions.items():
-        median = get_median_survival_time(survival, grid)
-        _, oracle_ibs = compute_oracle_brier_ibs(survival, grid, test["true_event_time"])
+        metrics = compute_oracle_metrics(
+            survival, grid, test["true_event_time"], test["event"]
+        )
         rows.append({
-            **context, "prediction_mode": mode, "oracle_ibs": oracle_ibs,
-            "oracle_ci": float(concordance_index(test["true_event_time"], median)),
-            "oracle_mae": float(np.mean(np.abs(test["true_event_time"] - median))),
-            "oracle_mae_censored": float(np.mean(np.abs(test["true_event_time"][test["event"] == 0] - median[test["event"] == 0]))),
-            "oracle_mae_uncensored": float(np.mean(np.abs(test["true_event_time"][test["event"] == 1] - median[test["event"] == 1]))),
+            **context, "prediction_mode": mode, **metrics,
         })
         for grid_index in np.linspace(0, len(grid) - 1, 10, dtype=int):
             calibration.append({
@@ -417,14 +392,11 @@ def _oracle_prediction_rows(model, train, test, cfg, device, context):
         curves["empirical_train_true_z"] = (population / mc_samples).cpu().numpy()
     rows, calibration = [], []
     for mode, survival in curves.items():
-        median = get_median_survival_time(survival, grid)
-        _, oracle_ibs = compute_oracle_brier_ibs(survival, grid, test["true_event_time"])
+        metrics = compute_oracle_metrics(
+            survival, grid, test["true_event_time"], test["event"]
+        )
         rows.append({
-            **context, "prediction_mode": mode, "oracle_ibs": oracle_ibs,
-            "oracle_ci": float(concordance_index(test["true_event_time"], median)),
-            "oracle_mae": float(np.mean(np.abs(test["true_event_time"] - median))),
-            "oracle_mae_censored": float(np.mean(np.abs(test["true_event_time"][test["event"] == 0] - median[test["event"] == 0]))),
-            "oracle_mae_uncensored": float(np.mean(np.abs(test["true_event_time"][test["event"] == 1] - median[test["event"] == 1]))),
+            **context, "prediction_mode": mode, **metrics,
         })
         for grid_index in np.linspace(0, len(grid) - 1, 10, dtype=int):
             calibration.append({

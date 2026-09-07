@@ -3,97 +3,43 @@
 from __future__ import annotations
 
 import json
-import random
 from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.preprocessing import StandardScaler
-from lifelines.utils import concordance_index
 from torch.utils.data import DataLoader
+from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
 
-from .baselines import (
+from sota.baselines import (
     _fit_cox_and_predict_survival,
     fit_clayton_weibull_aft,
     train_deepsurv,
     train_mtlr,
 )
 from .config import expand_scenarios
-from .data import SurvivalData, load_real_data, load_semi_synthetic_data
-from .metrics import _censoring_rate, collect_metrics
-from .model import DVFM, SurvivalDataset
-from .prediction import get_median_survival_time, predict_survival_curves
-from .synthetic import generate_copula_data
-from .training import train_dvfm
-
-
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def resolve_device(value: str) -> torch.device:
-    if value == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(value)
+from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
+from utility.metrics import censoring_rate, collect_metrics
+from dvfm.model import DVFM
+from utility.data import SurvivalDataset
+from dvfm.prediction import get_median_survival_time, predict_survival_curves
+from utility.synthetic import generate_copula_data
+from utility.runtime import resolve_device, seed_everything
+from utility.splitting import iter_split_indices, preprocess_covariates, subset_survival_data
+from dvfm.training import train_dvfm
 
 
 def _splits(data: SurvivalData, split_cfg: dict, seed: int):
-    indices = np.arange(len(data.time))
-    strategy = str(split_cfg.get("strategy", "holdout")).lower()
-    if strategy == "kfold":
-        folds = int(split_cfg.get("folds", 5))
-        splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
-        for fold, (train_val_idx, test_idx) in enumerate(splitter.split(indices, data.event)):
-            train_idx, validation_idx = train_test_split(
-                train_val_idx,
-                test_size=float(split_cfg["validation_fraction"]),
-                random_state=seed + fold + 1,
-                stratify=data.event[train_val_idx],
-            )
-            yield train_idx, validation_idx, test_idx
-        return
-    if strategy != "holdout":
-        raise ValueError(f"Unknown split strategy: {strategy}")
-
-    yield _three_way_split(data, split_cfg, seed)
-
-
-def _three_way_split(data: SurvivalData, split_cfg: dict, seed: int):
-    indices = np.arange(len(data.time))
-    test_fraction = float(split_cfg["test_fraction"])
-    validation_fraction = float(split_cfg["validation_fraction"])
-    train_val, test = train_test_split(indices, test_size=test_fraction, random_state=seed,
-                                       stratify=data.event)
-    relative_validation = validation_fraction / (1.0 - test_fraction)
-    train, validation = train_test_split(train_val, test_size=relative_validation,
-                                         random_state=seed + 1, stratify=data.event[train_val])
-    return train, validation, test
+    yield from iter_split_indices(data, split_cfg, seed)
 
 
 def _preprocess_three(train, validation, test, cfg):
-    if bool(cfg.get("zscore_x", False)):
-        scaler = StandardScaler().fit(train.X)
-        train.X = scaler.transform(train.X); validation.X = scaler.transform(validation.X); test.X = scaler.transform(test.X)
-    return train, validation, test
+    return preprocess_covariates(train, validation, test, cfg)
 
 
 def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
-    return SurvivalData(
-        X=data.X[idx].copy(),
-        time=data.time[idx].copy(),
-        event=data.event[idx].copy(),
-        feature_names=list(data.feature_names),
-        true_event_time=None if data.true_event_time is None else data.true_event_time[idx].copy(),
-        true_censor_time=None if data.true_censor_time is None else data.true_censor_time[idx].copy(),
-        true_z=None if data.true_z is None else data.true_z[idx].copy(),
-    )
+    return subset_survival_data(data, idx)
 
 
 def _fit_one_split(
@@ -167,6 +113,29 @@ def _fit_one_split(
         )
         predictions["ClaytonAFT"] = {"median": median, "survival": survival}
 
+    if "deephit" in enabled:
+        median, survival = fit_deephit(
+            train.X, train.time, train.event,
+            validation.X, validation.time, validation.event,
+            test.X, time_points, model_cfg["deephit"], device,
+        )
+        predictions["DeepHit"] = {"median": median, "survival": survival}
+
+    for ensemble_name, display_name in (("gbsa", "GBSA"), ("rsf", "RSF")):
+        if ensemble_name in enabled:
+            median, survival = fit_sksurv_ensemble(
+                ensemble_name, train.X, train.time, train.event,
+                test.X, time_points, model_cfg[ensemble_name],
+            )
+            predictions[display_name] = {"median": median, "survival": survival}
+
+    if "weibull_aft" in enabled:
+        median, survival = fit_weibull_aft(
+            train.X, train.time, train.event, test.X, time_points,
+            model_cfg["weibull_aft"],
+        )
+        predictions["WeibullAFT"] = {"median": median, "survival": survival}
+
     if "dvfm" in enabled:
         c = model_cfg["dvfm"]
         train_loader = DataLoader(
@@ -213,16 +182,14 @@ def _fit_one_split(
             "Event Rate Train": float(np.mean(train.event)),
             "Event Rate Validation": float(np.mean(validation.event)),
             "Event Rate Test": float(np.mean(test.event)),
-            "Censoring Rate Train": _censoring_rate(train.event),
-            "Censoring Rate Validation": _censoring_rate(validation.event),
-            "Censoring Rate Test": _censoring_rate(test.event),
+            "Censoring Rate Train": censoring_rate(train.event),
+            "Censoring Rate Validation": censoring_rate(validation.event),
+            "Censoring Rate Test": censoring_rate(test.event),
         }
     )
 
     rows: list[dict] = []
     tau = None
-    dep_copula = context.get("Copula")
-    dep_theta = context.get("Theta")
     for name, pred in predictions.items():
         is_synthetic = "synthetic" in str(context.get("Dataset Type", "")).lower()
         metrics = collect_metrics(
@@ -236,10 +203,6 @@ def _fit_one_split(
             tau=tau,
             t_train=train.time,
             e_train=train.event,
-            true_t_train=train.true_event_time,
-            true_c_train=train.true_censor_time,
-            dep_copula_name=dep_copula,
-            dep_alpha=dep_theta,
             oracle_only=is_synthetic,
         )
         row = dict(metadata)
@@ -273,15 +236,6 @@ def _load_dataset(spec: dict, source: str) -> SurvivalData:
     raise ValueError(source)
 
 
-def _calibration_rows(survival, grid, true_event_time, context, bins=10):
-    rows = []
-    for index in np.linspace(0, len(grid) - 1, bins, dtype=int):
-        rows.append({**context, "time": float(grid[index]),
-                     "mean_predicted_survival": float(survival[:, index].mean()),
-                     "empirical_oracle_survival": float(np.mean(true_event_time > grid[index]))})
-    return rows
-
-
 def validate_inputs(cfg: dict) -> None:
     data_cfg = cfg["data"]
     source = str(data_cfg["source"]).lower()
@@ -307,11 +261,11 @@ def run(cfg: dict) -> pd.DataFrame:
     rows: list[dict] = []
 
     if source == "gaussian_shared_frailty":
-        from .synthetic_pilot import run_synthetic_pilot
+        from .synthetic import run_synthetic_pilot
 
         rows = run_synthetic_pilot(cfg, out_dir, device).to_dict("records")
     elif source == "frailty_recovery_diagnostic":
-        from .frailty_diagnostic import run_frailty_recovery_diagnostic
+        from .frailty_recovery import run_frailty_recovery_diagnostic
 
         return run_frailty_recovery_diagnostic(cfg, out_dir, device)
     elif source == "synthetic_copula":

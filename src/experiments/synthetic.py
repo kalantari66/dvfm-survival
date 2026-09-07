@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -10,79 +9,49 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from lifelines.utils import concordance_index
-from scipy.stats import pearsonr, spearmanr
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
+from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
 
-from .baselines import (
+from sota.baselines import (
     _fit_cox_and_predict_survival,
     fit_clayton_weibull_aft,
     train_deepsurv,
     train_mtlr,
 )
 from .config import expand_scenarios
-from .data import SurvivalData
-from .metrics import compute_oracle_brier_ibs
-from .model import DVFM, SurvivalDataset
-from .hacsurv import fit_hacsurv_2d
-from .joint_metrics import (
+from utility.data import SurvivalData
+from dvfm.model import DVFM
+from utility.data import SurvivalDataset
+from sota.hacsurv import fit_hacsurv_2d
+from utility.metrics import (
+    compute_oracle_metrics,
+    frailty_regression_metrics,
+    learned_conditional_kendall_tau,
+    oracle_calibration_rows,
     oracle_joint_survival_ise,
     predict_dvfm_joint_survival,
     predict_hacsurv_joint_survival,
     prepare_joint_survival_evaluation,
+    pearson_correlation,
+    spearman_correlation,
 )
-from .prediction import (
-    get_median_survival_time,
-    learned_conditional_kendall_tau,
+from dvfm.prediction import (
     predict_survival_curves,
     predict_survival_from_prior,
 )
-from .synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
-from .training import train_dvfm
+from utility.synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
+from utility.runtime import seed_everything
+from utility.splitting import split_survival_data
+from dvfm.training import train_dvfm
 
 
 def _seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def _subset(data: SurvivalData, index: np.ndarray) -> SurvivalData:
-    return SurvivalData(
-        X=data.X[index].copy(), time=data.time[index].copy(),
-        event=data.event[index].copy(), feature_names=list(data.feature_names),
-        true_event_time=data.true_event_time[index].copy(),
-        true_censor_time=data.true_censor_time[index].copy(),
-        true_z=data.true_z[index].copy(),
-    )
+    seed_everything(seed)
 
 
 def _split(data: SurvivalData, cfg: dict, seed: int):
-    indices = np.arange(len(data.time))
-    train_validation, test = train_test_split(
-        indices, test_size=float(cfg["test_fraction"]), random_state=seed,
-        stratify=data.event,
-    )
-    relative_validation = float(cfg["validation_fraction"]) / (
-        1.0 - float(cfg["test_fraction"])
-    )
-    train, validation = train_test_split(
-        train_validation, test_size=relative_validation,
-        random_state=seed + 1, stratify=data.event[train_validation],
-    )
-    return _subset(data, train), _subset(data, validation), _subset(data, test)
-
-
-def _safe_correlation(function, x, y) -> float:
-    x, y = np.asarray(x).reshape(-1), np.asarray(y).reshape(-1)
-    if len(x) < 3 or np.std(x) < 1e-12 or np.std(y) < 1e-12:
-        return float("nan")
-    return float(function(x, y).statistic)
+    return split_survival_data(data, cfg, seed)
 
 
 def _encode(model, data: SurvivalData, batch_size: int, device: torch.device):
@@ -130,7 +99,7 @@ def _frailty_diagnostics(
     )
     recovery_defined = float(target_tau) > 0.0
     correlations = np.asarray([
-        _safe_correlation(pearsonr, validation_mu[:, j], validation.true_z)
+        pearson_correlation(validation_mu[:, j], validation.true_z)
         for j in range(validation_mu.shape[1])
     ])
     selected = int(np.nanargmax(np.abs(correlations))) if recovery_defined else 0
@@ -151,16 +120,22 @@ def _frailty_diagnostics(
     rows = []
     for subgroup, mask in masks.items():
         truth, estimate = test.true_z[mask], test_calibrated[mask]
+        recovery_metrics = (
+            frailty_regression_metrics(truth, estimate)
+            if recovery_defined else {
+                "frailty_r2_calibrated": np.nan,
+                "frailty_rmse_calibrated": np.nan,
+            }
+        )
         rows.append({
             "subgroup": subgroup, "n": int(mask.sum()),
             "frailty_recovery_defined": recovery_defined,
             "selected_latent_dimension": selected,
             "active_latent_dimensions": int(np.sum(per_dimension_kl > active_threshold)),
             "mean_kl": float(np.sum(per_dimension_kl)),
-            "frailty_pearson": _safe_correlation(pearsonr, test_aligned[mask], truth) if recovery_defined else np.nan,
-            "frailty_spearman": _safe_correlation(spearmanr, test_aligned[mask], truth) if recovery_defined else np.nan,
-            "frailty_r2_calibrated": float(r2_score(truth, estimate)) if recovery_defined else np.nan,
-            "frailty_rmse_calibrated": float(mean_squared_error(truth, estimate) ** 0.5) if recovery_defined else np.nan,
+            "frailty_pearson": pearson_correlation(test_aligned[mask], truth) if recovery_defined else np.nan,
+            "frailty_spearman": spearman_correlation(test_aligned[mask], truth) if recovery_defined else np.nan,
+            **recovery_metrics,
             "validation_alignment_sign": sign if recovery_defined else np.nan,
             "validation_calibration_intercept": float(calibrator.intercept_) if recovery_defined else np.nan,
             "validation_calibration_slope": float(calibrator.coef_[0]) if recovery_defined else np.nan,
@@ -174,24 +149,12 @@ def _prediction_row(survival, grid, test, context):
         raise FloatingPointError("Survival predictions contain NaN or infinity")
     if np.any(survival < -1e-6) or np.any(survival > 1.0 + 1e-6):
         raise FloatingPointError("Survival predictions fall outside [0, 1]")
-    median = get_median_survival_time(survival, grid)
-    _, oracle_ibs = compute_oracle_brier_ibs(survival, grid, test.true_event_time)
-    censored, observed = test.event == 0, test.event == 1
+    metrics = compute_oracle_metrics(
+        survival, grid, test.true_event_time, test.event
+    )
     return {
-        **context, "oracle_ibs": oracle_ibs,
-        "oracle_ci": float(concordance_index(test.true_event_time, median)),
-        "oracle_mae": float(np.mean(np.abs(test.true_event_time - median))),
-        "oracle_mae_censored": float(np.mean(np.abs(test.true_event_time[censored] - median[censored]))),
-        "oracle_mae_uncensored": float(np.mean(np.abs(test.true_event_time[observed] - median[observed]))),
+        **context, **metrics,
     }
-
-
-def _calibration_rows(survival, grid, truth, context):
-    return [{
-        **context, "time": float(grid[index]),
-        "mean_predicted_survival": float(survival[:, index].mean()),
-        "empirical_oracle_survival": float(np.mean(truth > grid[index])),
-    } for index in np.linspace(0, len(grid) - 1, 10, dtype=int)]
 
 
 def _dvfm_variants(settings: dict) -> list[dict]:
@@ -382,6 +345,23 @@ def _fit_baseline(
             epochs=int(settings["epochs"]), lr=float(settings["learning_rate"]),
             device=device,
         )
+    elif name == "deephit":
+        settings = cfg["models"]["deephit"]
+        _, survival = fit_deephit(
+            train.X, train.time, train.event,
+            validation.X, validation.time, validation.event,
+            test.X, grid, settings, device,
+        )
+    elif name in {"gbsa", "rsf"}:
+        _, survival = fit_sksurv_ensemble(
+            name, train.X, train.time, train.event, test.X, grid,
+            cfg["models"][name],
+        )
+    elif name == "weibull_aft":
+        _, survival = fit_weibull_aft(
+            train.X, train.time, train.event, test.X, grid,
+            cfg["models"]["weibull_aft"],
+        )
     elif name == "hacsurv_2d":
         settings = cfg["models"]["hacsurv_2d"]
         survival, fit_info, history, fitted_model = fit_hacsurv_2d(
@@ -506,7 +486,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         **fit_info,
                     }
                     rows.append(_prediction_row(survival, grid, test, context))
-                    calibration.extend(_calibration_rows(
+                    calibration.extend(oracle_calibration_rows(
                         survival, grid, test.true_event_time, context
                     ))
                     manifest.append({
@@ -684,7 +664,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                     rows.append(_prediction_row(
                                         survival, grid, partition_data, context
                                     ))
-                                    calibration.extend(_calibration_rows(
+                                    calibration.extend(oracle_calibration_rows(
                                         survival, grid, partition_data.true_event_time, context
                                     ))
                             primary_completed = primary_completed or is_primary

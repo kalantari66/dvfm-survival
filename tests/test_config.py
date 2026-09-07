@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dvfm.config import expand_scenarios, load_config
+from experiments.config import expand_scenarios, load_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,13 +62,17 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     }
     assert cfg["data"]["n_samples"] == 10000
     assert cfg["data"]["n_features"] == 10
+    assert cfg["split"]["strategy"] == "holdout"
+    assert cfg["split"]["validation_fraction"] == 0.10
+    assert cfg["split"]["test_fraction"] == 0.20
     assert {item["kendall_tau"] for item in scenarios} == {0.0, 0.25, 0.5, 0.75}
     assert {item["censoring_rate"] for item in scenarios} == {0.25, 0.5, 0.75}
     assert len(cfg["seeds"]["sampling"]) == 10
     assert len(cfg["seeds"]["split"]) == 10
     assert len(cfg["seeds"]["model"]) == 10
     assert set(cfg["models"]["enabled"]) == {
-        "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm"
+        "coxph", "deepsurv", "mtlr", "deephit", "gbsa", "rsf",
+        "weibull_aft", "clayton_aft", "hacsurv_2d", "dvfm",
     }
     assert cfg["models"]["dvfm"]["latent_dims"] == [5]
     assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
