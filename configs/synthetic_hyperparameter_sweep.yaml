@@ -1,0 +1,86 @@
+schema_version: 1
+workflow: {target_name: dvfm_synthetic_hyperparameter_sweep}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-h200, account: c2i-colon}
+study:
+  name: synthetic-hyperparameter-sweep
+  stage: screening
+  output_dir: results/synthetic-hyperparameter-sweep
+
+# Three paired seeds are used for screening. Confirm the selected configuration
+# with five fresh seeds before using it as the paper default.
+seeds:
+  dgp: 2026
+  sampling: [10, 11, 12]
+  split: [110, 111, 112]
+  model: [210, 211, 212]
+
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 10000
+  n_features: 10
+  calibration_samples: 50000
+  scenarios:
+    - {name: gaussian_independent_c50, mechanism: gaussian_shared_frailty, kendall_tau: 0.00, censoring_rate: 0.50}
+    - {name: gaussian_moderate_c25, mechanism: gaussian_shared_frailty, kendall_tau: 0.50, censoring_rate: 0.25}
+    - {name: gaussian_reference_c50, mechanism: gaussian_shared_frailty, kendall_tau: 0.50, censoring_rate: 0.50}
+    - {name: gaussian_moderate_c75, mechanism: gaussian_shared_frailty, kendall_tau: 0.50, censoring_rate: 0.75}
+    - {name: gaussian_strong_c50, mechanism: gaussian_shared_frailty, kendall_tau: 0.75, censoring_rate: 0.50}
+    - {name: clayton_moderate_c50, mechanism: clayton_gamma_frailty, kendall_tau: 0.50, censoring_rate: 0.50}
+    - {name: clayton_strong_c75, mechanism: clayton_gamma_frailty, kendall_tau: 0.75, censoring_rate: 0.75}
+
+split:
+  strategy: holdout
+  validation_fraction: 0.15
+  test_fraction: 0.20
+preprocessing: {zscore_x: false}
+
+models:
+  enabled: [dvfm]
+  dvfm:
+    latent_dims: [1]
+    encoder_hidden: [64, 32]
+    decoder_hidden: [32, 64]
+    epochs: 200
+    learning_rate: 0.001
+    batch_size: 64
+    dropout: 0.0
+    weight_decay: 0.0
+    beta_max: 1.0
+    warmup_epochs: 50
+    checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    free_bits: 0.0
+    mc_samples: 100
+
+    # One-factor-at-a-time changes around the recovery-validated reference.
+    variants:
+      - {name: reference}
+      - {name: dropout_0_10, dropout: 0.10}
+      - {name: dropout_0_25, dropout: 0.25}
+      - {name: epochs_400, epochs: 400}
+      - {name: batch_32, batch_size: 32}
+      - {name: batch_128, batch_size: 128}
+      - {name: wider_decoder, decoder_hidden: [64, 128]}
+      - {name: weight_decay_1e_4, weight_decay: 0.0001}
+
+hyperparameter_sweep:
+  reference_variant: reference
+  selection_partition: validation
+  selection_prediction_mode: prior
+  primary_selection_metric: oracle_ibs
+  secondary_selection_metric: oracle_ci
+  frailty_spearman_tolerance: 0.03
+
+evaluation:
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  prediction_modes: [prior, aggregate_posterior]
+  evaluate_partitions: [validation, test]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 2000

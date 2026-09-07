@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import time
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +33,7 @@ from .prediction import (
     predict_survival_curves,
     predict_survival_from_prior,
 )
-from .synthetic import generate_gaussian_shared_frailty
+from .synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
 from .training import train_dvfm
 
 
@@ -186,6 +187,154 @@ def _calibration_rows(survival, grid, truth, context):
     } for index in np.linspace(0, len(grid) - 1, 10, dtype=int)]
 
 
+def _dvfm_variants(settings: dict) -> list[dict]:
+    """Resolve named OFAT variants against the shared DVFM defaults."""
+    configured = settings.get("variants")
+    if not configured:
+        return [{**deepcopy(settings), "name": "default"}]
+    shared = {key: deepcopy(value) for key, value in settings.items() if key != "variants"}
+    variants = []
+    for override in configured:
+        resolved = {**deepcopy(shared), **deepcopy(override)}
+        variants.append(resolved)
+    return variants
+
+
+def _generate_scenario(data_cfg: dict, scenario: dict, seed_cfg: dict, sampling_seed: int):
+    mechanism = str(scenario.get("mechanism", "gaussian_shared_frailty")).lower()
+    common = dict(
+        n_samples=int(scenario.get("n_samples", data_cfg.get("n_samples"))),
+        n_features=int(data_cfg["n_features"]),
+        kendall_tau=float(scenario["kendall_tau"]),
+        censoring_rate=float(scenario["censoring_rate"]),
+        dgp_seed=int(seed_cfg["dgp"]), sampling_seed=int(sampling_seed),
+    )
+    if mechanism == "gaussian_shared_frailty":
+        generated = generate_gaussian_shared_frailty(
+            **common,
+            calibration_samples=int(data_cfg.get("calibration_samples", 50_000)),
+        )
+    elif mechanism == "clayton_gamma_frailty":
+        generated = generate_clayton_gamma_frailty(**common)
+    else:
+        raise ValueError(f"Unsupported synthetic mechanism: {mechanism}")
+    return mechanism, generated
+
+
+def _write_hyperparameter_comparison(
+    rows: list[dict], diagnostics: list[dict], out_dir: Path, sweep_cfg: dict
+) -> None:
+    """Write validation-only ranks and paired deltas for a tuning sweep."""
+    reference_name = str(sweep_cfg.get("reference_variant", "reference"))
+    selection_partition = str(sweep_cfg.get("selection_partition", "validation"))
+    selection_mode = str(sweep_cfg.get("selection_prediction_mode", "prior"))
+    recovery_tolerance = float(sweep_cfg.get("frailty_spearman_tolerance", 0.03))
+    predictions = pd.DataFrame(rows)
+    selection = predictions.loc[
+        predictions["is_primary_checkpoint"].astype(bool)
+        & predictions["partition"].eq(selection_partition)
+        & predictions["prediction_mode"].eq(selection_mode)
+    ].copy()
+    if selection.empty:
+        raise RuntimeError("Hyperparameter sweep produced no validation predictions")
+    cell = ["scenario", "repeat"]
+    selection["validation_ibs_rank"] = selection.groupby(cell)["oracle_ibs"].rank(
+        method="average", ascending=True
+    )
+    selection["validation_ci_rank"] = selection.groupby(cell)["oracle_ci"].rank(
+        method="average", ascending=False
+    )
+    summary = selection.groupby("hyperparameter_variant", as_index=False).agg(
+        mean_validation_oracle_ibs=("oracle_ibs", "mean"),
+        mean_validation_oracle_ci=("oracle_ci", "mean"),
+        mean_validation_ibs_rank=("validation_ibs_rank", "mean"),
+        mean_validation_ci_rank=("validation_ci_rank", "mean"),
+        mean_absolute_kendall_tau_error=("absolute_conditional_kendall_tau_error", "mean"),
+        numerical_cells=("oracle_ibs", "size"),
+    )
+    diagnostic_frame = pd.DataFrame(diagnostics)
+    scenario_summary = selection.groupby(
+        ["mechanism", "scenario", "hyperparameter_variant"], as_index=False
+    ).agg(
+        mean_validation_oracle_ibs=("oracle_ibs", "mean"),
+        std_validation_oracle_ibs=("oracle_ibs", "std"),
+        mean_validation_oracle_ci=("oracle_ci", "mean"),
+        mean_absolute_kendall_tau_error=("absolute_conditional_kendall_tau_error", "mean"),
+        seeds=("oracle_ibs", "size"),
+    )
+    if not diagnostic_frame.empty:
+        recovery = diagnostic_frame.loc[
+            diagnostic_frame["is_primary_checkpoint"].astype(bool)
+            & diagnostic_frame["subgroup"].eq("all")
+            & diagnostic_frame["frailty_recovery_defined"].astype(bool)
+        ].groupby("hyperparameter_variant", as_index=False).agg(
+            mean_frailty_spearman=("frailty_spearman", "mean"),
+            mean_frailty_r2_calibrated=("frailty_r2_calibrated", "mean"),
+            mean_active_latent_dimensions=("active_latent_dimensions", "mean"),
+        )
+        summary = summary.merge(recovery, on="hyperparameter_variant", how="left")
+        scenario_recovery = diagnostic_frame.loc[
+            diagnostic_frame["is_primary_checkpoint"].astype(bool)
+            & diagnostic_frame["subgroup"].eq("all")
+            & diagnostic_frame["frailty_recovery_defined"].astype(bool)
+        ].groupby(
+            ["mechanism", "scenario", "hyperparameter_variant"], as_index=False
+        ).agg(mean_frailty_spearman=("frailty_spearman", "mean"))
+        scenario_summary = scenario_summary.merge(
+            scenario_recovery,
+            on=["mechanism", "scenario", "hyperparameter_variant"], how="left",
+        )
+    scenario_summary.to_csv(
+        out_dir / "hyperparameter_scenario_summary.csv", index=False
+    )
+    reference_summary = summary.loc[
+        summary["hyperparameter_variant"].eq(reference_name)
+    ]
+    if len(reference_summary) != 1:
+        raise RuntimeError("Hyperparameter ranking requires exactly one reference row")
+    reference_recovery = float(reference_summary["mean_frailty_spearman"].iloc[0])
+    reference_tau_error = float(
+        reference_summary["mean_absolute_kendall_tau_error"].iloc[0]
+    )
+    summary["frailty_recovery_guardrail_pass"] = (
+        summary["mean_frailty_spearman"] >= reference_recovery - recovery_tolerance
+    )
+    summary["dependence_not_worse_than_reference"] = (
+        summary["mean_absolute_kendall_tau_error"] <= reference_tau_error
+    )
+    summary["selection_eligible"] = (
+        summary["frailty_recovery_guardrail_pass"]
+        & summary["dependence_not_worse_than_reference"]
+    )
+    summary.sort_values(
+        ["selection_eligible", "mean_validation_ibs_rank", "mean_validation_oracle_ibs"],
+        ascending=[False, True, True], inplace=True,
+    )
+    summary.to_csv(out_dir / "hyperparameter_ranking.csv", index=False)
+
+    reference = selection.loc[
+        selection["hyperparameter_variant"].eq(reference_name),
+        cell + ["oracle_ibs", "oracle_ci", "oracle_mae"],
+    ].rename(columns={
+        "oracle_ibs": "reference_oracle_ibs",
+        "oracle_ci": "reference_oracle_ci",
+        "oracle_mae": "reference_oracle_mae",
+    })
+    if len(reference) != selection[cell].drop_duplicates().shape[0]:
+        raise RuntimeError("Reference variant is missing from one or more tuning cells")
+    paired = selection.merge(reference, on=cell, how="left", validate="many_to_one")
+    paired["delta_oracle_ibs_vs_reference"] = (
+        paired["oracle_ibs"] - paired["reference_oracle_ibs"]
+    )
+    paired["delta_oracle_ci_vs_reference"] = (
+        paired["oracle_ci"] - paired["reference_oracle_ci"]
+    )
+    paired["delta_oracle_mae_vs_reference"] = (
+        paired["oracle_mae"] - paired["reference_oracle_mae"]
+    )
+    paired.to_csv(out_dir / "hyperparameter_paired_deltas.csv", index=False)
+
+
 def _fit_baseline(name, train, test, grid, cfg, device):
     if name == "coxph":
         _, survival = _fit_cox_and_predict_survival(
@@ -227,12 +376,8 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
         for repeat, (sampling_seed, split_seed, model_seed) in enumerate(zip(
             seed_cfg["sampling"], seed_cfg["split"], seed_cfg["model"]
         )):
-            generated = generate_gaussian_shared_frailty(
-                n_samples=n_samples, n_features=int(data_cfg["n_features"]),
-                kendall_tau=float(scenario["kendall_tau"]),
-                censoring_rate=float(scenario["censoring_rate"]),
-                dgp_seed=int(seed_cfg["dgp"]), sampling_seed=int(sampling_seed),
-                calibration_samples=int(data_cfg.get("calibration_samples", 50_000)),
+            mechanism, generated = _generate_scenario(
+                data_cfg, scenario, seed_cfg, int(sampling_seed)
             )
             full = SurvivalData(
                 generated.X, generated.observed_time, generated.event,
@@ -247,7 +392,11 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
             )
             base = {
                 "study": cfg["study"]["name"],
-                "scenario": f"n-{n_samples}-kendall_tau-{scenario['kendall_tau']}-censoring_rate-{scenario['censoring_rate']}",
+                "scenario": scenario.get(
+                    "name",
+                    f"{mechanism}-n-{n_samples}-kendall_tau-{scenario['kendall_tau']}-censoring_rate-{scenario['censoring_rate']}",
+                ),
+                "mechanism": mechanism,
                 "n_samples": n_samples,
                 "target_kendall_tau": float(scenario["kendall_tau"]),
                 "empirical_conditional_kendall_tau": generated.empirical_conditional_kendall_tau,
@@ -269,6 +418,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         **fit_context, "checkpoint": "fixed_epochs",
                         "checkpoint_epoch": model_cfg.get(baseline, {}).get("epochs", np.nan),
                         "is_primary_checkpoint": True, "prediction_mode": "standard",
+                        "partition": "test",
                     }
                     rows.append(_prediction_row(survival, grid, test, context))
                     calibration.extend(_calibration_rows(
@@ -285,10 +435,26 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         "error": repr(error),
                     })
 
-            settings = model_cfg["dvfm"]
-            for latent_dim in settings["latent_dims"]:
+            shared_settings = model_cfg["dvfm"]
+            settings_and_latent_dims = [
+                (settings, latent_dim)
+                for settings in _dvfm_variants(shared_settings)
+                for latent_dim in settings.get(
+                    "latent_dims", [settings.get("latent_dim")]
+                )
+            ]
+            for settings, latent_dim in settings_and_latent_dims:
                 started = time.perf_counter()
-                fit_context = {**base, "model": "dvfm", "latent_dim": int(latent_dim)}
+                fit_context = {
+                    **base, "model": "dvfm", "latent_dim": int(latent_dim),
+                    "hyperparameter_variant": str(settings["name"]),
+                    "epochs": int(settings["epochs"]),
+                    "batch_size": int(settings["batch_size"]),
+                    "dropout": float(settings.get("dropout", 0.0)),
+                    "weight_decay": float(settings.get("weight_decay", 0.0)),
+                    "encoder_hidden": "-".join(map(str, settings.get("encoder_hidden", [64, 32]))),
+                    "decoder_hidden": "-".join(map(str, settings.get("decoder_hidden", [32, 64]))),
+                }
                 try:
                     _seed(int(model_seed))
                     train_loader = DataLoader(
@@ -304,6 +470,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         train.X.shape[1], int(latent_dim),
                         encoder_hidden=list(settings.get("encoder_hidden", [64, 32])),
                         decoder_hidden=list(settings.get("decoder_hidden", [32, 64])),
+                        dropout=float(settings.get("dropout", 0.0)),
                     ).to(device)
                     artifacts = train_dvfm(
                         model, train_loader, validation_loader,
@@ -315,6 +482,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         numerical_failure_threshold=float(
                             settings["numerical_failure_threshold"]
                         ),
+                        weight_decay=float(settings.get("weight_decay", 0.0)),
                         return_artifacts=True,
                     )
                     histories.extend([{
@@ -386,13 +554,37 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                     int(settings["mc_samples"]), device
                                 ),
                             }
-                            for mode in evaluation["prediction_modes"]:
-                                survival = predictors[str(mode)]()
-                                context = {**checkpoint_context, "prediction_mode": str(mode)}
-                                rows.append(_prediction_row(survival, grid, test, context))
-                                calibration.extend(_calibration_rows(
-                                    survival, grid, test.true_event_time, context
-                                ))
+                            evaluation_parts = {
+                                "test": (test, predictors),
+                            }
+                            if "validation" in evaluation.get("evaluate_partitions", ["test"]):
+                                evaluation_parts["validation"] = (
+                                    validation,
+                                    {
+                                        "prior": lambda: predict_survival_from_prior(
+                                            model, validation.X, grid,
+                                            int(settings["mc_samples"]), device
+                                        ),
+                                        "aggregate_posterior": lambda: predict_survival_curves(
+                                            model, validation.X, grid, train_loader,
+                                            int(settings["mc_samples"]), device
+                                        ),
+                                    },
+                                )
+                            for partition, (partition_data, partition_predictors) in evaluation_parts.items():
+                                for mode in evaluation["prediction_modes"]:
+                                    survival = partition_predictors[str(mode)]()
+                                    context = {
+                                        **checkpoint_context,
+                                        "prediction_mode": str(mode),
+                                        "partition": partition,
+                                    }
+                                    rows.append(_prediction_row(
+                                        survival, grid, partition_data, context
+                                    ))
+                                    calibration.extend(_calibration_rows(
+                                        survival, grid, partition_data.true_event_time, context
+                                    ))
                             primary_completed = primary_completed or is_primary
                         except Exception as checkpoint_error:
                             checkpoint_issues.append(
@@ -429,6 +621,10 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
     if failures:
         raise RuntimeError(
             f"{len(failures)} synthetic fits failed; see {out_dir / 'run_manifest.csv'}"
+        )
+    if model_cfg["dvfm"].get("variants"):
+        _write_hyperparameter_comparison(
+            rows, diagnostics, out_dir, cfg.get("hyperparameter_sweep", {}),
         )
     return pd.DataFrame(rows)
 

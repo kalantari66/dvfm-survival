@@ -1,0 +1,46 @@
+schema_version: 1
+study: {name: synthetic-hyperparameter-smoke, stage: smoke, output_dir: results/synthetic-hyperparameter-smoke}
+seeds: {dgp: 2026, sampling: [10], split: [110], model: [210]}
+compute: {device: auto, torch_num_threads: 1}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 256
+  n_features: 4
+  calibration_samples: 1000
+  scenarios:
+    - {name: gaussian_reference_c50, mechanism: gaussian_shared_frailty, kendall_tau: 0.50, censoring_rate: 0.50}
+split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
+preprocessing: {zscore_x: false}
+models:
+  enabled: [dvfm]
+  dvfm:
+    latent_dims: [1]
+    encoder_hidden: [8, 4]
+    decoder_hidden: [4, 8]
+    epochs: 2
+    learning_rate: 0.001
+    batch_size: 32
+    dropout: 0.0
+    weight_decay: 0.0
+    beta_max: 1.0
+    warmup_epochs: 1
+    checkpoint_min_epoch: 1
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    free_bits: 0.0
+    mc_samples: 2
+    variants:
+      - {name: reference}
+      - {name: dropout_0_10, dropout: 0.10}
+hyperparameter_sweep: {reference_variant: reference, frailty_spearman_tolerance: 0.03}
+evaluation:
+  n_time_points: 10
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  prediction_modes: [prior]
+  evaluate_partitions: [validation, test]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 20

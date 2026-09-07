@@ -392,7 +392,10 @@ def run(cfg: dict) -> pd.DataFrame:
         c
         for c in ("Study", "Stage", "Dataset", "Scenario", "Copula", "Dependence", "Theta", "Model",
                   "study", "scenario", "n_samples", "target_kendall_tau", "target_censoring_rate",
-                  "model", "latent_dim", "checkpoint", "is_primary_checkpoint", "prediction_mode")
+                  "mechanism", "model", "latent_dim", "hyperparameter_variant",
+                  "epochs", "batch_size", "dropout", "weight_decay", "encoder_hidden",
+                  "decoder_hidden", "checkpoint", "is_primary_checkpoint", "prediction_mode",
+                  "partition")
         if c in results and not results[c].isna().all()
     ]
     numeric = results.select_dtypes(include=[np.number]).columns.tolist()

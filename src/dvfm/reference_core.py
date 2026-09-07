@@ -304,7 +304,7 @@ class SurvivalDataset(Dataset):
 # ============================================================================
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_dims=[64, 32]):
+    def __init__(self, input_dim, latent_dim, hidden_dims=[64, 32], dropout=0.0):
         super(Encoder, self).__init__()
         
         layers = []
@@ -313,6 +313,8 @@ class Encoder(nn.Module):
             layers.append(nn.Linear(prev_dim, hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.BatchNorm1d(hidden_dim))
+            if float(dropout) > 0:
+                layers.append(nn.Dropout(float(dropout)))
             prev_dim = hidden_dim
         
         self.network = nn.Sequential(*layers)
@@ -329,7 +331,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_dims=[32, 64]):
+    def __init__(self, input_dim, latent_dim, hidden_dims=[32, 64], dropout=0.0):
         super(Decoder, self).__init__()
         
         layers = []
@@ -338,6 +340,8 @@ class Decoder(nn.Module):
             layers.append(nn.Linear(prev_dim, hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.BatchNorm1d(hidden_dim))
+            if float(dropout) > 0:
+                layers.append(nn.Dropout(float(dropout)))
             prev_dim = hidden_dim
         
         self.network = nn.Sequential(*layers)
@@ -360,12 +364,17 @@ class Decoder(nn.Module):
 
 class DVFM(nn.Module):
     def __init__(self, input_dim, latent_dim=8, encoder_hidden=[64, 32], 
-                 decoder_hidden=[32, 64]):
+                 decoder_hidden=[32, 64], dropout=0.0,
+                 encoder_dropout=None, decoder_dropout=None):
         super(DVFM, self).__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
-        self.encoder = None if latent_dim == 0 else Encoder(input_dim, latent_dim, encoder_hidden)
-        self.decoder = Decoder(input_dim, latent_dim, decoder_hidden)
+        encoder_dropout = float(dropout if encoder_dropout is None else encoder_dropout)
+        decoder_dropout = float(dropout if decoder_dropout is None else decoder_dropout)
+        self.encoder = None if latent_dim == 0 else Encoder(
+            input_dim, latent_dim, encoder_hidden, encoder_dropout
+        )
+        self.decoder = Decoder(input_dim, latent_dim, decoder_hidden, decoder_dropout)
         self.latent_dim = latent_dim
     
     def reparameterize(self, mu, logvar):
@@ -437,11 +446,12 @@ class DVFM(nn.Module):
 def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
                beta_max=1.0, warmup_epochs=50, free_bits=0.0, device='cpu',
                return_history=False, checkpoint_min_epoch=None,
-               return_artifacts=False, numerical_failure_threshold=None):
+               return_artifacts=False, numerical_failure_threshold=None,
+               weight_decay=0.0):
     """
     Train DVFM with KL annealing
     """
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', 
                                                       factor=0.5, patience=10)
     

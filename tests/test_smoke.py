@@ -76,6 +76,28 @@ def test_dvfm_rejects_all_numerically_invalid_checkpoint_epochs():
         )
 
 
+def test_dvfm_supports_dropout_and_adam_weight_decay():
+    rng = np.random.default_rng(23)
+    X = rng.normal(size=(96, 3)).astype(np.float32)
+    time = rng.uniform(0.2, 2.0, size=96).astype(np.float32)
+    event = rng.integers(0, 2, size=96).astype(np.float32)
+    loader = DataLoader(
+        SurvivalDataset(X, time, event), batch_size=32, shuffle=False
+    )
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        dropout=0.1,
+    )
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=2, warmup_epochs=1,
+        checkpoint_min_epoch=1, numerical_failure_threshold=100.0,
+        weight_decay=1e-4, return_artifacts=True,
+    )
+    assert any(isinstance(layer, torch.nn.Dropout) for layer in model.encoder.network)
+    assert any(isinstance(layer, torch.nn.Dropout) for layer in model.decoder.network)
+    assert artifacts["best_validation_elbo_epoch"] in {1, 2}
+
+
 def test_clayton_prediction_uses_model_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ClaytonWeibullAFT(n_features=3).to(device)

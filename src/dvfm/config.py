@@ -113,6 +113,17 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError("data scenario kendall_tau must be in [0, 1)")
             if not 0.0 < censoring_rate < 1.0:
                 raise ValueError("data scenario censoring_rate must be between 0 and 1")
+            mechanism = str(
+                scenario.get("mechanism", "gaussian_shared_frailty")
+            ).lower()
+            if mechanism not in {
+                "gaussian_shared_frailty", "clayton_gamma_frailty"
+            }:
+                raise ValueError(f"Unsupported data scenario mechanism: {mechanism}")
+            if mechanism == "clayton_gamma_frailty" and kendall_tau <= 0.0:
+                raise ValueError(
+                    "Clayton Gamma-frailty scenarios require kendall_tau > 0"
+                )
         seeds = _require(cfg, "seeds", "config")
         for key in ("dgp", "sampling", "split", "model"):
             _require(seeds, key, "seeds")
@@ -150,6 +161,54 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     "models.dvfm.numerical_failure_threshold must be positive"
                 )
+            variants = dvfm.get("variants", [])
+            if variants:
+                names = [item.get("name") for item in variants]
+                if any(not name for name in names) or len(set(names)) != len(names):
+                    raise ValueError("models.dvfm.variants must have unique names")
+                for variant in variants:
+                    resolved = _deep_update(dvfm, variant)
+                    epochs = int(resolved["epochs"])
+                    minimum = int(resolved["checkpoint_min_epoch"])
+                    warmup = int(resolved["warmup_epochs"])
+                    if epochs < 1 or not warmup <= minimum <= epochs:
+                        raise ValueError(
+                            f"Invalid epoch/checkpoint settings for DVFM variant {variant['name']}"
+                        )
+                    dropout = float(resolved.get("dropout", 0.0))
+                    if not 0.0 <= dropout < 1.0:
+                        raise ValueError("DVFM variant dropout must be in [0, 1)")
+                    if float(resolved.get("weight_decay", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant weight_decay cannot be negative")
+                    for key in ("encoder_hidden", "decoder_hidden"):
+                        widths = resolved.get(key, [])
+                        if not widths or any(int(width) < 1 for width in widths):
+                            raise ValueError(
+                                f"DVFM variant {key} must contain positive widths"
+                            )
+                reference = str(
+                    cfg.get("hyperparameter_sweep", {}).get(
+                        "reference_variant", "reference"
+                    )
+                )
+                if reference not in names:
+                    raise ValueError(
+                        "hyperparameter_sweep.reference_variant must name a DVFM variant"
+                    )
+                sweep_cfg = cfg.get("hyperparameter_sweep", {})
+                if sweep_cfg.get("selection_partition", "validation") != "validation":
+                    raise ValueError("Hyperparameters must be selected on validation")
+                if sweep_cfg.get("selection_prediction_mode", "prior") not in cfg["evaluation"].get("prediction_modes", []):
+                    raise ValueError(
+                        "hyperparameter_sweep.selection_prediction_mode must be evaluated"
+                    )
+                if float(sweep_cfg.get("frailty_spearman_tolerance", 0.03)) < 0:
+                    raise ValueError("frailty_spearman_tolerance cannot be negative")
+                partitions = cfg["evaluation"].get("evaluate_partitions", [])
+                if "validation" not in partitions or "test" not in partitions:
+                    raise ValueError(
+                        "DVFM sweeps must evaluate both validation and test partitions"
+                    )
         else:
             mechanisms = _require(data, "mechanisms", "data")
             allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}

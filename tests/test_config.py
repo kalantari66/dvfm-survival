@@ -53,6 +53,29 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     assert "seeds" not in cfg["study"]
 
 
+def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():
+    cfg = load_config(ROOT / "configs" / "synthetic_hyperparameter_sweep.yaml")
+    scenarios = expand_scenarios(cfg["data"])
+    variants = {item["name"]: item for item in cfg["models"]["dvfm"]["variants"]}
+    assert len(scenarios) == 7
+    assert len(variants) == 8
+    assert cfg["models"]["dvfm"]["latent_dims"] == [1]
+    assert cfg["models"]["dvfm"]["epochs"] == 200
+    assert cfg["models"]["dvfm"]["warmup_epochs"] == 50
+    assert cfg["models"]["dvfm"]["learning_rate"] == 0.001
+    assert variants["reference"] == {"name": "reference"}
+    assert variants["epochs_400"]["epochs"] == 400
+    assert variants["batch_32"]["batch_size"] == 32
+    assert variants["batch_128"]["batch_size"] == 128
+    assert variants["wider_decoder"]["decoder_hidden"] == [64, 128]
+    assert variants["weight_decay_1e_4"]["weight_decay"] == 0.0001
+    assert {item.get("mechanism") for item in scenarios} == {
+        "gaussian_shared_frailty", "clayton_gamma_frailty"
+    }
+    assert cfg["evaluation"]["evaluate_partitions"] == ["validation", "test"]
+    assert len(cfg["seeds"]["sampling"]) == 3
+
+
 def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():
     cfg = load_config(ROOT / "configs" / "frailty_recovery_diagnostic.yaml")
     variants = {item["name"]: item for item in cfg["training_variants"]}

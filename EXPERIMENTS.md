@@ -40,6 +40,45 @@ DVFM uses the recovery-validated default: 200 fixed epochs, `beta_max = 1`, warm
 
 An epoch is numerically invalid if its training or validation ELBO, reconstruction NLL, or KL is non-finite or has absolute magnitude above the configured threshold of 100. Invalid epochs cannot supply the primary checkpoint. Non-finite training losses or gradients fail the fit immediately; invalid secondary final checkpoints are skipped and documented in `run_manifest.csv`.
 
+### Predictive hyperparameter sweep
+
+`configs/synthetic_hyperparameter_sweep.yaml` is a validation-driven screening
+study around the frailty-recovery reference (`latent_dim = 1`, 200 epochs,
+`beta_max = 1`, warmup 50, learning rate `0.001`, batch size 64, no dropout or
+weight decay, decoder widths 32--64). It changes one factor at a time: dropout
+0.10 and 0.25, 400 epochs, batch sizes 32 and 128, decoder widths 64--128, and
+Adam weight decay `1e-4`.
+
+The seven paired regimes cover Gaussian shared frailty under independence,
+moderate and strong dependence, and censoring stress, plus moderate and strong
+Clayton/Gamma shared frailty. The exact successful Gaussian cell at
+`kendall_tau = 0.5` and 50% censoring is included. All variants see identical
+subjects, censoring, and train/validation/test splits within a cell and seed.
+
+Screening uses three seeds and one latent dimension, for 168 fits. The primary
+comparison is prior-predictive oracle IBS on validation data; oracle CI is
+secondary. Test results are written but never used to rank variants. A candidate
+must also retain frailty Spearman correlation within 0.03 of the reference and
+improve learned conditional Kendall's tau error. Confirm any selected candidate
+with five fresh seeds before changing the paper default.
+
+The sweep writes `hyperparameter_ranking.csv`,
+`hyperparameter_scenario_summary.csv`, and `hyperparameter_paired_deltas.csv`,
+in addition to the standard results,
+training history, calibration curves, frailty diagnostics, and manifest. Run a
+local smoke test with:
+
+```bash
+dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
+```
+
+Run the complete sweep as one GWF target with:
+
+```bash
+gwf -f workflows/synthetic_hyperparameter/workflow.py status
+gwf -f workflows/synthetic_hyperparameter/workflow.py run
+```
+
 At `kendall_tau = 0`, true-frailty correlation is undefined as a recovery target; those cells evaluate learned dependence, latent collapse, and predictive safety under independence. For positive tau, the best latent coordinate, its sign, and its affine calibration are selected using validation subjects only before held-out test recovery is calculated.
 
 The result table contains oracle IBS, oracle concordance index, and oracle MAE overall and by observed censoring status. Separate compact artifacts store ELBO/reconstruction/KL trajectories, final-versus-post-warmup-ELBO checkpoint diagnostics, active latent dimensions, learned conditional `kendall_tau`, frailty recovery by censoring subgroup, and population calibration curves. Full per-subject survival NPZ files are not produced.

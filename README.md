@@ -39,6 +39,9 @@ dvfm-run --config configs/reference_original.yaml
 # Controlled size × tau × censoring × latent-dimension pilot
 dvfm-run --config configs/synthetic_pilot.yaml
 
+# Fast local check of the predictive hyperparameter machinery
+dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
+
 # Two-epoch CUDA smoke test for the focused recovery diagnostic
 dvfm-run --config configs/frailty_recovery_smoke.yaml
 
@@ -50,6 +53,13 @@ dvfm-run --config configs/semi_synthetic_example.yaml
 ```
 
 Results are written below `results/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
+
+The complete hyperparameter screen is submitted as one GWF target:
+
+```bash
+gwf -f workflows/synthetic_hyperparameter/workflow.py status
+gwf -f workflows/synthetic_hyperparameter/workflow.py run
+```
 
 ## Canonical experiment specification
 
