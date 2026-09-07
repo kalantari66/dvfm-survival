@@ -62,6 +62,20 @@ def test_dvfm_post_warmup_elbo_checkpoint_respects_minimum_epoch():
     assert set(artifacts["final_state"]) == set(artifacts["best_validation_elbo_state"])
 
 
+def test_dvfm_rejects_all_numerically_invalid_checkpoint_epochs():
+    X, time, event, _, _ = generate_copula_data(
+        n_samples=96, n_features=3, copula_type="clayton", theta=1.0, seed=32
+    )
+    loader = DataLoader(SurvivalDataset(X, time, event), batch_size=32, shuffle=False)
+    model = DVFM(input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8])
+    with np.testing.assert_raises_regex(RuntimeError, "No finite validation ELBO"):
+        train_dvfm(
+            model, loader, loader, n_epochs=2, warmup_epochs=1,
+            checkpoint_min_epoch=1, numerical_failure_threshold=1e-12,
+            return_artifacts=True,
+        )
+
+
 def test_clayton_prediction_uses_model_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ClaytonWeibullAFT(n_features=3).to(device)

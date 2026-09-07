@@ -45,6 +45,8 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     assert cfg["models"]["dvfm"]["beta_max"] == 1.0
     assert cfg["models"]["dvfm"]["warmup_epochs"] == 50
     assert cfg["models"]["dvfm"]["checkpoint_min_epoch"] == 50
+    assert cfg["models"]["dvfm"]["primary_checkpoint"] == "best_validation_elbo_post_warmup"
+    assert cfg["models"]["dvfm"]["numerical_failure_threshold"] == 100.0
     assert set(cfg["models"]["enabled"]) == {"coxph", "deepsurv", "mtlr", "clayton_aft", "dvfm"}
     assert set(cfg["seeds"]) == {"dgp", "sampling", "split", "model"}
     assert len(cfg["seeds"]["sampling"]) == 5

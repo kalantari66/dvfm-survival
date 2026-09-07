@@ -161,6 +161,11 @@ def _frailty_diagnostics(
 
 
 def _prediction_row(survival, grid, test, context):
+    survival = np.asarray(survival, dtype=float)
+    if not np.all(np.isfinite(survival)):
+        raise FloatingPointError("Survival predictions contain NaN or infinity")
+    if np.any(survival < -1e-6) or np.any(survival > 1.0 + 1e-6):
+        raise FloatingPointError("Survival predictions fall outside [0, 1]")
     median = get_median_survival_time(survival, grid)
     _, oracle_ibs = compute_oracle_brier_ibs(survival, grid, test.true_event_time)
     censored, observed = test.event == 0, test.event == 1
@@ -307,6 +312,9 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         warmup_epochs=int(settings["warmup_epochs"]),
                         free_bits=float(settings["free_bits"]), device=device,
                         checkpoint_min_epoch=int(settings["checkpoint_min_epoch"]),
+                        numerical_failure_threshold=float(
+                            settings["numerical_failure_threshold"]
+                        ),
                         return_artifacts=True,
                     )
                     histories.extend([{
@@ -320,55 +328,86 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     history_by_epoch = {
                         int(item["epoch"]): item for item in artifacts["history"]
                     }
+                    primary_checkpoint = str(settings["primary_checkpoint"])
                     checkpoints = (
-                        ("final", artifacts["final_state"], int(settings["epochs"]), True),
-                        ("best_validation_elbo_post_warmup", artifacts["best_validation_elbo_state"], artifacts["best_validation_elbo_epoch"], False),
+                        ("best_validation_elbo_post_warmup", artifacts["best_validation_elbo_state"], artifacts["best_validation_elbo_epoch"]),
+                        ("final", artifacts["final_state"], int(settings["epochs"])),
                     )
-                    for checkpoint, state, checkpoint_epoch, is_primary in checkpoints:
-                        model.load_state_dict(state); model.to(device)
+                    checkpoint_issues = []
+                    primary_completed = False
+                    for checkpoint, state, checkpoint_epoch in checkpoints:
+                        is_primary = checkpoint == primary_checkpoint
                         checkpoint_history = history_by_epoch[int(checkpoint_epoch)]
-                        learned_tau = learned_conditional_kendall_tau(
-                            model, np.mean(train.X, axis=0),
-                            int(evaluation["dependence_samples"]), device,
-                            int(model_seed) + (0 if is_primary else 50_000),
+                        state_valid = all(
+                            bool(torch.isfinite(value).all()) for value in state.values()
                         )
-                        checkpoint_context = {
-                            **fit_context, "checkpoint": checkpoint,
-                            "checkpoint_epoch": int(checkpoint_epoch),
-                            "is_primary_checkpoint": is_primary,
-                            "checkpoint_validation_elbo": checkpoint_history["validation_loss"],
-                            "checkpoint_validation_reconstruction_nll": checkpoint_history["validation_reconstruction"],
-                            "checkpoint_validation_kl": checkpoint_history["validation_kl"],
-                            "learned_conditional_kendall_tau": learned_tau,
-                            "conditional_kendall_tau_error": learned_tau - float(scenario["kendall_tau"]),
-                            "absolute_conditional_kendall_tau_error": abs(learned_tau - float(scenario["kendall_tau"])),
-                        }
-                        diagnostics.extend([{
-                            **checkpoint_context, **item,
-                        } for item in _frailty_diagnostics(
-                            model, validation, test, int(settings["batch_size"]),
-                            float(evaluation["active_kl_threshold"]),
-                            float(scenario["kendall_tau"]), device,
-                        )])
-                        _seed(int(model_seed) + (0 if is_primary else 50_000))
-                        predictors = {
-                            "prior": lambda: predict_survival_from_prior(
-                                model, test.X, grid, int(settings["mc_samples"]), device
-                            ),
-                            "aggregate_posterior": lambda: predict_survival_curves(
-                                model, test.X, grid, train_loader,
-                                int(settings["mc_samples"]), device
-                            ),
-                        }
-                        for mode in evaluation["prediction_modes"]:
-                            survival = predictors[str(mode)]()
-                            context = {**checkpoint_context, "prediction_mode": str(mode)}
-                            rows.append(_prediction_row(survival, grid, test, context))
-                            calibration.extend(_calibration_rows(
-                                survival, grid, test.true_event_time, context
-                            ))
+                        if not checkpoint_history["numerical_valid"] or not state_valid:
+                            message = f"{checkpoint}: invalid objective or state"
+                            checkpoint_issues.append(message)
+                            if is_primary:
+                                raise FloatingPointError(message)
+                            continue
+                        try:
+                            model.load_state_dict(state); model.to(device)
+                            seed_offset = 0 if checkpoint == "final" else 50_000
+                            learned_tau = learned_conditional_kendall_tau(
+                                model, np.mean(train.X, axis=0),
+                                int(evaluation["dependence_samples"]), device,
+                                int(model_seed) + seed_offset,
+                            )
+                            if not np.isfinite(learned_tau):
+                                raise FloatingPointError("Learned Kendall's tau is non-finite")
+                            checkpoint_context = {
+                                **fit_context, "checkpoint": checkpoint,
+                                "checkpoint_epoch": int(checkpoint_epoch),
+                                "is_primary_checkpoint": is_primary,
+                                "checkpoint_numerical_valid": True,
+                                "checkpoint_validation_elbo": checkpoint_history["validation_loss"],
+                                "checkpoint_validation_reconstruction_nll": checkpoint_history["validation_reconstruction"],
+                                "checkpoint_validation_kl": checkpoint_history["validation_kl"],
+                                "learned_conditional_kendall_tau": learned_tau,
+                                "conditional_kendall_tau_error": learned_tau - float(scenario["kendall_tau"]),
+                                "absolute_conditional_kendall_tau_error": abs(learned_tau - float(scenario["kendall_tau"])),
+                            }
+                            diagnostics.extend([{
+                                **checkpoint_context, **item,
+                            } for item in _frailty_diagnostics(
+                                model, validation, test, int(settings["batch_size"]),
+                                float(evaluation["active_kl_threshold"]),
+                                float(scenario["kendall_tau"]), device,
+                            )])
+                            _seed(int(model_seed) + seed_offset)
+                            predictors = {
+                                "prior": lambda: predict_survival_from_prior(
+                                    model, test.X, grid, int(settings["mc_samples"]), device
+                                ),
+                                "aggregate_posterior": lambda: predict_survival_curves(
+                                    model, test.X, grid, train_loader,
+                                    int(settings["mc_samples"]), device
+                                ),
+                            }
+                            for mode in evaluation["prediction_modes"]:
+                                survival = predictors[str(mode)]()
+                                context = {**checkpoint_context, "prediction_mode": str(mode)}
+                                rows.append(_prediction_row(survival, grid, test, context))
+                                calibration.extend(_calibration_rows(
+                                    survival, grid, test.true_event_time, context
+                                ))
+                            primary_completed = primary_completed or is_primary
+                        except Exception as checkpoint_error:
+                            checkpoint_issues.append(
+                                f"{checkpoint}: {checkpoint_error!r}"
+                            )
+                            if is_primary:
+                                raise
+                    if not primary_completed:
+                        raise RuntimeError("Primary DVFM checkpoint was not evaluated")
                     manifest.append({
                         **fit_context, "status": "success",
+                        "primary_checkpoint": primary_checkpoint,
+                        "numerically_invalid_epochs": artifacts["numerically_invalid_epochs"],
+                        "final_checkpoint_valid": artifacts["final_checkpoint_valid"],
+                        "checkpoint_issues": "; ".join(checkpoint_issues),
                         "runtime_seconds": time.perf_counter() - started, "error": "",
                     })
                 except Exception as error:

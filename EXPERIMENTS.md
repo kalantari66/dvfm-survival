@@ -36,7 +36,9 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 The DGP coefficients are fixed by `dgp_seed`; independent seed streams control sampling, splitting, and model optimization. Each sample-size/tau/censoring/repeat cohort is generated and censored once, then the identical train/validation/test subjects are reused by every model and latent dimension.
 
-DVFM uses the recovery-validated default: 200 fixed epochs, `beta_max = 1`, warmup 50, and learning rate `0.001`. The final epoch remains the prespecified primary checkpoint. A candidate checkpoint minimizes validation ELBO among epochs 50--200, after beta has reached its final value. Reconstruction NLL is recorded but is never used for stopping or checkpoint selection. The legacy low-beta/reconstruction-checkpoint rule is not part of this pilot.
+DVFM uses the recovery-validated default: 200 fixed epochs, `beta_max = 1`, warmup 50, and learning rate `0.001`. The primary checkpoint minimizes validation ELBO among numerically valid epochs 50--200, after beta has reached its final value. The final epoch is retained only as a secondary diagnostic when it is numerically valid. Reconstruction NLL is recorded but is never used for stopping or checkpoint selection. The legacy low-beta/reconstruction-checkpoint rule is not part of this pilot.
+
+An epoch is numerically invalid if its training or validation ELBO, reconstruction NLL, or KL is non-finite or has absolute magnitude above the configured threshold of 100. Invalid epochs cannot supply the primary checkpoint. Non-finite training losses or gradients fail the fit immediately; invalid secondary final checkpoints are skipped and documented in `run_manifest.csv`.
 
 At `kendall_tau = 0`, true-frailty correlation is undefined as a recovery target; those cells evaluate learned dependence, latent collapse, and predictive safety under independence. For positive tau, the best latent coordinate, its sign, and its affine calibration are selected using validation subjects only before held-out test recovery is calculated.
 

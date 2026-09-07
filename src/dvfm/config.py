@@ -140,6 +140,16 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     "models.dvfm.checkpoint_min_epoch cannot exceed epochs"
                 )
+            if _require(dvfm, "primary_checkpoint", "models.dvfm") not in {
+                "final", "best_validation_elbo_post_warmup"
+            }:
+                raise ValueError("Invalid models.dvfm.primary_checkpoint")
+            if float(_require(
+                dvfm, "numerical_failure_threshold", "models.dvfm"
+            )) <= 0:
+                raise ValueError(
+                    "models.dvfm.numerical_failure_threshold must be positive"
+                )
         else:
             mechanisms = _require(data, "mechanisms", "data")
             allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}

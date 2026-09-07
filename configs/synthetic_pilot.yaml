@@ -37,6 +37,8 @@ models:
     beta_max: 1.0
     warmup_epochs: 50
     checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
     free_bits: 0.0
     mc_samples: 100
 evaluation:

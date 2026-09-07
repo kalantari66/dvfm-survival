@@ -437,7 +437,7 @@ class DVFM(nn.Module):
 def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
                beta_max=1.0, warmup_epochs=50, free_bits=0.0, device='cpu',
                return_history=False, checkpoint_min_epoch=None,
-               return_artifacts=False):
+               return_artifacts=False, numerical_failure_threshold=None):
     """
     Train DVFM with KL annealing
     """
@@ -472,8 +472,16 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
             loss, recon, kl = model.loss_function(shape_T, scale_T, shape_C, scale_C,
                                                    mu, logvar, time, event, 
                                                    beta, free_bits)
+            if not torch.isfinite(loss):
+                raise FloatingPointError(
+                    f"Non-finite DVFM training loss at epoch {epoch + 1}"
+                )
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if not torch.isfinite(gradient_norm):
+                raise FloatingPointError(
+                    f"Non-finite DVFM gradient norm at epoch {epoch + 1}"
+                )
             optimizer.step()
             
             train_loss += loss.item()
@@ -505,13 +513,23 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
         val_recon /= len(val_loader)
         val_kl /= len(val_loader)
         val_losses.append(val_loss)
-        scheduler.step(val_loss)
+        monitored_values = np.asarray([
+            train_loss, train_recon, train_kl, val_loss, val_recon, val_kl
+        ], dtype=float)
+        numerical_valid = bool(np.all(np.isfinite(monitored_values)))
+        if numerical_valid and numerical_failure_threshold is not None:
+            numerical_valid = bool(
+                np.max(np.abs(monitored_values)) <= float(numerical_failure_threshold)
+            )
+        if numerical_valid:
+            scheduler.step(val_loss)
         history.append({"epoch": epoch + 1, "beta": beta, "learning_rate": optimizer.param_groups[0]["lr"],
                         "train_loss": train_loss, "train_reconstruction": train_recon, "train_kl": train_kl,
-                        "validation_loss": val_loss, "validation_reconstruction": val_recon, "validation_kl": val_kl})
+                        "validation_loss": val_loss, "validation_reconstruction": val_recon,
+                        "validation_kl": val_kl, "numerical_valid": numerical_valid})
 
         eligible_epoch = checkpoint_min_epoch is None or (epoch + 1) >= int(checkpoint_min_epoch)
-        if eligible_epoch and np.isfinite(val_loss) and val_loss < best_validation_elbo:
+        if eligible_epoch and numerical_valid and val_loss < best_validation_elbo:
             best_validation_elbo = val_loss
             best_validation_elbo_epoch = epoch + 1
             best_validation_elbo_state = {
@@ -534,6 +552,10 @@ def train_dvfm(model, train_loader, val_loader, n_epochs=200, lr=1e-3,
             "best_validation_elbo_state": best_validation_elbo_state,
             "best_validation_elbo_epoch": best_validation_elbo_epoch,
             "best_validation_elbo": best_validation_elbo,
+            "numerically_invalid_epochs": int(sum(
+                not item["numerical_valid"] for item in history
+            )),
+            "final_checkpoint_valid": bool(history[-1]["numerical_valid"]),
         }
     if return_history:
         return history
