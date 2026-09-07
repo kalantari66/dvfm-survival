@@ -53,6 +53,31 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     assert "seeds" not in cfg["study"]
 
 
+def test_primary_synthetic_config_has_full_paired_benchmark():
+    cfg = load_config(ROOT / "configs" / "synthetic.yaml")
+    scenarios = expand_scenarios(cfg["data"])
+    assert len(scenarios) == 12
+    assert cfg["study"] == {
+        "name": "synthetic", "stage": "primary", "output_dir": "results/synthetic"
+    }
+    assert cfg["data"]["n_samples"] == 10000
+    assert cfg["data"]["n_features"] == 10
+    assert {item["kendall_tau"] for item in scenarios} == {0.0, 0.25, 0.5, 0.75}
+    assert {item["censoring_rate"] for item in scenarios} == {0.25, 0.5, 0.75}
+    assert len(cfg["seeds"]["sampling"]) == 10
+    assert len(cfg["seeds"]["split"]) == 10
+    assert len(cfg["seeds"]["model"]) == 10
+    assert set(cfg["models"]["enabled"]) == {
+        "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm"
+    }
+    assert cfg["models"]["dvfm"]["latent_dims"] == [5]
+    assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
+        "best_validation_elbo_post_warmup"
+    )
+    assert cfg["models"]["dvfm"]["checkpoint_min_epoch"] == 50
+    assert cfg["models"]["hacsurv_2d"]["epochs"] == 1000
+
+
 def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():
     cfg = load_config(ROOT / "configs" / "synthetic_hyperparameter_sweep.yaml")
     scenarios = expand_scenarios(cfg["data"])

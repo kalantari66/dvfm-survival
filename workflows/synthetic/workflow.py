@@ -1,4 +1,4 @@
-"""Single-job GWF workflow for the canonical DVFM synthetic pilot.
+"""Single-job GWF workflow for the primary synthetic benchmark.
 
 The experiment YAML is the single source of truth for scientific settings and
 SLURM resources. From the repository root:
@@ -16,7 +16,7 @@ from gwf import AnonymousTarget, Workflow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "synthetic_pilot.yaml"
+EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "synthetic.yaml"
 
 
 def run_synthetic_experiment(
@@ -60,7 +60,7 @@ def run_synthetic_experiment(
     mkdir -p "{result_dir}"
     rm -f "{result_dir / '_SUCCESS'}"
 
-    echo "[GWF] $(date) starting complete DVFM Gaussian-frailty grid pilot"
+    echo "[GWF] $(date) starting primary DVFM synthetic benchmark"
     echo "[GWF] experiment_config={experiment_config}"
     echo "[GWF] result_dir={result_dir}"
     echo "[GWF] resources={cores} cores, {memory}, {walltime}, {partition}, {account}"
@@ -91,7 +91,7 @@ def run_synthetic_experiment(
     test -s "{result_dir / 'resolved_config.json'}"
 
     touch "{result_dir / '_SUCCESS'}"
-    echo "[GWF] $(date) completed complete DVFM Gaussian-frailty grid pilot"
+    echo "[GWF] $(date) completed primary DVFM synthetic benchmark"
     """
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 

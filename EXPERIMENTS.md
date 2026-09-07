@@ -24,6 +24,31 @@ Posterior frailty recovery after observing follow-up is not evidence of prospect
 Every generator must pass tests for deterministic seeding, finite positive times, target censoring tolerance (absolute error at most 0.02), target Kendall tau tolerance (absolute error at most 0.03 with a large calibration sample), train-only preprocessing, and absence of test-set model selection. Each atomic run writes its resolved config, seed, Git revision, runtime, achieved censoring rate, and empirical dependence.
 
 ## Stage 1: mechanistic synthetic benchmark (about 25% of paper evidence)
+### Primary synthetic benchmark
+
+`configs/synthetic.yaml` is the main paired benchmark. It uses 10 repeats of
+10,000 subjects with 10 covariates over the same 12 shared-Gaussian-frailty
+conditions as the pilot: `kendall_tau` in `{0, 0.25, 0.50, 0.75}` crossed with
+censoring in `{0.25, 0.50, 0.75}`. Every model receives the identical generated
+cohort and train/validation/test split within a condition and repeat. The model
+set is CoxPH, DeepSurv, MTLR, ClaytonAFT, HACSurv-2D, and DVFM.
+
+DVFM uses `latent_dim = 5`, the recovery-validated 200-epoch schedule
+(`beta_max = 1`, warmup 50, learning rate `0.001`, batch size 64), and the best
+numerically valid validation-ELBO checkpoint at or after epoch 50. This latent
+size had the best aggregate oracle IBS in the completed pilot while retaining
+strong frailty recovery. The non-DVFM models use their implementation defaults,
+recorded explicitly in the YAML. The full grid is submitted as one GWF target
+with `workflows/synthetic/workflow.py` and writes to `results/synthetic/`.
+
+The DGP draws ten independent standard-normal covariates and a standard-normal
+subject frailty. Separate fixed Gaussian coefficient vectors govern event and
+censoring times. The same calibrated frailty loading enters both Weibull AFT
+predictors and is chosen to attain the requested conditional `kendall_tau`; a
+censoring intercept is then calibrated to attain the requested censoring rate.
+Observed follow-up is the minimum of latent event and censoring time. No
+covariate or time scaling is applied.
+
 ### Current shared-Gaussian-frailty pilot
 
 `configs/synthetic_pilot.yaml` runs five paired repeats over:

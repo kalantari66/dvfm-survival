@@ -1,0 +1,87 @@
+schema_version: 1
+workflow: {target_name: synthetic}
+resources: {cores: 4, memory: 25g, walltime: "24:00:00", partition: gpu-h200, account: c2i-colon}
+study:
+  name: synthetic
+  stage: primary
+  output_dir: results/synthetic
+seeds:
+  # One fixed DGP parameter seed and ten paired cohort/split/model repeats.
+  dgp: 2026
+  sampling: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  split: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
+  model: [200, 201, 202, 203, 204, 205, 206, 207, 208, 209]
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 10000
+  n_features: 10
+  calibration_samples: 50000
+  grid:
+    kendall_tau: [0.00, 0.25, 0.50, 0.75]
+    censoring_rate: [0.25, 0.50, 0.75]
+split:
+  strategy: holdout
+  validation_fraction: 0.15
+  test_fraction: 0.20
+preprocessing: {zscore_x: false}
+models:
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, dvfm]
+  # Baseline settings are the implementation defaults, stated explicitly so the
+  # submitted experiment remains reproducible if global defaults later change.
+  deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: 64}
+  mtlr: {epochs: 200, learning_rate: 0.005, bins: 200}
+  clayton_aft: {epochs: 100, learning_rate: 0.005}
+  hacsurv_2d:
+    epochs: 1000
+    batch_size: 512
+    learning_rate: 0.0001
+    copula_learning_rate: 0.0001
+    copula_start_epoch: 200
+    checkpoint_min_epoch: 201
+    minimum_epochs: 400
+    early_stopping_patience: 200
+    generator_samples: 200
+    validation_generator_samples: 500
+    hidden_size: 32
+    hidden_survival: 32
+    inverse_iterations: 200
+    inverse_tolerance: 0.00000001
+    scale_regularization: 1.0
+    numerical_failure_threshold: 100.0
+    dtype: float64
+  dvfm:
+    # z=5 had the best aggregate oracle IBS in the completed pilot while
+    # retaining strong held-out subject-frailty recovery.
+    latent_dims: [5]
+    encoder_hidden: [64, 32]
+    decoder_hidden: [32, 64]
+    dropout: 0.0
+    weight_decay: 0.0
+    epochs: 200
+    learning_rate: 0.001
+    batch_size: 64
+    beta_max: 1.0
+    warmup_epochs: 50
+    checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    free_bits: 0.0
+    mc_samples: 100
+evaluation:
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
+  prediction_modes: [prior, aggregate_posterior]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 2000
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 15
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 128
+  joint_dgp_samples: 2000
+  joint_model_samples: 500
+  joint_model_batch_size: 32
