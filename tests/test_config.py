@@ -72,7 +72,8 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     assert len(cfg["seeds"]["model"]) == 10
     assert set(cfg["models"]["enabled"]) == {
         "coxph", "deepsurv", "mtlr", "deephit", "gbsa", "rsf",
-        "weibull_aft", "clayton_aft", "hacsurv_2d", "dvfm",
+        "weibull_aft", "clayton_aft", "bayesian_cox_gamma_frailty",
+        "hacsurv_2d", "dvfm",
     }
     assert cfg["models"]["dvfm"]["latent_dims"] == [5]
     assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
@@ -80,6 +81,7 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     )
     assert cfg["models"]["dvfm"]["checkpoint_min_epoch"] == 50
     assert cfg["models"]["hacsurv_2d"]["epochs"] == 1000
+    assert cfg["models"]["bayesian_cox_gamma_frailty"]["n_intervals"] == 10
 
 
 def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():

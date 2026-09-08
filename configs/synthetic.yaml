@@ -26,7 +26,7 @@ split:
   test_fraction: 0.20
 preprocessing: {zscore_x: false}
 models:
-  enabled: [coxph, deepsurv, mtlr, deephit, gbsa, rsf, weibull_aft, clayton_aft, hacsurv_2d, dvfm]
+  enabled: [coxph, deepsurv, mtlr, deephit, gbsa, rsf, weibull_aft, clayton_aft, bayesian_cox_gamma_frailty, hacsurv_2d, dvfm]
   # Baseline settings are the implementation defaults, stated explicitly so the
   # submitted experiment remains reproducible if global defaults later change.
   deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: 64}
@@ -64,6 +64,19 @@ models:
     random_state: 0
     n_jobs: 1
   weibull_aft: {penalizer: 0.0, l1_ratio: 0.0}
+  bayesian_cox_gamma_frailty:
+    n_intervals: 10
+    epochs: 500
+    minimum_epochs: 100
+    early_stopping_patience: 50
+    learning_rate: 0.03
+    minimum_delta: 0.000001
+    gradient_clip: 10.0
+    beta_prior_sd: 2.5
+    log_hazard_prior_sd: 5.0
+    log_alpha_prior_sd: 2.0
+    baseline_smoothness: 1.0
+    dtype: float64
   hacsurv_2d:
     epochs: 1000
     batch_size: 512

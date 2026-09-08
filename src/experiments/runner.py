@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
+from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
 
 from sota.baselines import (
     _fit_cox_and_predict_survival,
@@ -135,6 +136,18 @@ def _fit_one_split(
             model_cfg["weibull_aft"],
         )
         predictions["WeibullAFT"] = {"median": median, "survival": survival}
+
+    if "bayesian_cox_gamma_frailty" in enabled:
+        survival, _, _, _ = fit_bayesian_cox_gamma_frailty(
+            train.X, train.time, train.event,
+            validation.X, validation.time, validation.event,
+            test.X, time_points,
+            model_cfg["bayesian_cox_gamma_frailty"], device,
+        )
+        median = get_median_survival_time(survival, time_points)
+        predictions["BayesianCoxGammaFrailty"] = {
+            "median": median, "survival": survival,
+        }
 
     if "dvfm" in enabled:
         c = model_cfg["dvfm"]

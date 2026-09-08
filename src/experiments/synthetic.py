@@ -24,6 +24,7 @@ from utility.data import SurvivalData
 from dvfm.model import DVFM
 from utility.data import SurvivalDataset
 from sota.hacsurv import fit_hacsurv_2d
+from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
 from utility.metrics import (
     compute_oracle_metrics,
     frailty_regression_metrics,
@@ -139,6 +140,76 @@ def _frailty_diagnostics(
             "validation_alignment_sign": sign if recovery_defined else np.nan,
             "validation_calibration_intercept": float(calibrator.intercept_) if recovery_defined else np.nan,
             "validation_calibration_slope": float(calibrator.coef_[0]) if recovery_defined else np.nan,
+        })
+    return rows
+
+
+def _classical_frailty_diagnostics(model, validation, test, target_tau):
+    """Evaluate a scalar posterior frailty using the same alignment as DVFM."""
+    validation_latent = model.posterior_log_frailty_mean(
+        validation.X, validation.time, validation.event
+    )
+    test_latent = model.posterior_log_frailty_mean(
+        test.X, test.time, test.event
+    )
+    recovery_defined = float(target_tau) > 0.0
+    if recovery_defined:
+        raw_pearson = pearson_correlation(validation_latent, validation.true_z)
+        sign = 1.0 if not np.isfinite(raw_pearson) or raw_pearson >= 0 else -1.0
+        validation_aligned = sign * validation_latent
+        test_aligned = sign * test_latent
+        calibrator = LinearRegression().fit(
+            validation_aligned.reshape(-1, 1), validation.true_z
+        )
+        test_calibrated = calibrator.predict(test_aligned.reshape(-1, 1))
+    else:
+        sign, calibrator = np.nan, None
+        test_aligned = np.full(len(test.time), np.nan)
+        test_calibrated = np.full(len(test.time), np.nan)
+
+    posterior_shape, posterior_rate = model.posterior_parameters(
+        test.X, test.time, test.event
+    )
+    posterior_sd = (
+        torch.sqrt(posterior_shape) / posterior_rate
+    ).detach().cpu().numpy()
+    masks = {
+        "all": np.ones(len(test.time), dtype=bool),
+        "event_observed": test.event == 1,
+        "censored": test.event == 0,
+    }
+    rows = []
+    for subgroup, mask in masks.items():
+        if recovery_defined:
+            recovery = frailty_regression_metrics(
+                test.true_z[mask], test_calibrated[mask]
+            )
+            pearson = pearson_correlation(test_aligned[mask], test.true_z[mask])
+            spearman = spearman_correlation(test_aligned[mask], test.true_z[mask])
+        else:
+            recovery = {
+                "frailty_r2_calibrated": np.nan,
+                "frailty_rmse_calibrated": np.nan,
+            }
+            pearson = spearman = np.nan
+        rows.append({
+            "subgroup": subgroup,
+            "n": int(mask.sum()),
+            "frailty_recovery_defined": recovery_defined,
+            "selected_latent_dimension": 0,
+            "active_latent_dimensions": np.nan,
+            "mean_kl": np.nan,
+            "frailty_pearson": pearson,
+            "frailty_spearman": spearman,
+            **recovery,
+            "validation_alignment_sign": sign,
+            "validation_calibration_intercept": (
+                float(calibrator.intercept_) if calibrator is not None else np.nan
+            ),
+            "validation_calibration_slope": (
+                float(calibrator.coef_[0]) if calibrator is not None else np.nan
+            ),
+            "mean_posterior_frailty_sd": float(np.mean(posterior_sd[mask])),
         })
     return rows
 
@@ -343,7 +414,7 @@ def _fit_baseline(
     name, train, validation, test, grid, cfg, device, model_seed,
     joint_evaluation=None,
 ):
-    fit_info, history = {}, []
+    fit_info, history, fitted_model = {}, [], None
     if name == "coxph":
         _, survival = _fit_cox_and_predict_survival(
             train.X, train.time, train.event, test.X, grid
@@ -386,6 +457,15 @@ def _fit_baseline(
             train.X, train.time, train.event, test.X, grid,
             cfg["models"]["weibull_aft"],
         )
+    elif name == "bayesian_cox_gamma_frailty":
+        survival, fit_info, history, fitted_model = (
+            fit_bayesian_cox_gamma_frailty(
+                train.X, train.time, train.event,
+                validation.X, validation.time, validation.event,
+                test.X, grid,
+                cfg["models"]["bayesian_cox_gamma_frailty"], device,
+            )
+        )
     elif name == "hacsurv_2d":
         settings = cfg["models"]["hacsurv_2d"]
         survival, fit_info, history, fitted_model = fit_hacsurv_2d(
@@ -422,7 +502,7 @@ def _fit_baseline(
             )
     else:
         raise ValueError(f"Unsupported synthetic baseline: {name}")
-    return survival, fit_info, history
+    return survival, fit_info, history, fitted_model
 
 
 def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.DataFrame:
@@ -483,7 +563,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                 fit_context = {**base, "model": baseline, "latent_dim": np.nan}
                 try:
                     _seed(int(model_seed))
-                    survival, fit_info, baseline_history = _fit_baseline(
+                    survival, fit_info, baseline_history, fitted_model = _fit_baseline(
                         baseline, train, validation, test, grid, cfg, device,
                         int(model_seed), joint_evaluation,
                     )
@@ -510,6 +590,13 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         **fit_info,
                     }
                     rows.append(_prediction_row(survival, grid, test, context))
+                    if baseline == "bayesian_cox_gamma_frailty":
+                        diagnostics.extend([{
+                            **context, **item,
+                        } for item in _classical_frailty_diagnostics(
+                            fitted_model, validation, test,
+                            float(scenario["kendall_tau"]),
+                        )])
                     calibration.extend(oracle_calibration_rows(
                         survival, grid, test.true_event_time, context
                     ))

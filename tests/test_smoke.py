@@ -14,6 +14,10 @@ from utility.metrics import (
 from sota.baselines import ClaytonWeibullAFT
 from dvfm.model import DVFM
 from sota.hacsurv import HACSurv2D
+from sota.bayesian_cox_gamma_frailty import (
+    BayesianIndividualCoxGammaFrailty,
+    fit_bayesian_cox_gamma_frailty,
+)
 from utility.data import SurvivalDataset
 from dvfm.prediction import predict_survival_curves
 from dvfm.training import train_dvfm
@@ -229,6 +233,45 @@ def test_gaussian_frailty_generator_is_reproducible_and_hits_targets():
     np.testing.assert_array_equal(first.event, second.event)
     assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
     assert abs(first.achieved_censoring_rate - 0.25) < 1 / len(first.event) + 1e-12
+
+
+def test_bayesian_cox_gamma_frailty_posterior_and_predictions():
+    generated = generate_gaussian_shared_frailty(
+        n_samples=300, n_features=3, kendall_tau=0.5,
+        censoring_rate=0.5, dgp_seed=41, sampling_seed=42,
+        calibration_samples=5_000,
+    )
+    train, validation, test = (
+        slice(0, 200), slice(200, 250), slice(250, 300)
+    )
+    grid = np.linspace(0.0, np.quantile(generated.event_time[:200], 0.95), 30)
+    curves, info, history, model = fit_bayesian_cox_gamma_frailty(
+        generated.X[train], generated.observed_time[train], generated.event[train],
+        generated.X[validation], generated.observed_time[validation], generated.event[validation],
+        generated.X[test], grid,
+        {
+            "n_intervals": 5, "epochs": 40, "minimum_epochs": 10,
+            "early_stopping_patience": 10, "learning_rate": 0.03,
+            "dtype": "float64",
+        },
+        device="cpu",
+    )
+    assert curves.shape == (50, 30)
+    assert np.all(np.isfinite(curves))
+    assert np.all((curves >= 0.0) & (curves <= 1.0))
+    assert np.all(np.diff(curves, axis=1) <= 1e-10)
+    shape, rate = model.posterior_parameters(
+        generated.X[test], generated.observed_time[test], generated.event[test]
+    )
+    np.testing.assert_allclose(
+        model.posterior_frailty_mean(
+            generated.X[test], generated.observed_time[test], generated.event[test]
+        ),
+        (shape / rate).detach().cpu().numpy(),
+    )
+    assert info["frailty_distribution"] == "gamma"
+    assert info["frailty_variance"] > 0.0
+    assert len(history) >= 10
 
 
 def test_clayton_gamma_generator_exposes_true_frailty_and_hits_targets():

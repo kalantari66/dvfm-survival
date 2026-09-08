@@ -6,6 +6,6 @@ paper's preserved reference implementations.
 """
 
 __all__ = [
-    "adapters", "baselines", "clayton_aft", "coxph", "deephit",
+    "adapters", "baselines", "bayesian_cox_gamma_frailty", "clayton_aft", "coxph", "deephit",
     "deepsurv", "hacsurv", "mtlr", "sksurv", "weibull_aft",
 ]

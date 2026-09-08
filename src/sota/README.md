@@ -16,6 +16,7 @@ upstream provenance documented in the repository-level `SOURCE_NOTES.md`.
 | DeepHit | Ported external pycox implementation | Newly available through the unified adapter with validation-only early stopping. |
 | GBSA / RSF | Ported external scikit-survival implementations | Defaults match the external experiment configuration; prediction curves are adapted to the common evaluation grid. |
 | Weibull AFT | Ported external lifelines wrapper | Output is adapted to the common median and survival-curve contract. |
+| Bayesian individual Cox--Gamma frailty | New implementation based on the [PyMC individual-frailty example](https://www.pymc.io/projects/examples/en/latest/survival_analysis/frailty_models.html) | Uses the same multiplicative Gamma subject frailty with a piecewise-exponential Cox baseline. The population parameters are MAP estimates; conjugacy gives each subject's exact conditional Gamma posterior, avoiding an infeasible 10,000-dimensional NUTS run. |
 | HACSurv-2D | Existing authorized HACSurv port, moved here | Existing validation checkpointing, numerical checks, device handling, and joint-dependence diagnostics are preserved. |
 | ClaytonAFT | Existing implementation, moved under `sota` | No equivalent model exists in the external `src/sota` folder. |
 

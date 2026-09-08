@@ -112,7 +112,9 @@ The loader supplies shared defaults, validates the schema, and expands `data.gri
 
 Comparison models live under `src/sota/`. See
 [`src/sota/README.md`](src/sota/README.md) for provenance and the comparison
-between overlapping implementations.
+between overlapping implementations. The primary synthetic benchmark includes
+a scalable Bayesian individual Cox--Gamma frailty comparator with exact
+per-subject conditional frailty posteriors.
 
 ## Run the synthetic pilot with GWF
 

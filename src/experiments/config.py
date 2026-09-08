@@ -40,6 +40,14 @@ DEFAULTS: dict[str, Any] = {
             "random_state": 0, "n_jobs": 1,
         },
         "weibull_aft": {"penalizer": 0.0, "l1_ratio": 0.0},
+        "bayesian_cox_gamma_frailty": {
+            "n_intervals": 10, "epochs": 500, "minimum_epochs": 100,
+            "early_stopping_patience": 50, "learning_rate": 0.03,
+            "minimum_delta": 1e-6, "gradient_clip": 10.0,
+            "beta_prior_sd": 2.5, "log_hazard_prior_sd": 5.0,
+            "log_alpha_prior_sd": 2.0, "baseline_smoothness": 1.0,
+            "dtype": "float64",
+        },
         "hacsurv_2d": {
             "epochs": 1000, "batch_size": 512, "learning_rate": 1e-4,
             "copula_learning_rate": 1e-4, "copula_start_epoch": 200,
@@ -285,6 +293,29 @@ def validate_config(cfg: dict) -> None:
                     )
                 if str(hac["dtype"]) not in {"float32", "float64"}:
                     raise ValueError("HACSurv dtype must be float32 or float64")
+            if "bayesian_cox_gamma_frailty" in {
+                str(name).lower() for name in cfg["models"]["enabled"]
+            }:
+                frailty = cfg["models"]["bayesian_cox_gamma_frailty"]
+                for key in (
+                    "n_intervals", "epochs", "minimum_epochs",
+                    "early_stopping_patience", "learning_rate",
+                ):
+                    _require(frailty, key, "models.bayesian_cox_gamma_frailty")
+                if int(frailty["n_intervals"]) < 1:
+                    raise ValueError("Cox--Gamma frailty n_intervals must be positive")
+                if not 1 <= int(frailty["minimum_epochs"]) <= int(frailty["epochs"]):
+                    raise ValueError(
+                        "Cox--Gamma frailty minimum_epochs must be within training"
+                    )
+                if int(frailty["early_stopping_patience"]) < 1:
+                    raise ValueError(
+                        "Cox--Gamma frailty early_stopping_patience must be positive"
+                    )
+                if float(frailty["learning_rate"]) <= 0:
+                    raise ValueError("Cox--Gamma frailty learning_rate must be positive")
+                if str(frailty.get("dtype", "float64")) not in {"float32", "float64"}:
+                    raise ValueError("Cox--Gamma frailty dtype must be float32 or float64")
         else:
             mechanisms = _require(data, "mechanisms", "data")
             allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}
@@ -340,6 +371,7 @@ def validate_config(cfg: dict) -> None:
     supported = {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm",
         "deephit", "gbsa", "rsf", "weibull_aft",
+        "bayesian_cox_gamma_frailty",
     }
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
