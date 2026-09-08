@@ -29,21 +29,18 @@ Every generator must pass tests for deterministic seeding, finite positive times
 `configs/synthetic.yaml` is the main paired benchmark. It uses 10 repeats of
 10,000 subjects with 10 covariates over the same 12 shared-Gaussian-frailty
 conditions as the pilot: `kendall_tau` in `{0, 0.25, 0.50, 0.75}` crossed with
-censoring in `{0.25, 0.50, 0.75}`. Every model receives the identical generated
-cohort and train/validation/test split within a condition and repeat. The model
-set is CoxPH, DeepSurv, MTLR, DeepHit, gradient-boosted survival analysis,
-random survival forest, Weibull AFT, ClaytonAFT, Bayesian individual
-Cox--Gamma frailty, HACSurv-2D, and DVFM.
+censoring in `{0.25, 0.50, 0.75}`. This is a DVFM-only mechanistic experiment,
+not a model-comparison benchmark.
 Each seeded random holdout assigns 70% of subjects to training, 10% to
 validation, and 20% to testing. The 120 paired datasets therefore produce
-1,320 model fits in one GWF target.
+240 DVFM fits in one GWF target.
 
-DVFM uses `latent_dim = 5`, the recovery-validated 200-epoch schedule
+The primary DVFM uses `latent_dim = 1`, matching the one-dimensional true
+frailty, and the same architecture with `latent_dim = 0` is an internal
+conditional-independence control. Both use the recovery-validated 200-epoch schedule
 (`beta_max = 1`, warmup 50, learning rate `0.001`, batch size 64), and the best
-numerically valid validation-ELBO checkpoint at or after epoch 50. This latent
-size had the best aggregate oracle IBS in the completed pilot while retaining
-strong frailty recovery. The non-DVFM models use their implementation defaults,
-recorded explicitly in the YAML. The full grid is submitted as one GWF target
+numerically valid validation-ELBO checkpoint at or after epoch 50, with Adam
+weight decay `1e-4`. The full grid is submitted as one GWF target
 with `workflows/synthetic/workflow.py` and writes to `results/synthetic/`.
 
 The DGP draws ten independent standard-normal covariates and a standard-normal
@@ -53,18 +50,6 @@ predictors and is chosen to attain the requested conditional `kendall_tau`; a
 censoring intercept is then calibrated to attain the requested censoring rate.
 Observed follow-up is the minimum of latent event and censoring time. No
 covariate or time scaling is applied.
-
-The Bayesian Cox--Gamma comparator uses
-`h_i(t|u_i) = u_i exp(x_i' beta) h_0(t)`, a piecewise-exponential baseline,
-and `u_i ~ Gamma(alpha, rate=alpha)`. Population parameters are selected by
-validation marginal likelihood after MAP fitting. For each validation/test
-subject, the observed follow-up yields an exact conditional Gamma posterior;
-its expected log frailty is aligned and calibrated using validation subjects,
-then evaluated against held-out true frailty with the same Pearson, Spearman,
-RMSE, and R-squared protocol as DVFM. Predictive metrics use marginal survival
-for a new subject, so test outcomes do not leak into prediction. Because this
-baseline does not generate censoring time, conditional Kendall's tau and joint
-survival ISE are reported as not applicable.
 
 ### Current shared-Gaussian-frailty pilot
 
