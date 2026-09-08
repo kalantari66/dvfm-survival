@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: dvfm_synthetic_dependence_calibration}
-resources: {cores: 4, memory: 25g, walltime: "08:00:00", partition: gpu-h200, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "02:00:00", partition: gpu-short, account: c2i-colon}
 
 study:
   name: synthetic-dependence-calibration
