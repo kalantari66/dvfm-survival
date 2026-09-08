@@ -108,6 +108,38 @@ gwf -f workflows/synthetic_hyperparameter/workflow.py status
 gwf -f workflows/synthetic_hyperparameter/workflow.py run
 ```
 
+### Dependence-calibration decoder ablation
+
+`configs/synthetic_dependence_calibration.yaml` targets the failure observed at
+25% censoring: spurious dependence at `kendall_tau = 0` and underestimation at
+`kendall_tau = 0.75`. It is a one-dimensional calibration curve over tau, not a
+Cartesian grid. All runs use `n = 10000`, 10 features, latent dimension 1, five
+fresh paired seeds, and the recovery-validated training settings with Adam
+weight decay `1e-4`.
+
+The decoder ablation is sequential so that each step changes one choice:
+
+1. `reference`: conditional Weibull parameters with softplus scales and a
+   nonlinear joint `(X,z)` decoder.
+2. `exp_scale_link`: change only the scale link from softplus to exponential.
+3. `additive_log_scale`: change only the latent pathway to
+   `log(scale) = f(X) + a*z` for each margin.
+4. `global_weibull_shape`: change only the two Weibull shapes from
+   subject-specific outputs to globally learned parameters.
+
+Compare adjacent steps, not only each treatment against the original
+reference. Report learned conditional Kendall's tau and absolute error at every
+target, oracle joint-survival ISE, subject-level frailty recovery, oracle IBS/CI,
+checkpoint epoch, and numerical failures. No variant is selected using test
+metrics.
+
+Submit all four paired variants in one GWF target:
+
+```bash
+gwf -f workflows/dependence_calibration/workflow.py status
+gwf -f workflows/dependence_calibration/workflow.py run
+```
+
 ### HACSurv-2D feasibility baseline
 
 HACSurv's bivariate single-event model is included as `hacsurv_2d` with

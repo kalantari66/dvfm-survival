@@ -45,6 +45,9 @@ dvfm-run --config configs/synthetic.yaml
 # Fast local check of the predictive hyperparameter machinery
 dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
 
+# Focused one-change decoder calibration ablation
+dvfm-run --config configs/synthetic_dependence_calibration.yaml --validate-only
+
 # Short HACSurv-2D integration check
 dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
 
@@ -72,6 +75,13 @@ The complete hyperparameter screen is submitted as one GWF target:
 ```bash
 gwf -f workflows/synthetic_hyperparameter/workflow.py status
 gwf -f workflows/synthetic_hyperparameter/workflow.py run
+```
+
+The dependence-calibration ablation also runs as one target:
+
+```bash
+gwf -f workflows/dependence_calibration/workflow.py status
+gwf -f workflows/dependence_calibration/workflow.py run
 ```
 
 The focused HACSurv feasibility run is also one GWF target:

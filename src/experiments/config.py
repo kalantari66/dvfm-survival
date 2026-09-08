@@ -211,6 +211,20 @@ def validate_config(cfg: dict) -> None:
                         raise ValueError("DVFM variant dropout must be in [0, 1)")
                     if float(resolved.get("weight_decay", 0.0)) < 0.0:
                         raise ValueError("DVFM variant weight_decay cannot be negative")
+                    if resolved.get("scale_link", "softplus") not in {"softplus", "exp"}:
+                        raise ValueError("DVFM variant scale_link must be softplus or exp")
+                    if resolved.get("latent_path", "nonlinear") not in {
+                        "nonlinear", "additive_scale"
+                    }:
+                        raise ValueError(
+                            "DVFM variant latent_path must be nonlinear or additive_scale"
+                        )
+                    if resolved.get("shape_mode", "conditional") not in {
+                        "conditional", "global"
+                    }:
+                        raise ValueError(
+                            "DVFM variant shape_mode must be conditional or global"
+                        )
                     for key in ("encoder_hidden", "decoder_hidden"):
                         widths = resolved.get(key, [])
                         if not widths or any(int(width) < 1 for width in widths):

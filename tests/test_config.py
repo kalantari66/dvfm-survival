@@ -105,6 +105,26 @@ def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():
     assert len(cfg["seeds"]["sampling"]) == 3
 
 
+def test_dependence_calibration_is_a_paired_sequential_ablation():
+    cfg = load_config(ROOT / "configs" / "synthetic_dependence_calibration.yaml")
+    scenarios = expand_scenarios(cfg["data"])
+    variants = cfg["models"]["dvfm"]["variants"]
+    assert [item["name"] for item in variants] == [
+        "reference", "exp_scale_link", "additive_log_scale",
+        "global_weibull_shape",
+    ]
+    assert {item["censoring_rate"] for item in scenarios} == {0.25}
+    assert [item["kendall_tau"] for item in scenarios] == [0.0, 0.25, 0.5, 0.75]
+    assert cfg["models"]["dvfm"]["latent_dims"] == [1]
+    assert len(cfg["seeds"]["sampling"]) == 5
+    assert variants[1]["comparison_parent"] == "reference"
+    assert variants[1]["scale_link"] == "exp"
+    assert variants[2]["comparison_parent"] == "exp_scale_link"
+    assert variants[2]["latent_path"] == "additive_scale"
+    assert variants[3]["comparison_parent"] == "additive_log_scale"
+    assert variants[3]["shape_mode"] == "global"
+
+
 def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     cfg = load_config(ROOT / "configs" / "hacsurv_synthetic_pilot.yaml")
     assert cfg["models"]["enabled"] == ["hacsurv_2d"]

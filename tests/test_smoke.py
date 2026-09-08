@@ -126,6 +126,53 @@ def test_dvfm_supports_dropout_and_adam_weight_decay():
     assert artifacts["best_validation_elbo_epoch"] in {1, 2}
 
 
+def test_dvfm_decoder_calibration_variants_are_finite_and_structured():
+    torch.manual_seed(29)
+    x = torch.randn(24, 3)
+    time = torch.rand(24) + 0.2
+    event = torch.arange(24).remainder(2).float()
+    variants = [
+        {},
+        {"scale_link": "exp"},
+        {"scale_link": "exp", "latent_path": "additive_scale"},
+        {
+            "scale_link": "exp",
+            "latent_path": "additive_scale",
+            "shape_mode": "global",
+        },
+    ]
+    for options in variants:
+        model = DVFM(
+            input_dim=3, latent_dim=1,
+            encoder_hidden=[8], decoder_hidden=[8], **options,
+        )
+        outputs = model(x, time, event)
+        assert all(torch.isfinite(value).all() for value in outputs)
+        assert all((value > 0).all() for value in outputs[:4])
+        loss, _, _ = model.loss_function(*outputs, time, event)
+        loss.backward()
+        assert torch.isfinite(loss)
+
+    additive = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_path="additive_scale",
+    )
+    first_linear = next(
+        layer for layer in additive.decoder.network if isinstance(layer, torch.nn.Linear)
+    )
+    assert first_linear.in_features == 3
+    assert additive.decoder.latent_scale_loadings.shape == (1, 2)
+
+    global_shape = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_path="additive_scale", shape_mode="global",
+    )
+    global_shape.eval()
+    shape_t, _, shape_c, _ = global_shape.decoder(x, torch.randn(24, 1))
+    assert torch.allclose(shape_t, shape_t[0].expand_as(shape_t))
+    assert torch.allclose(shape_c, shape_c[0].expand_as(shape_c))
+
+
 def test_hacsurv_2d_has_finite_likelihood_gradients_and_monotone_survival():
     torch.manual_seed(41)
     model = HACSurv2D(

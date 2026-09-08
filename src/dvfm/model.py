@@ -26,10 +26,21 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_dims=(32, 64), dropout=0.0):
+    def __init__(self, input_dim, latent_dim, hidden_dims=(32, 64), dropout=0.0,
+                 scale_link="softplus", latent_path="nonlinear",
+                 shape_mode="conditional"):
         super().__init__()
+        if scale_link not in {"softplus", "exp"}:
+            raise ValueError("scale_link must be 'softplus' or 'exp'")
+        if latent_path not in {"nonlinear", "additive_scale"}:
+            raise ValueError("latent_path must be 'nonlinear' or 'additive_scale'")
+        if shape_mode not in {"conditional", "global"}:
+            raise ValueError("shape_mode must be 'conditional' or 'global'")
+        self.scale_link = scale_link
+        self.latent_path = latent_path
+        self.shape_mode = shape_mode
         layers = []
-        previous = input_dim + latent_dim
+        previous = input_dim + latent_dim if latent_path == "nonlinear" else input_dim
         for width in hidden_dims:
             layers.extend((nn.Linear(previous, width), nn.ReLU(), nn.BatchNorm1d(width)))
             if float(dropout) > 0:
@@ -37,17 +48,54 @@ class Decoder(nn.Module):
             previous = width
         self.network = nn.Sequential(*layers)
         self.fc_params = nn.Linear(previous, 4)
+        if latent_path == "additive_scale" and latent_dim > 0:
+            self.latent_scale_loadings = nn.Parameter(torch.empty(latent_dim, 2))
+            nn.init.normal_(self.latent_scale_loadings, mean=0.0, std=0.05)
+        else:
+            self.register_parameter("latent_scale_loadings", None)
+        if shape_mode == "global":
+            # Softplus^{-1}(1) initializes both positive shapes at one without
+            # using knowledge of the synthetic DGP's true shapes.
+            initial = torch.log(torch.expm1(torch.ones(2)))
+            self.global_shape_unconstrained = nn.Parameter(initial)
+        else:
+            self.register_parameter("global_shape_unconstrained", None)
+
+    def _positive_scale(self, value):
+        if self.scale_link == "exp":
+            return torch.exp(value.clamp(min=-12.0, max=12.0)) + 1e-6
+        return nn.functional.softplus(value) + 1e-6
 
     def forward(self, x, z):
-        parameters = self.fc_params(self.network(torch.cat((x, z), dim=1)))
-        positive = nn.functional.softplus(parameters) + 1e-6
-        return positive[:, 0], positive[:, 1], positive[:, 2], positive[:, 3]
+        decoder_input = torch.cat((x, z), dim=1) if self.latent_path == "nonlinear" else x
+        parameters = self.fc_params(self.network(decoder_input))
+        event_scale_raw = parameters[:, 1]
+        censor_scale_raw = parameters[:, 3]
+        if self.latent_scale_loadings is not None:
+            latent_offsets = z @ self.latent_scale_loadings
+            event_scale_raw = event_scale_raw + latent_offsets[:, 0]
+            censor_scale_raw = censor_scale_raw + latent_offsets[:, 1]
+        if self.global_shape_unconstrained is None:
+            event_shape = nn.functional.softplus(parameters[:, 0]) + 1e-6
+            censor_shape = nn.functional.softplus(parameters[:, 2]) + 1e-6
+        else:
+            shapes = nn.functional.softplus(self.global_shape_unconstrained) + 1e-6
+            event_shape = shapes[0].expand(len(x))
+            censor_shape = shapes[1].expand(len(x))
+        return (
+            event_shape,
+            self._positive_scale(event_scale_raw),
+            censor_shape,
+            self._positive_scale(censor_scale_raw),
+        )
 
 
 class DVFM(nn.Module):
     def __init__(self, input_dim, latent_dim=8, encoder_hidden=(64, 32),
                  decoder_hidden=(32, 64), dropout=0.0,
-                 encoder_dropout=None, decoder_dropout=None):
+                 encoder_dropout=None, decoder_dropout=None,
+                 scale_link="softplus", latent_path="nonlinear",
+                 shape_mode="conditional"):
         super().__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
@@ -56,7 +104,11 @@ class DVFM(nn.Module):
         self.encoder = None if latent_dim == 0 else Encoder(
             input_dim, latent_dim, encoder_hidden, encoder_dropout
         )
-        self.decoder = Decoder(input_dim, latent_dim, decoder_hidden, decoder_dropout)
+        self.decoder = Decoder(
+            input_dim, latent_dim, decoder_hidden, decoder_dropout,
+            scale_link=scale_link, latent_path=latent_path,
+            shape_mode=shape_mode,
+        )
         self.latent_dim = latent_dim
 
     @staticmethod

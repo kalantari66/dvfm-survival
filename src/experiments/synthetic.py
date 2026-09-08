@@ -312,6 +312,30 @@ def _write_hyperparameter_comparison(
         paired["oracle_joint_survival_ise"]
         - paired["reference_oracle_joint_survival_ise"]
     )
+    if "comparison_parent" in selection:
+        parent = selection[
+            cell + [
+                "hyperparameter_variant", "oracle_ibs", "oracle_ci",
+                "oracle_mae", "oracle_joint_survival_ise",
+            ]
+        ].rename(columns={
+            "hyperparameter_variant": "comparison_parent",
+            "oracle_ibs": "parent_oracle_ibs",
+            "oracle_ci": "parent_oracle_ci",
+            "oracle_mae": "parent_oracle_mae",
+            "oracle_joint_survival_ise": "parent_oracle_joint_survival_ise",
+        })
+        paired = paired.merge(
+            parent, on=cell + ["comparison_parent"], how="left",
+            validate="many_to_one",
+        )
+        for metric in (
+            "oracle_ibs", "oracle_ci", "oracle_mae",
+            "oracle_joint_survival_ise",
+        ):
+            paired[f"delta_{metric}_vs_parent"] = (
+                paired[metric] - paired[f"parent_{metric}"]
+            )
     paired.to_csv(out_dir / "hyperparameter_paired_deltas.csv", index=False)
 
 
@@ -516,12 +540,16 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                 fit_context = {
                     **base, "model": "dvfm", "latent_dim": int(latent_dim),
                     "hyperparameter_variant": str(settings["name"]),
+                    "comparison_parent": str(settings.get("comparison_parent", "reference")),
                     "epochs": int(settings["epochs"]),
                     "batch_size": int(settings["batch_size"]),
                     "dropout": float(settings.get("dropout", 0.0)),
                     "weight_decay": float(settings.get("weight_decay", 0.0)),
                     "encoder_hidden": "-".join(map(str, settings.get("encoder_hidden", [64, 32]))),
                     "decoder_hidden": "-".join(map(str, settings.get("decoder_hidden", [32, 64]))),
+                    "scale_link": str(settings.get("scale_link", "softplus")),
+                    "latent_path": str(settings.get("latent_path", "nonlinear")),
+                    "shape_mode": str(settings.get("shape_mode", "conditional")),
                 }
                 try:
                     _seed(int(model_seed))
@@ -539,6 +567,9 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         encoder_hidden=list(settings.get("encoder_hidden", [64, 32])),
                         decoder_hidden=list(settings.get("decoder_hidden", [32, 64])),
                         dropout=float(settings.get("dropout", 0.0)),
+                        scale_link=str(settings.get("scale_link", "softplus")),
+                        latent_path=str(settings.get("latent_path", "nonlinear")),
+                        shape_mode=str(settings.get("shape_mode", "conditional")),
                     ).to(device)
                     artifacts = train_dvfm(
                         model, train_loader, validation_loader,

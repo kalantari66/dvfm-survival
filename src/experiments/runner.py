@@ -148,7 +148,16 @@ def _fit_one_split(
             batch_size=int(c["batch_size"]),
             shuffle=False,
         )
-        model = DVFM(input_dim=train.X.shape[1], latent_dim=int(c["latent_dim"])).to(device)
+        model = DVFM(
+            input_dim=train.X.shape[1],
+            latent_dim=int(c["latent_dim"]),
+            encoder_hidden=list(c.get("encoder_hidden", [64, 32])),
+            decoder_hidden=list(c.get("decoder_hidden", [32, 64])),
+            dropout=float(c.get("dropout", 0.0)),
+            scale_link=str(c.get("scale_link", "softplus")),
+            latent_path=str(c.get("latent_path", "nonlinear")),
+            shape_mode=str(c.get("shape_mode", "conditional")),
+        ).to(device)
         train_dvfm(
             model,
             train_loader,
@@ -347,8 +356,10 @@ def run(cfg: dict) -> pd.DataFrame:
         for c in ("Study", "Stage", "Dataset", "Scenario", "Copula", "Dependence", "Theta", "Model",
                   "study", "scenario", "n_samples", "target_kendall_tau", "target_censoring_rate",
                   "mechanism", "model", "latent_dim", "hyperparameter_variant",
+                  "comparison_parent",
                   "epochs", "batch_size", "dropout", "weight_decay", "encoder_hidden",
-                  "decoder_hidden", "checkpoint", "is_primary_checkpoint", "prediction_mode",
+                  "decoder_hidden", "scale_link", "latent_path", "shape_mode",
+                  "checkpoint", "is_primary_checkpoint", "prediction_mode",
                   "partition")
         if c in results and not results[c].isna().all()
     ]
