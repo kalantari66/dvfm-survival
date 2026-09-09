@@ -153,6 +153,50 @@ def test_dvfm_supports_dropout_and_adam_weight_decay():
     assert artifacts["best_validation_elbo_epoch"] in {1, 2}
 
 
+def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
+    torch.manual_seed(27)
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_gate="hard_concrete",
+        gate_initial_value=0.9, gate_temperature=0.67,
+    )
+    model.eval()
+    initial_gate = float(model.decoder.gate_value().detach())
+    assert abs(initial_gate - 0.9) < 1e-5
+    penalty, loading, gate = model.regularization_terms(
+        latent_loading_l1=0.01, gate_l1=0.01
+    )
+    assert penalty.requires_grad
+    assert loading > 0
+    assert 0 < gate < 1
+
+    # A closed deterministic gate makes the decoder invariant to z.
+    with torch.no_grad():
+        model.decoder.gate_log_alpha.fill_(-20.0)
+    x = torch.randn(12, 3)
+    first = model.decoder(x, torch.zeros(12, 1))
+    second = model.decoder(x, torch.ones(12, 1) * 10.0)
+    assert float(model.decoder.gate_value().detach()) == 0.0
+    for left, right in zip(first, second):
+        assert torch.allclose(left, right)
+
+    loader = DataLoader(
+        SurvivalDataset(x.numpy(), np.linspace(0.2, 2.0, 12), np.arange(12) % 2),
+        batch_size=6, shuffle=False,
+    )
+    with torch.no_grad():
+        model.decoder.gate_log_alpha.fill_(0.0)
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=1, warmup_epochs=1,
+        checkpoint_min_epoch=1, return_artifacts=True,
+        latent_loading_l1=0.01, gate_l1=0.01,
+    )
+    history = artifacts["history"][0]
+    assert np.isfinite(history["latent_loading_l1_magnitude"])
+    assert 0.0 <= history["learned_gate"] <= 1.0
+    assert isinstance(history["gate_is_open"], bool)
+
+
 def test_dvfm_decoder_calibration_variants_are_finite_and_structured():
     torch.manual_seed(29)
     x = torch.randn(24, 3)

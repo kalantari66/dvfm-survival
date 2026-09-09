@@ -48,6 +48,9 @@ dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
 # Focused one-change decoder calibration ablation
 dvfm-run --config configs/synthetic_dependence_calibration.yaml --validate-only
 
+# Shared-loading shrinkage and hard-concrete gate ablation
+dvfm-run --config configs/synthetic_latent_regularization.yaml --validate-only
+
 # Short HACSurv-2D integration check
 dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
 
@@ -85,6 +88,13 @@ The dependence-calibration ablation also runs as one target:
 ```bash
 gwf -f workflows/dependence_calibration/workflow.py status
 gwf -f workflows/dependence_calibration/workflow.py run
+```
+
+The latent shrinkage/gating ablation also runs as one target:
+
+```bash
+gwf -f workflows/latent_regularization/workflow.py status
+gwf -f workflows/latent_regularization/workflow.py run
 ```
 
 The focused HACSurv feasibility run is also one GWF target:

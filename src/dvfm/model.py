@@ -28,7 +28,9 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, input_dim, latent_dim, hidden_dims=(32, 64), dropout=0.0,
                  scale_link="softplus", latent_path="nonlinear",
-                 shape_mode="conditional"):
+                 shape_mode="conditional", latent_gate="none",
+                 gate_initial_value=0.9, gate_temperature=0.67,
+                 gate_stretch=(-0.1, 1.1)):
         super().__init__()
         if scale_link not in {"softplus", "exp"}:
             raise ValueError("scale_link must be 'softplus' or 'exp'")
@@ -36,9 +38,33 @@ class Decoder(nn.Module):
             raise ValueError("latent_path must be 'nonlinear' or 'additive_scale'")
         if shape_mode not in {"conditional", "global"}:
             raise ValueError("shape_mode must be 'conditional' or 'global'")
+        if latent_gate not in {"none", "hard_concrete"}:
+            raise ValueError("latent_gate must be 'none' or 'hard_concrete'")
+        if not 0.0 < float(gate_initial_value) < 1.0:
+            raise ValueError("gate_initial_value must be in (0, 1)")
+        if float(gate_temperature) <= 0.0:
+            raise ValueError("gate_temperature must be positive")
         self.scale_link = scale_link
         self.latent_path = latent_path
         self.shape_mode = shape_mode
+        self.input_dim = int(input_dim)
+        self.latent_dim = int(latent_dim)
+        self.latent_gate = latent_gate
+        self.gate_temperature = float(gate_temperature)
+        self.gate_lower, self.gate_upper = map(float, gate_stretch)
+        if not self.gate_lower < 0.0 < 1.0 < self.gate_upper:
+            raise ValueError("gate_stretch must extend below 0 and above 1")
+        if latent_gate == "hard_concrete" and latent_dim > 0:
+            stretched = (float(gate_initial_value) - self.gate_lower) / (
+                self.gate_upper - self.gate_lower
+            )
+            stretched = min(max(stretched, 1e-6), 1.0 - 1e-6)
+            initial_log_alpha = self.gate_temperature * torch.logit(
+                torch.tensor(stretched)
+            )
+            self.gate_log_alpha = nn.Parameter(initial_log_alpha)
+        else:
+            self.register_parameter("gate_log_alpha", None)
         layers = []
         previous = input_dim + latent_dim if latent_path == "nonlinear" else input_dim
         for width in hidden_dims:
@@ -66,7 +92,33 @@ class Decoder(nn.Module):
             return torch.exp(value.clamp(min=-12.0, max=12.0)) + 1e-6
         return nn.functional.softplus(value) + 1e-6
 
+    def gate_value(self, stochastic=False):
+        """Return the single shared latent gate, including hard clamping."""
+        if self.latent_dim == 0:
+            return self.fc_params.weight.new_tensor(0.0)
+        if self.gate_log_alpha is None:
+            return self.fc_params.weight.new_tensor(1.0)
+        logit = self.gate_log_alpha
+        if stochastic:
+            uniform = torch.rand((), device=logit.device, dtype=logit.dtype)
+            uniform = uniform.clamp(1e-6, 1.0 - 1e-6)
+            logit = logit + torch.log(uniform) - torch.log1p(-uniform)
+        soft = torch.sigmoid(logit / self.gate_temperature)
+        stretched = soft * (self.gate_upper - self.gate_lower) + self.gate_lower
+        return stretched.clamp(0.0, 1.0)
+
+    def latent_loading_l1(self):
+        """L1 magnitude of decoder weights carrying z into both margin heads."""
+        if self.latent_dim == 0:
+            return self.fc_params.weight.new_tensor(0.0)
+        if self.latent_scale_loadings is not None:
+            return self.latent_scale_loadings.abs().mean()
+        first_linear = next(layer for layer in self.network if isinstance(layer, nn.Linear))
+        return first_linear.weight[:, self.input_dim:].abs().mean()
+
     def forward(self, x, z):
+        if self.latent_dim > 0:
+            z = z * self.gate_value(stochastic=self.training)
         decoder_input = torch.cat((x, z), dim=1) if self.latent_path == "nonlinear" else x
         parameters = self.fc_params(self.network(decoder_input))
         event_scale_raw = parameters[:, 1]
@@ -95,7 +147,8 @@ class DVFM(nn.Module):
                  decoder_hidden=(32, 64), dropout=0.0,
                  encoder_dropout=None, decoder_dropout=None,
                  scale_link="softplus", latent_path="nonlinear",
-                 shape_mode="conditional"):
+                 shape_mode="conditional", latent_gate="none",
+                 gate_initial_value=0.9, gate_temperature=0.67):
         super().__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
@@ -108,8 +161,17 @@ class DVFM(nn.Module):
             input_dim, latent_dim, decoder_hidden, decoder_dropout,
             scale_link=scale_link, latent_path=latent_path,
             shape_mode=shape_mode,
+            latent_gate=latent_gate, gate_initial_value=gate_initial_value,
+            gate_temperature=gate_temperature,
         )
         self.latent_dim = latent_dim
+
+    def regularization_terms(self, latent_loading_l1=0.0, gate_l1=0.0):
+        """Return differentiable L1 penalties and their unweighted diagnostics."""
+        loading = self.decoder.latent_loading_l1()
+        gate = self.decoder.gate_value(stochastic=False)
+        penalty = float(latent_loading_l1) * loading + float(gate_l1) * gate.abs()
+        return penalty, loading, gate
 
     @staticmethod
     def reparameterize(mu, logvar):

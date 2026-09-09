@@ -21,6 +21,8 @@ def train_dvfm(
     return_artifacts=False,
     numerical_failure_threshold=None,
     weight_decay=0.0,
+    latent_loading_l1=0.0,
+    gate_l1=0.0,
 ):
     """Train DVFM for fixed epochs and retain the best eligible validation ELBO."""
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
@@ -37,14 +39,19 @@ def train_dvfm(
         beta = min(beta_max, (epoch + 1) / warmup_epochs) if warmup_epochs > 0 else beta_max
         model.train()
         train_loss = train_recon = train_kl = 0.0
+        train_regularization = train_objective = 0.0
         for x, time, event in train_loader:
             x, time, event = x.to(device), time.to(device), event.to(device)
             optimizer.zero_grad()
             outputs = model(x, time, event)
             loss, recon, kl = model.loss_function(*outputs, time, event, beta, free_bits)
-            if not torch.isfinite(loss):
+            regularization, _, _ = model.regularization_terms(
+                latent_loading_l1=latent_loading_l1, gate_l1=gate_l1
+            )
+            objective = loss + regularization
+            if not torch.isfinite(objective):
                 raise FloatingPointError(f"Non-finite DVFM training loss at epoch {epoch + 1}")
-            loss.backward()
+            objective.backward()
             gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             if not torch.isfinite(gradient_norm):
                 raise FloatingPointError(f"Non-finite DVFM gradient norm at epoch {epoch + 1}")
@@ -52,10 +59,14 @@ def train_dvfm(
             train_loss += loss.item()
             train_recon += recon.item()
             train_kl += kl.item()
+            train_regularization += regularization.item()
+            train_objective += objective.item()
 
         train_loss /= len(train_loader)
         train_recon /= len(train_loader)
         train_kl /= len(train_loader)
+        train_regularization /= len(train_loader)
+        train_objective /= len(train_loader)
         train_losses.append(train_loss)
 
         model.eval()
@@ -71,10 +82,19 @@ def train_dvfm(
         val_loss /= len(val_loader)
         val_recon /= len(val_loader)
         val_kl /= len(val_loader)
+        with torch.no_grad():
+            validation_regularization, loading_magnitude, learned_gate = (
+                model.regularization_terms(
+                    latent_loading_l1=latent_loading_l1, gate_l1=gate_l1
+                )
+            )
+        validation_objective = val_loss + float(validation_regularization.item())
         val_losses.append(val_loss)
 
         monitored = np.asarray(
-            [train_loss, train_recon, train_kl, val_loss, val_recon, val_kl], dtype=float
+            [train_loss, train_recon, train_kl, train_objective,
+             val_loss, val_recon, val_kl, validation_objective,
+             loading_magnitude.item(), learned_gate.item()], dtype=float
         )
         numerical_valid = bool(np.all(np.isfinite(monitored)))
         if numerical_valid and numerical_failure_threshold is not None:
@@ -92,9 +112,16 @@ def train_dvfm(
                 "train_loss": train_loss,
                 "train_reconstruction": train_recon,
                 "train_kl": train_kl,
+                "train_regularization": train_regularization,
+                "train_objective": train_objective,
                 "validation_loss": val_loss,
                 "validation_reconstruction": val_recon,
                 "validation_kl": val_kl,
+                "validation_regularization": float(validation_regularization.item()),
+                "validation_objective": validation_objective,
+                "latent_loading_l1_magnitude": float(loading_magnitude.item()),
+                "learned_gate": float(learned_gate.item()),
+                "gate_is_open": bool(learned_gate.item() >= 0.5),
                 "numerical_valid": numerical_valid,
             }
         )

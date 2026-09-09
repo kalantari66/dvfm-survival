@@ -637,6 +637,11 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     "scale_link": str(settings.get("scale_link", "softplus")),
                     "latent_path": str(settings.get("latent_path", "nonlinear")),
                     "shape_mode": str(settings.get("shape_mode", "conditional")),
+                    "latent_loading_l1": float(settings.get("latent_loading_l1", 0.0)),
+                    "latent_gate": str(settings.get("latent_gate", "none")),
+                    "gate_l1": float(settings.get("gate_l1", 0.0)),
+                    "gate_initial_value": float(settings.get("gate_initial_value", 0.9)),
+                    "gate_temperature": float(settings.get("gate_temperature", 0.67)),
                 }
                 try:
                     _seed(int(model_seed))
@@ -657,6 +662,9 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         scale_link=str(settings.get("scale_link", "softplus")),
                         latent_path=str(settings.get("latent_path", "nonlinear")),
                         shape_mode=str(settings.get("shape_mode", "conditional")),
+                        latent_gate=str(settings.get("latent_gate", "none")),
+                        gate_initial_value=float(settings.get("gate_initial_value", 0.9)),
+                        gate_temperature=float(settings.get("gate_temperature", 0.67)),
                     ).to(device)
                     artifacts = train_dvfm(
                         model, train_loader, validation_loader,
@@ -669,6 +677,8 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                             settings["numerical_failure_threshold"]
                         ),
                         weight_decay=float(settings.get("weight_decay", 0.0)),
+                        latent_loading_l1=float(settings.get("latent_loading_l1", 0.0)),
+                        gate_l1=float(settings.get("gate_l1", 0.0)),
                         return_artifacts=True,
                     )
                     histories.extend([{
@@ -722,6 +732,17 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                 "learned_conditional_kendall_tau": learned_tau,
                                 "conditional_kendall_tau_error": learned_tau - float(scenario["kendall_tau"]),
                                 "absolute_conditional_kendall_tau_error": abs(learned_tau - float(scenario["kendall_tau"])),
+                                "learned_gate": float(
+                                    model.decoder.gate_value(stochastic=False).detach().cpu()
+                                ),
+                                "gate_is_open": bool(
+                                    model.decoder.gate_value(
+                                        stochastic=False
+                                    ).detach().cpu().item() >= 0.5
+                                ),
+                                "latent_loading_l1_magnitude": float(
+                                    model.decoder.latent_loading_l1().detach().cpu()
+                                ),
                             }
                             if is_primary and joint_evaluation is not None:
                                 joint_prediction = predict_dvfm_joint_survival(

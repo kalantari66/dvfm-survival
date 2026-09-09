@@ -140,6 +140,29 @@ def test_dependence_calibration_is_a_paired_sequential_ablation():
     assert variants[3]["shape_mode"] == "global"
 
 
+def test_latent_regularization_ablation_has_prespecified_l1_sensitivity():
+    cfg = load_config(ROOT / "configs" / "synthetic_latent_regularization.yaml")
+    variants = cfg["models"]["dvfm"]["variants"]
+    assert [item["name"] for item in variants] == [
+        "reference",
+        "shared_loading_l1_0.001", "shared_loading_l1_0.01",
+        "shared_loading_l1_0.1", "hard_concrete_gate_l1_0.001",
+        "hard_concrete_gate_l1_0.01", "hard_concrete_gate_l1_0.1",
+    ]
+    assert cfg["models"]["dvfm"]["scale_link"] == "exp"
+    assert cfg["models"]["dvfm"]["latent_dims"] == [1]
+    loading_variants = variants[1:4]
+    gate_variants = variants[4:]
+    assert [item["latent_loading_l1"] for item in loading_variants] == [
+        0.001, 0.01, 0.1,
+    ]
+    assert [item["gate_l1"] for item in gate_variants] == [0.001, 0.01, 0.1]
+    assert all(item["comparison_parent"] == "reference" for item in variants[1:])
+    assert all(item["latent_gate"] == "hard_concrete" for item in gate_variants)
+    assert len(expand_scenarios(cfg["data"])) == 4
+    assert len(cfg["seeds"]["sampling"]) == 5
+
+
 def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     cfg = load_config(ROOT / "configs" / "hacsurv_synthetic_pilot.yaml")
     assert cfg["models"]["enabled"] == ["hacsurv_2d"]

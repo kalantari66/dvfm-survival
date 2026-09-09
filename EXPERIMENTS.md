@@ -148,6 +148,29 @@ gwf -f workflows/dependence_calibration/workflow.py status
 gwf -f workflows/dependence_calibration/workflow.py run
 ```
 
+### Shared-latent shrinkage and gate ablation
+
+`configs/synthetic_latent_regularization.yaml` tests whether DVFM can stop
+using the shared latent under independence without losing recovery under
+dependence. At 25% censoring it repeats the
+`kendall_tau = {0, 0.25, 0.50, 0.75}` curve with five fresh paired seeds and
+seven paired variants: the exponential-link reference; loading shrinkage at
+`lambda = {0.001, 0.01, 0.1}` on decoder weights carrying the latent into both
+margin heads; and a stochastic hard-concrete gate with L1 penalty
+`lambda = {0.001, 0.01, 0.1}`. Loading and gating are tested separately, and
+every regularized variant is compared directly with the same reference.
+
+For every epoch and selected checkpoint, report `learned_gate`,
+`gate_is_open`, and `latent_loading_l1_magnitude` alongside learned Kendall's
+tau, joint-survival ISE, frailty recovery, and prediction. These coefficients
+are prespecified for this diagnostic and are not automatically transferred to
+semi-synthetic or real-data experiments.
+
+```bash
+gwf -f workflows/latent_regularization/workflow.py status
+gwf -f workflows/latent_regularization/workflow.py run
+```
+
 ### HACSurv-2D feasibility baseline
 
 HACSurv's bivariate single-event model is included as `hacsurv_2d` with

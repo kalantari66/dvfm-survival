@@ -1,0 +1,98 @@
+schema_version: 1
+workflow: {target_name: dvfm_synthetic_latent_regularization}
+resources: {cores: 4, memory: 25g, walltime: "06:00:00", partition: gpu-h200, account: c2i-colon}
+
+study:
+  name: synthetic-latent-regularization
+  stage: model-ablation
+  output_dir: results/synthetic-latent-regularization
+
+# Fresh paired seeds. Each variant receives the same cohort and split.
+seeds:
+  dgp: 2026
+  sampling: [30, 31, 32, 33, 34]
+  split: [130, 131, 132, 133, 134]
+  model: [230, 231, 232, 233, 234]
+
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 10000
+  n_features: 10
+  calibration_samples: 50000
+  # Focus on the complete calibration curve at the censoring level where the
+  # independence and strong-dependence failures were diagnosed.
+  scenarios:
+    - {name: gaussian_c25_tau_0, kendall_tau: 0.00, censoring_rate: 0.25}
+    - {name: gaussian_c25_tau_025, kendall_tau: 0.25, censoring_rate: 0.25}
+    - {name: gaussian_c25_tau_050, kendall_tau: 0.50, censoring_rate: 0.25}
+    - {name: gaussian_c25_tau_075, kendall_tau: 0.75, censoring_rate: 0.25}
+
+split: {strategy: holdout, validation_fraction: 0.10, test_fraction: 0.20}
+preprocessing: {zscore_x: false}
+
+models:
+  enabled: [dvfm]
+  dvfm:
+    latent_dims: [1]
+    encoder_hidden: [64, 32]
+    decoder_hidden: [32, 64]
+    epochs: 200
+    learning_rate: 0.001
+    batch_size: 64
+    dropout: 0.0
+    weight_decay: 0.0001
+    beta_max: 1.0
+    warmup_epochs: 50
+    checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    free_bits: 0.0
+    mc_samples: 100
+    scale_link: exp
+    latent_path: nonlinear
+    shape_mode: conditional
+    latent_loading_l1: 0.0
+    latent_gate: none
+    gate_l1: 0.0
+    gate_initial_value: 0.90
+    gate_temperature: 0.67
+
+    # Prespecified sensitivity analysis. Loading and gate regularization are
+    # tested separately so every variant differs from the reference in only
+    # one mechanism. Do not select lambda using oracle test outcomes.
+    variants:
+      - {name: reference, comparison_parent: reference}
+      - {name: shared_loading_l1_0.001, comparison_parent: reference, latent_loading_l1: 0.001}
+      - {name: shared_loading_l1_0.01, comparison_parent: reference, latent_loading_l1: 0.01}
+      - {name: shared_loading_l1_0.1, comparison_parent: reference, latent_loading_l1: 0.1}
+      - {name: hard_concrete_gate_l1_0.001, comparison_parent: reference, latent_gate: hard_concrete, gate_l1: 0.001}
+      - {name: hard_concrete_gate_l1_0.01, comparison_parent: reference, latent_gate: hard_concrete, gate_l1: 0.01}
+      - {name: hard_concrete_gate_l1_0.1, comparison_parent: reference, latent_gate: hard_concrete, gate_l1: 0.1}
+
+hyperparameter_sweep:
+  reference_variant: reference
+  selection_partition: validation
+  selection_prediction_mode: prior
+  primary_selection_metric: oracle_ibs
+  secondary_selection_metric: oracle_ci
+  frailty_spearman_tolerance: 0.03
+
+evaluation:
+  n_time_points: 200
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
+  prediction_modes: [prior]
+  evaluate_partitions: [validation, test]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 5000
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 15
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 128
+  joint_dgp_samples: 2000
+  joint_model_samples: 500
+  joint_model_batch_size: 32

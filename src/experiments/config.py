@@ -233,6 +233,21 @@ def validate_config(cfg: dict) -> None:
                         raise ValueError(
                             "DVFM variant shape_mode must be conditional or global"
                         )
+                    if float(resolved.get("latent_loading_l1", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant latent_loading_l1 cannot be negative")
+                    if float(resolved.get("gate_l1", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant gate_l1 cannot be negative")
+                    latent_gate = resolved.get("latent_gate", "none")
+                    if latent_gate not in {"none", "hard_concrete"}:
+                        raise ValueError(
+                            "DVFM variant latent_gate must be none or hard_concrete"
+                        )
+                    if float(resolved.get("gate_l1", 0.0)) > 0.0 and latent_gate == "none":
+                        raise ValueError("DVFM gate_l1 requires latent_gate: hard_concrete")
+                    if not 0.0 < float(resolved.get("gate_initial_value", 0.9)) < 1.0:
+                        raise ValueError("DVFM variant gate_initial_value must be in (0, 1)")
+                    if float(resolved.get("gate_temperature", 0.67)) <= 0.0:
+                        raise ValueError("DVFM variant gate_temperature must be positive")
                     for key in ("encoder_hidden", "decoder_hidden"):
                         widths = resolved.get(key, [])
                         if not widths or any(int(width) < 1 for width in widths):
@@ -396,9 +411,16 @@ def validate_config(cfg: dict) -> None:
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")
     if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
-        scale_link = str(cfg["models"]["dvfm"].get("scale_link", "softplus"))
+        dvfm = cfg["models"]["dvfm"]
+        scale_link = str(dvfm.get("scale_link", "softplus"))
         if scale_link not in {"softplus", "exp"}:
             raise ValueError("models.dvfm.scale_link must be softplus or exp")
+        if float(dvfm.get("latent_loading_l1", 0.0)) < 0.0:
+            raise ValueError("models.dvfm.latent_loading_l1 cannot be negative")
+        if float(dvfm.get("gate_l1", 0.0)) < 0.0:
+            raise ValueError("models.dvfm.gate_l1 cannot be negative")
+        if str(dvfm.get("latent_gate", "none")) not in {"none", "hard_concrete"}:
+            raise ValueError("models.dvfm.latent_gate must be none or hard_concrete")
     if cfg["evaluation"].get("compute_oracle_joint_survival_ise", False):
         for key in (
             "joint_n_time_points", "joint_n_subjects", "joint_dgp_samples",

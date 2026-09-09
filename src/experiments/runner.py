@@ -173,6 +173,9 @@ def _fit_one_split(
             scale_link=str(c.get("scale_link", "softplus")),
             latent_path=str(c.get("latent_path", "nonlinear")),
             shape_mode=str(c.get("shape_mode", "conditional")),
+            latent_gate=str(c.get("latent_gate", "none")),
+            gate_initial_value=float(c.get("gate_initial_value", 0.9)),
+            gate_temperature=float(c.get("gate_temperature", 0.67)),
         ).to(device)
         artifacts = train_dvfm(
             model,
@@ -187,6 +190,8 @@ def _fit_one_split(
             checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
             numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
             weight_decay=float(c.get("weight_decay", 0.0)),
+            latent_loading_l1=float(c.get("latent_loading_l1", 0.0)),
+            gate_l1=float(c.get("gate_l1", 0.0)),
             return_artifacts=True,
         )
         checkpoint = str(c.get("primary_checkpoint", "best_validation_elbo_post_warmup"))
@@ -203,7 +208,19 @@ def _fit_one_split(
             device=device,
         )
         median = get_median_survival_time(survival, time_points)
-        predictions["DVFM"] = {"median": median, "survival": survival}
+        predictions["DVFM"] = {
+            "median": median,
+            "survival": survival,
+            "learned_gate": float(
+                model.decoder.gate_value(stochastic=False).detach().cpu()
+            ),
+            "gate_is_open": bool(
+                model.decoder.gate_value(stochastic=False).detach().cpu().item() >= 0.5
+            ),
+            "latent_loading_l1_magnitude": float(
+                model.decoder.latent_loading_l1().detach().cpu()
+            ),
+        }
 
     metadata = dict(context)
     metadata.update(
@@ -244,6 +261,10 @@ def _fit_one_split(
         prefix = f"{name} "
         clean_metrics = {key.removeprefix(prefix): value for key, value in metrics.items()}
         row.update(clean_metrics)
+        row.update({
+            key: value for key, value in pred.items()
+            if key not in {"median", "survival"}
+        })
         rows.append(row)
         tau = clean_metrics.get("evaluation_time_horizon", tau)
 
@@ -448,6 +469,8 @@ def run(cfg: dict) -> pd.DataFrame:
                   "comparison_parent",
                   "epochs", "batch_size", "dropout", "weight_decay", "encoder_hidden",
                   "decoder_hidden", "scale_link", "latent_path", "shape_mode",
+                  "latent_loading_l1", "latent_gate", "gate_l1",
+                  "gate_initial_value", "gate_temperature",
                   "checkpoint", "is_primary_checkpoint", "prediction_mode",
                   "partition")
         if c in results and not results[c].isna().all()
