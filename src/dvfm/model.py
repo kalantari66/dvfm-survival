@@ -38,8 +38,8 @@ class Decoder(nn.Module):
             raise ValueError("latent_path must be 'nonlinear' or 'additive_scale'")
         if shape_mode not in {"conditional", "global"}:
             raise ValueError("shape_mode must be 'conditional' or 'global'")
-        if latent_gate not in {"none", "hard_concrete"}:
-            raise ValueError("latent_gate must be 'none' or 'hard_concrete'")
+        if latent_gate not in {"none", "hard_concrete", "sigmoid"}:
+            raise ValueError("latent_gate must be 'none', 'hard_concrete', or 'sigmoid'")
         if not 0.0 < float(gate_initial_value) < 1.0:
             raise ValueError("gate_initial_value must be in (0, 1)")
         if float(gate_temperature) <= 0.0:
@@ -54,14 +54,19 @@ class Decoder(nn.Module):
         self.gate_lower, self.gate_upper = map(float, gate_stretch)
         if not self.gate_lower < 0.0 < 1.0 < self.gate_upper:
             raise ValueError("gate_stretch must extend below 0 and above 1")
-        if latent_gate == "hard_concrete" and latent_dim > 0:
-            stretched = (float(gate_initial_value) - self.gate_lower) / (
-                self.gate_upper - self.gate_lower
-            )
-            stretched = min(max(stretched, 1e-6), 1.0 - 1e-6)
-            initial_log_alpha = self.gate_temperature * torch.logit(
-                torch.tensor(stretched)
-            )
+        if latent_gate != "none" and latent_dim > 0:
+            if latent_gate == "hard_concrete":
+                initial = (float(gate_initial_value) - self.gate_lower) / (
+                    self.gate_upper - self.gate_lower
+                )
+                initial = min(max(initial, 1e-6), 1.0 - 1e-6)
+                initial_log_alpha = self.gate_temperature * torch.logit(
+                    torch.tensor(initial)
+                )
+            else:
+                initial_log_alpha = torch.logit(
+                    torch.tensor(float(gate_initial_value))
+                )
             self.gate_log_alpha = nn.Parameter(initial_log_alpha)
         else:
             self.register_parameter("gate_log_alpha", None)
@@ -98,6 +103,8 @@ class Decoder(nn.Module):
             return self.fc_params.weight.new_tensor(0.0)
         if self.gate_log_alpha is None:
             return self.fc_params.weight.new_tensor(1.0)
+        if self.latent_gate == "sigmoid":
+            return torch.sigmoid(self.gate_log_alpha)
         logit = self.gate_log_alpha
         if stochastic:
             uniform = torch.rand((), device=logit.device, dtype=logit.dtype)
@@ -115,6 +122,19 @@ class Decoder(nn.Module):
             return self.latent_scale_loadings.abs().mean()
         first_linear = next(layer for layer in self.network if isinstance(layer, nn.Linear))
         return first_linear.weight[:, self.input_dim:].abs().mean()
+
+    def latent_loading_group_norm(self):
+        """Dimension-normalized group norm for the complete latent-input block."""
+        if self.latent_dim == 0:
+            return self.fc_params.weight.new_tensor(0.0)
+        if self.latent_scale_loadings is not None:
+            weights = self.latent_scale_loadings
+        else:
+            first_linear = next(
+                layer for layer in self.network if isinstance(layer, nn.Linear)
+            )
+            weights = first_linear.weight[:, self.input_dim:]
+        return weights.square().mean().sqrt()
 
     def forward(self, x, z):
         if self.latent_dim > 0:
@@ -166,12 +186,19 @@ class DVFM(nn.Module):
         )
         self.latent_dim = latent_dim
 
-    def regularization_terms(self, latent_loading_l1=0.0, gate_l1=0.0):
+    def regularization_terms(
+        self, latent_loading_l1=0.0, latent_group_lasso=0.0, gate_l1=0.0
+    ):
         """Return differentiable L1 penalties and their unweighted diagnostics."""
         loading = self.decoder.latent_loading_l1()
+        group_norm = self.decoder.latent_loading_group_norm()
         gate = self.decoder.gate_value(stochastic=False)
-        penalty = float(latent_loading_l1) * loading + float(gate_l1) * gate.abs()
-        return penalty, loading, gate
+        penalty = (
+            float(latent_loading_l1) * loading
+            + float(latent_group_lasso) * group_norm
+            + float(gate_l1) * gate.abs()
+        )
+        return penalty, loading, group_norm, gate
 
     @staticmethod
     def reparameterize(mu, logvar):

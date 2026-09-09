@@ -638,6 +638,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     "latent_path": str(settings.get("latent_path", "nonlinear")),
                     "shape_mode": str(settings.get("shape_mode", "conditional")),
                     "latent_loading_l1": float(settings.get("latent_loading_l1", 0.0)),
+                    "latent_group_lasso": float(settings.get("latent_group_lasso", 0.0)),
                     "latent_gate": str(settings.get("latent_gate", "none")),
                     "gate_l1": float(settings.get("gate_l1", 0.0)),
                     "gate_initial_value": float(settings.get("gate_initial_value", 0.9)),
@@ -678,6 +679,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         ),
                         weight_decay=float(settings.get("weight_decay", 0.0)),
                         latent_loading_l1=float(settings.get("latent_loading_l1", 0.0)),
+                        latent_group_lasso=float(settings.get("latent_group_lasso", 0.0)),
                         gate_l1=float(settings.get("gate_l1", 0.0)),
                         return_artifacts=True,
                     )
@@ -742,6 +744,9 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                 ),
                                 "latent_loading_l1_magnitude": float(
                                     model.decoder.latent_loading_l1().detach().cpu()
+                                ),
+                                "latent_loading_group_norm": float(
+                                    model.decoder.latent_loading_group_norm().detach().cpu()
                                 ),
                             }
                             if is_primary and joint_evaluation is not None:

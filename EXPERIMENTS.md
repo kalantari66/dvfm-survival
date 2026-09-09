@@ -171,6 +171,21 @@ gwf -f workflows/latent_regularization/workflow.py status
 gwf -f workflows/latent_regularization/workflow.py run
 ```
 
+`configs/synthetic_latent_regularization2.yaml` retains the completed run above
+and tests three more surgical interventions: a smooth sigmoid gate with L1, a
+dimension-normalized group-lasso penalty on the entire decoder latent-input
+weight block, and their combination. It reuses the original experiment's full
+`kendall_tau = {0, 0.25, 0.50, 0.75}` curve and the same five sampling, split,
+and model seeds, with one fixed coefficient `lambda = 0.1`, for 80 new fits.
+This makes every new result paired directly with the completed regularization
+experiment. The smooth gate is never clamped during training, so its L1
+gradient remains available near both endpoints.
+
+```bash
+gwf -f workflows/latent_regularization2/workflow.py status
+gwf -f workflows/latent_regularization2/workflow.py run
+```
+
 ### HACSurv-2D feasibility baseline
 
 HACSurv's bivariate single-event model is included as `hacsurv_2d` with

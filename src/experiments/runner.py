@@ -191,6 +191,7 @@ def _fit_one_split(
             numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
             weight_decay=float(c.get("weight_decay", 0.0)),
             latent_loading_l1=float(c.get("latent_loading_l1", 0.0)),
+            latent_group_lasso=float(c.get("latent_group_lasso", 0.0)),
             gate_l1=float(c.get("gate_l1", 0.0)),
             return_artifacts=True,
         )
@@ -219,6 +220,9 @@ def _fit_one_split(
             ),
             "latent_loading_l1_magnitude": float(
                 model.decoder.latent_loading_l1().detach().cpu()
+            ),
+            "latent_loading_group_norm": float(
+                model.decoder.latent_loading_group_norm().detach().cpu()
             ),
         }
 
@@ -469,7 +473,7 @@ def run(cfg: dict) -> pd.DataFrame:
                   "comparison_parent",
                   "epochs", "batch_size", "dropout", "weight_decay", "encoder_hidden",
                   "decoder_hidden", "scale_link", "latent_path", "shape_mode",
-                  "latent_loading_l1", "latent_gate", "gate_l1",
+                  "latent_loading_l1", "latent_group_lasso", "latent_gate", "gate_l1",
                   "gate_initial_value", "gate_temperature",
                   "checkpoint", "is_primary_checkpoint", "prediction_mode",
                   "partition")

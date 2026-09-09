@@ -163,11 +163,12 @@ def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
     model.eval()
     initial_gate = float(model.decoder.gate_value().detach())
     assert abs(initial_gate - 0.9) < 1e-5
-    penalty, loading, gate = model.regularization_terms(
+    penalty, loading, group_norm, gate = model.regularization_terms(
         latent_loading_l1=0.01, gate_l1=0.01
     )
     assert penalty.requires_grad
     assert loading > 0
+    assert group_norm > 0
     assert 0 < gate < 1
 
     # A closed deterministic gate makes the decoder invariant to z.
@@ -195,6 +196,30 @@ def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
     assert np.isfinite(history["latent_loading_l1_magnitude"])
     assert 0.0 <= history["learned_gate"] <= 1.0
     assert isinstance(history["gate_is_open"], bool)
+
+
+def test_dvfm_smooth_gate_and_group_lasso_have_gradients():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_gate="sigmoid", gate_initial_value=0.9,
+    )
+    model.train()
+    gate = model.decoder.gate_value()
+    assert abs(float(gate.detach()) - 0.9) < 1e-5
+    penalty, _, group_norm, reported_gate = model.regularization_terms(
+        latent_group_lasso=0.1, gate_l1=0.1
+    )
+    penalty.backward()
+    assert group_norm > 0
+    assert 0 < reported_gate < 1
+    assert model.decoder.gate_log_alpha.grad is not None
+    assert torch.isfinite(model.decoder.gate_log_alpha.grad)
+    first_linear = next(
+        layer for layer in model.decoder.network
+        if isinstance(layer, torch.nn.Linear)
+    )
+    assert first_linear.weight.grad is not None
+    assert torch.isfinite(first_linear.weight.grad).all()
 
 
 def test_dvfm_decoder_calibration_variants_are_finite_and_structured():

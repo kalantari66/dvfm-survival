@@ -22,6 +22,7 @@ def train_dvfm(
     numerical_failure_threshold=None,
     weight_decay=0.0,
     latent_loading_l1=0.0,
+    latent_group_lasso=0.0,
     gate_l1=0.0,
 ):
     """Train DVFM for fixed epochs and retain the best eligible validation ELBO."""
@@ -45,8 +46,9 @@ def train_dvfm(
             optimizer.zero_grad()
             outputs = model(x, time, event)
             loss, recon, kl = model.loss_function(*outputs, time, event, beta, free_bits)
-            regularization, _, _ = model.regularization_terms(
-                latent_loading_l1=latent_loading_l1, gate_l1=gate_l1
+            regularization, _, _, _ = model.regularization_terms(
+                latent_loading_l1=latent_loading_l1,
+                latent_group_lasso=latent_group_lasso, gate_l1=gate_l1,
             )
             objective = loss + regularization
             if not torch.isfinite(objective):
@@ -83,9 +85,10 @@ def train_dvfm(
         val_recon /= len(val_loader)
         val_kl /= len(val_loader)
         with torch.no_grad():
-            validation_regularization, loading_magnitude, learned_gate = (
+            validation_regularization, loading_magnitude, group_norm, learned_gate = (
                 model.regularization_terms(
-                    latent_loading_l1=latent_loading_l1, gate_l1=gate_l1
+                    latent_loading_l1=latent_loading_l1,
+                    latent_group_lasso=latent_group_lasso, gate_l1=gate_l1,
                 )
             )
         validation_objective = val_loss + float(validation_regularization.item())
@@ -94,7 +97,7 @@ def train_dvfm(
         monitored = np.asarray(
             [train_loss, train_recon, train_kl, train_objective,
              val_loss, val_recon, val_kl, validation_objective,
-             loading_magnitude.item(), learned_gate.item()], dtype=float
+             loading_magnitude.item(), group_norm.item(), learned_gate.item()], dtype=float
         )
         numerical_valid = bool(np.all(np.isfinite(monitored)))
         if numerical_valid and numerical_failure_threshold is not None:
@@ -120,6 +123,7 @@ def train_dvfm(
                 "validation_regularization": float(validation_regularization.item()),
                 "validation_objective": validation_objective,
                 "latent_loading_l1_magnitude": float(loading_magnitude.item()),
+                "latent_loading_group_norm": float(group_norm.item()),
                 "learned_gate": float(learned_gate.item()),
                 "gate_is_open": bool(learned_gate.item() >= 0.5),
                 "numerical_valid": numerical_valid,

@@ -27,6 +27,12 @@
 - Training for 400 epochs doubled runtime for negligible predictive benefit. Keep 200 epochs.
 - Aggregate-posterior prediction was marginally worse than prior prediction overall. Use the prior for primary prospective prediction and retain the aggregate posterior only as a diagnostic.
 
+## Latent regularization
+
+- Element-wise loading L1 helped modestly: `lambda = 0.1` reduced mean absolute Kendall-tau error from `0.182` to `0.168`, and the independence-cell error from `0.196` to `0.132`, without harming frailty recovery. It did not deactivate the latent dimension.
+- The hard-concrete gate failed: its learned value saturated near `1` for every penalty, worsened dependence calibration, and increased numerical warnings. Penalizing the clamped gate left little gradient after saturation, so this does not rule out a smooth gate.
+- Next test: smooth L1 gate, group-lasso over all latent-input weights, and their combination. Keep this separate from the completed experiment.
+
 ## Current decisions
 
 - Use oracle IBS as the primary synthetic prediction metric, with oracle CI and MAE as secondary metrics. Do not use IBS-Dep for now.

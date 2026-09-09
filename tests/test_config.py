@@ -163,6 +163,42 @@ def test_latent_regularization_ablation_has_prespecified_l1_sensitivity():
     assert len(cfg["seeds"]["sampling"]) == 5
 
 
+def test_latent_regularization2_matches_original_experiment_settings():
+    cfg = load_config(ROOT / "configs" / "synthetic_latent_regularization2.yaml")
+    original = load_config(ROOT / "configs" / "synthetic_latent_regularization.yaml")
+    scenarios = expand_scenarios(cfg["data"])
+    variants = cfg["models"]["dvfm"]["variants"]
+    assert {item["kendall_tau"] for item in scenarios} == {0.0, 0.25, 0.5, 0.75}
+    assert cfg["seeds"]["sampling"] == [30, 31, 32, 33, 34]
+    assert cfg["seeds"]["split"] == [130, 131, 132, 133, 134]
+    assert cfg["seeds"]["model"] == [230, 231, 232, 233, 234]
+    assert cfg["seeds"] == original["seeds"]
+    assert cfg["data"] == original["data"]
+    assert cfg["split"] == original["split"]
+    assert cfg["preprocessing"] == original["preprocessing"]
+    assert cfg["evaluation"] == original["evaluation"]
+    assert [item["name"] for item in variants] == [
+        "reference", "smooth_gate", "latent_group_lasso",
+        "smooth_gate_plus_group_lasso",
+    ]
+    assert variants[1]["latent_gate"] == "sigmoid"
+    assert variants[1]["gate_l1"] == 0.1
+    assert variants[2]["latent_group_lasso"] == 0.1
+    assert variants[3]["latent_gate"] == "sigmoid"
+    assert variants[3]["latent_group_lasso"] == 0.1
+    original_base = {
+        key: value for key, value in original["models"]["dvfm"].items()
+        if key != "variants"
+    }
+    revised_base = {
+        key: value for key, value in cfg["models"]["dvfm"].items()
+        if key not in {"variants", "latent_group_lasso"}
+    }
+    assert revised_base == original_base
+    assert cfg["models"]["dvfm"]["latent_group_lasso"] == 0.0
+    assert len(scenarios) * len(variants) * len(cfg["seeds"]["sampling"]) == 80
+
+
 def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     cfg = load_config(ROOT / "configs" / "hacsurv_synthetic_pilot.yaml")
     assert cfg["models"]["enabled"] == ["hacsurv_2d"]

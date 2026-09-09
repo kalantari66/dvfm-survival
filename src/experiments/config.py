@@ -235,15 +235,17 @@ def validate_config(cfg: dict) -> None:
                         )
                     if float(resolved.get("latent_loading_l1", 0.0)) < 0.0:
                         raise ValueError("DVFM variant latent_loading_l1 cannot be negative")
+                    if float(resolved.get("latent_group_lasso", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant latent_group_lasso cannot be negative")
                     if float(resolved.get("gate_l1", 0.0)) < 0.0:
                         raise ValueError("DVFM variant gate_l1 cannot be negative")
                     latent_gate = resolved.get("latent_gate", "none")
-                    if latent_gate not in {"none", "hard_concrete"}:
+                    if latent_gate not in {"none", "hard_concrete", "sigmoid"}:
                         raise ValueError(
-                            "DVFM variant latent_gate must be none or hard_concrete"
+                            "DVFM variant latent_gate must be none, hard_concrete, or sigmoid"
                         )
                     if float(resolved.get("gate_l1", 0.0)) > 0.0 and latent_gate == "none":
-                        raise ValueError("DVFM gate_l1 requires latent_gate: hard_concrete")
+                        raise ValueError("DVFM gate_l1 requires an enabled latent_gate")
                     if not 0.0 < float(resolved.get("gate_initial_value", 0.9)) < 1.0:
                         raise ValueError("DVFM variant gate_initial_value must be in (0, 1)")
                     if float(resolved.get("gate_temperature", 0.67)) <= 0.0:
@@ -417,10 +419,16 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("models.dvfm.scale_link must be softplus or exp")
         if float(dvfm.get("latent_loading_l1", 0.0)) < 0.0:
             raise ValueError("models.dvfm.latent_loading_l1 cannot be negative")
+        if float(dvfm.get("latent_group_lasso", 0.0)) < 0.0:
+            raise ValueError("models.dvfm.latent_group_lasso cannot be negative")
         if float(dvfm.get("gate_l1", 0.0)) < 0.0:
             raise ValueError("models.dvfm.gate_l1 cannot be negative")
-        if str(dvfm.get("latent_gate", "none")) not in {"none", "hard_concrete"}:
-            raise ValueError("models.dvfm.latent_gate must be none or hard_concrete")
+        if str(dvfm.get("latent_gate", "none")) not in {
+            "none", "hard_concrete", "sigmoid"
+        }:
+            raise ValueError(
+                "models.dvfm.latent_gate must be none, hard_concrete, or sigmoid"
+            )
     if cfg["evaluation"].get("compute_oracle_joint_survival_ise", False):
         for key in (
             "joint_n_time_points", "joint_n_subjects", "joint_dgp_samples",

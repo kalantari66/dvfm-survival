@@ -51,6 +51,9 @@ dvfm-run --config configs/synthetic_dependence_calibration.yaml --validate-only
 # Shared-loading shrinkage and hard-concrete gate ablation
 dvfm-run --config configs/synthetic_latent_regularization.yaml --validate-only
 
+# Paired smooth-gate/group-lasso follow-up
+dvfm-run --config configs/synthetic_latent_regularization2.yaml --validate-only
+
 # Short HACSurv-2D integration check
 dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
 
@@ -95,6 +98,13 @@ The latent shrinkage/gating ablation also runs as one target:
 ```bash
 gwf -f workflows/latent_regularization/workflow.py status
 gwf -f workflows/latent_regularization/workflow.py run
+```
+
+The paired smooth-gate/group-lasso follow-up has a separate target:
+
+```bash
+gwf -f workflows/latent_regularization2/workflow.py status
+gwf -f workflows/latent_regularization2/workflow.py run
 ```
 
 The focused HACSurv feasibility run is also one GWF target:
