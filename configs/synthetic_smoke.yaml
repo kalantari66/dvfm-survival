@@ -17,7 +17,7 @@ models:
   deepsurv: {epochs: 2, learning_rate: 0.001, batch_size: 64}
   mtlr: {epochs: 2, learning_rate: 0.005, bins: 10}
   clayton_aft: {epochs: 2, learning_rate: 0.005}
-  dvfm: {latent_dims: [0, 1], epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, checkpoint_min_epoch: 1, primary_checkpoint: best_validation_elbo_post_warmup, numerical_failure_threshold: 100.0, free_bits: 0.0, mc_samples: 2}
+  dvfm: {latent_dims: [0, 1], scale_link: exp, epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, checkpoint_min_epoch: 1, primary_checkpoint: best_validation_elbo_post_warmup, numerical_failure_threshold: 100.0, free_bits: 0.0, mc_samples: 2}
 evaluation:
   n_time_points: 20
   grid_max_quantile: 0.95

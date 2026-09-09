@@ -73,6 +73,7 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     assert cfg["models"]["enabled"] == ["dvfm"]
     assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1]
     assert cfg["models"]["dvfm"]["weight_decay"] == 0.0001
+    assert cfg["models"]["dvfm"]["scale_link"] == "exp"
     assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
         "best_validation_elbo_post_warmup"
     )
@@ -93,6 +94,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
         "best_validation_elbo_post_warmup"
     )
+    assert cfg["models"]["dvfm"]["scale_link"] == "exp"
 
 
 def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():

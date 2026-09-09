@@ -34,6 +34,9 @@ models:
     latent_dims: [0, 1]
     encoder_hidden: [64, 32]
     decoder_hidden: [32, 64]
+    # Selected by the dependence-calibration ablation; remains an explicit
+    # hyperparameter so it can be changed without touching model code.
+    scale_link: exp
     dropout: 0.0
     weight_decay: 0.0001
     epochs: 200

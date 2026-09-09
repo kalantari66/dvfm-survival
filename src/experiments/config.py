@@ -395,6 +395,10 @@ def validate_config(cfg: dict) -> None:
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")
+    if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        scale_link = str(cfg["models"]["dvfm"].get("scale_link", "softplus"))
+        if scale_link not in {"softplus", "exp"}:
+            raise ValueError("models.dvfm.scale_link must be softplus or exp")
     if cfg["evaluation"].get("compute_oracle_joint_survival_ise", False):
         for key in (
             "joint_n_time_points", "joint_n_subjects", "joint_dgp_samples",
