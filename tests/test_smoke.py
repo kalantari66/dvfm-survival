@@ -27,6 +27,9 @@ from utility.synthetic import (
     generate_copula_data,
     generate_gaussian_shared_frailty,
 )
+from utility.semisynthetic import sample_clayton_uniforms
+from utility.splitting import time_event_stratified_split_indices
+from utility.data import SurvivalData
 
 
 def test_generator_shapes():
@@ -36,6 +39,26 @@ def test_generator_shapes():
     assert X.shape == (128, 5)
     assert time.shape == event.shape == true_t.shape == true_c.shape == (128,)
     assert set(np.unique(event)).issubset({0, 1})
+
+
+def test_semisynthetic_clayton_sampler_and_time_event_split():
+    uniforms, theta = sample_clayton_uniforms(10_000, kendall_tau=0.5, seed=71)
+    from scipy.stats import kendalltau
+
+    assert theta == 2.0
+    assert abs(float(kendalltau(uniforms[:, 0], uniforms[:, 1]).statistic) - 0.5) < 0.03
+    rng = np.random.default_rng(72)
+    event = rng.binomial(1, 0.4, size=1000)
+    time = rng.lognormal(mean=1.0 + event, sigma=0.8, size=1000)
+    data = SurvivalData(rng.normal(size=(1000, 2)), time, event, ["x0", "x1"])
+    train, validation, test = time_event_stratified_split_indices(
+        data,
+        {"validation_fraction": 0.1, "test_fraction": 0.2, "time_bins": 20},
+        seed=73,
+    )
+    assert (len(train), len(validation), len(test)) == (700, 100, 200)
+    for indices in (train, validation, test):
+        assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
 
 
 def test_dvfm_forward_prediction_and_metrics():

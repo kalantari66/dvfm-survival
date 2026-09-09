@@ -26,7 +26,8 @@ Every generator must pass tests for deterministic seeding, finite positive times
 ## Stage 1: mechanistic synthetic benchmark (about 25% of paper evidence)
 ### Primary synthetic benchmark
 
-`configs/synthetic.yaml` is the main paired benchmark. It uses 10 repeats of
+The full protocol is documented in [`SYNTHETIC.md`](SYNTHETIC.md), with
+`configs/synthetic.yaml` as its executable specification. It uses 10 repeats of
 10,000 subjects with 10 covariates over the same 12 shared-Gaussian-frailty
 conditions as the pilot: `kendall_tau` in `{0, 0.25, 0.50, 0.75}` crossed with
 censoring in `{0.25, 0.50, 0.75}`. This is a DVFM-only mechanistic experiment,
@@ -50,6 +51,15 @@ predictors and is chosen to attain the requested conditional `kendall_tau`; a
 censoring intercept is then calibrated to attain the requested censoring rate.
 Observed follow-up is the minimum of latent event and censoring time. No
 covariate or time scaling is applied.
+
+The primary evidence consists of three plot groups: held-out individual
+frailty recovery (Spearman, Pearson, validation-calibrated RMSE and R-squared,
+stratified by observed/censored status), dependence recovery (learned
+conditional Kendall's tau and oracle joint-survival ISE), and oracle event-time
+prediction (CI, IBS, MAE, and calibration). The paired `latent_dim = 0` control
+tests whether improvements require DVFM's shared latent path. Synthetic results
+are presented as plots without model-comparison tables; external comparisons
+are reserved for semi-synthetic experiments.
 
 ### Current shared-Gaussian-frailty pilot
 
@@ -252,6 +262,32 @@ All neural comparisons use matched optimization budgets and comparable decoder c
 
 ## Stage 2: semi-synthetic benchmark (about 75% of paper evidence)
 Use 5--8 datasets spanning sample size, feature dimension, and nonlinear signal. Candidate survival or positive-regression sources include SUPPORT, METABRIC, GBSG, WHAS, FLCHAIN, STEEL, and AIRFOIL, subject to licensing and a documented preprocessing sheet.
+
+### Initial SUPPORT wiring pilot
+
+`configs/semi_synthetic.yaml` is the first executable semi-synthetic
+specification. It currently wires SUPPORT only and runs as one GWF target via
+`workflows/semi_synthetic/workflow.py`. The generator:
+
+1. removes nonpositive durations;
+2. treats `x0` and `x7`--`x13` as continuous (mean imputation and standard
+   scaling) and `x1`--`x6` as categorical (mode imputation and one-hot encoding);
+3. fits penalized Cox margins to the original event process and to censoring
+   using the reversed original event indicator;
+4. samples event/censor survival quantiles from a Clayton copula with fixed
+   `kendall_tau=0.5` (`theta=2`), then inverts the fitted Cox margins;
+5. applies one global censor-time scale per generated cohort to attain target
+   censoring rates 0.25, 0.50, and 0.75 to within one subject; and
+6. makes a 70/10/20 split stratified jointly by event status and 20 observed-time
+   quantile bands formed within event status.
+
+Five paired repeats are used initially. A repeat shares the sampled cohort and
+split between CoxPH and DVFM; sampling, split, and model seeds are recorded
+separately. Complete generated event/censor times are retained in memory only
+for oracle evaluation, avoiding per-run NPZ clutter. `dgp_diagnostics.csv`
+records achieved censoring and empirical copula/marginal Kendall's tau. This is
+a wiring pilot; the full comparator roster and additional datasets are added
+only after these generator diagnostics pass.
 
 Two generators are required:
 1. **Foomani Algorithm 4:** retain real covariates and complete positive outcomes; fit the event marginal on the training partition only; map outcomes to event quantiles; sample censoring quantiles conditionally using a chosen copula; invert a calibrated censoring marginal; then form $$(\min(E,C), \mathbf{1}[E \le C])$$.

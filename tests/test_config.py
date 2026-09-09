@@ -79,6 +79,22 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     assert cfg["models"]["dvfm"]["checkpoint_min_epoch"] == 50
 
 
+def test_support_semisynthetic_config_has_paired_generator_and_split():
+    cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
+    assert cfg["data"]["source"] == "support_cox_clayton_semisynthetic"
+    assert cfg["data"]["copula"] == "clayton"
+    assert cfg["data"]["kendall_tau"] == 0.5
+    assert cfg["data"]["censoring_rates"] == [0.25, 0.5, 0.75]
+    assert cfg["split"]["stratify"] == "time_event"
+    assert cfg["split"]["validation_fraction"] == 0.10
+    assert cfg["split"]["test_fraction"] == 0.20
+    assert len(cfg["seeds"]["sampling"]) == len(cfg["seeds"]["split"])
+    assert len(cfg["seeds"]["split"]) == len(cfg["seeds"]["model"])
+    assert cfg["models"]["dvfm"]["primary_checkpoint"] == (
+        "best_validation_elbo_post_warmup"
+    )
+
+
 def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():
     cfg = load_config(ROOT / "configs" / "synthetic_hyperparameter_sweep.yaml")
     scenarios = expand_scenarios(cfg["data"])

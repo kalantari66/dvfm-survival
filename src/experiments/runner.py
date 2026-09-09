@@ -27,7 +27,10 @@ from utility.data import SurvivalDataset
 from dvfm.prediction import get_median_survival_time, predict_survival_curves
 from utility.synthetic import generate_copula_data
 from utility.runtime import resolve_device, seed_everything
-from utility.splitting import iter_split_indices, preprocess_covariates, subset_survival_data
+from utility.splitting import (
+    iter_split_indices, preprocess_covariates, subset_survival_data,
+    time_event_stratified_split_indices,
+)
 from dvfm.training import train_dvfm
 
 
@@ -171,7 +174,7 @@ def _fit_one_split(
             latent_path=str(c.get("latent_path", "nonlinear")),
             shape_mode=str(c.get("shape_mode", "conditional")),
         ).to(device)
-        train_dvfm(
+        artifacts = train_dvfm(
             model,
             train_loader,
             val_loader,
@@ -181,7 +184,16 @@ def _fit_one_split(
             warmup_epochs=int(c["warmup_epochs"]),
             free_bits=float(c["free_bits"]),
             device=device,
+            checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
+            numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
+            weight_decay=float(c.get("weight_decay", 0.0)),
+            return_artifacts=True,
         )
+        checkpoint = str(c.get("primary_checkpoint", "best_validation_elbo_post_warmup"))
+        if checkpoint == "best_validation_elbo_post_warmup":
+            model.load_state_dict(artifacts["best_validation_elbo_state"])
+        elif checkpoint != "final":
+            raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
         survival = predict_survival_curves(
             model=model,
             X=test.X,
@@ -266,6 +278,14 @@ def validate_inputs(cfg: dict) -> None:
     path = Path(data_cfg["path"])
     if not path.exists():
         raise FileNotFoundError(path)
+    if source == "support_cox_clayton_semisynthetic":
+        if path.suffix.lower() not in {".feather", ".ftr"}:
+            raise ValueError("SUPPORT semi-synthetic input must be a Feather file")
+        required = {"duration", "event", *(f"x{i}" for i in range(14))}
+        missing = sorted(required - set(pd.read_feather(path).columns))
+        if missing:
+            raise ValueError(f"SUPPORT input is missing columns: {missing}")
+        return
     _load_dataset(data_cfg, source)
 
 
@@ -290,6 +310,62 @@ def run(cfg: dict) -> pd.DataFrame:
         from .frailty_recovery import run_frailty_recovery_diagnostic
 
         return run_frailty_recovery_diagnostic(cfg, out_dir, device)
+    elif source == "support_cox_clayton_semisynthetic":
+        from utility.semisynthetic import (
+            fit_support_semisynthetic_dgp, generate_support_semisynthetic,
+        )
+
+        dgp = fit_support_semisynthetic_dgp(
+            data_cfg["path"], cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
+        )
+        diagnostics = []
+        seed_cfg = cfg["seeds"]
+        repeats = zip(seed_cfg["sampling"], seed_cfg["split"], seed_cfg["model"])
+        for repeat, (sampling_seed, split_seed, model_seed) in enumerate(repeats):
+            for target_rate in data_cfg["censoring_rates"]:
+                generated = generate_support_semisynthetic(
+                    dgp, kendall_tau=float(data_cfg["kendall_tau"]),
+                    censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
+                )
+                train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
+                    generated.data, cfg["split"], int(split_seed)
+                )
+                train, validation, test = _preprocess_three(
+                    _subset(generated.data, train_idx),
+                    _subset(generated.data, validation_idx),
+                    _subset(generated.data, test_idx),
+                    cfg["preprocessing"],
+                )
+                seed_everything(int(model_seed))
+                scenario = f"support_clayton_tau_0.50_censor_{float(target_rate):.2f}"
+                context = {
+                    "Study": study_cfg["name"], "Stage": study_cfg["stage"],
+                    "Dataset Type": source, "Dataset": data_cfg.get("name", "support"),
+                    "Source Path": str(data_cfg["path"]), "Scenario": scenario,
+                    "Copula": "clayton", "Dependence": "dependent_censoring",
+                    "Theta": generated.clayton_theta,
+                    "Target Kendall Tau": generated.target_kendall_tau,
+                    "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
+                    "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
+                    "Target Censoring Rate": generated.target_censoring_rate,
+                    "Achieved Censoring Rate": generated.achieved_censoring_rate,
+                    "Repeat": repeat, "Fold": 0,
+                    "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
+                    "Model Seed": int(model_seed),
+                }
+                split_rows, preds = _fit_one_split(
+                    train, validation, test, cfg, device, context
+                )
+                rows.extend(split_rows)
+                diagnostics.append({
+                    **context, "Censor Time Scale": generated.censor_time_scale,
+                    "Source Samples": dgp.source_n_samples,
+                    "Source Event Rate": dgp.source_event_rate,
+                    "Cox Penalizer": dgp.cox_penalizer,
+                })
+                if cfg["evaluation"].get("save_predictions", False):
+                    _save_predictions(out_dir, context, preds)
+        pd.DataFrame(diagnostics).to_csv(out_dir / "dgp_diagnostics.csv", index=False)
     elif source == "synthetic_copula":
         scenarios = expand_scenarios(data_cfg)
         for scenario in scenarios:
@@ -377,7 +453,10 @@ def run(cfg: dict) -> pd.DataFrame:
         if c in results and not results[c].isna().all()
     ]
     numeric = results.select_dtypes(include=[np.number]).columns.tolist()
-    excluded = {"Repeat", "Fold", "Seed", "repeat", "dgp_seed", "sampling_seed", "split_seed", "model_seed"}
+    excluded = {
+        "Repeat", "Fold", "Seed", "Sampling Seed", "Split Seed", "Model Seed",
+        "repeat", "dgp_seed", "sampling_seed", "split_seed", "model_seed",
+    }
     metric_cols = [c for c in numeric if c not in excluded and c not in group_cols]
     results.groupby(group_cols, dropna=False)[metric_cols].mean().reset_index().to_csv(
         out_dir / "results_mean.csv", index=False

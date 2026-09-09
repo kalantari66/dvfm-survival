@@ -22,6 +22,7 @@ dependencies = [
   "scikit-survival>=0.22",
   "pycox>=0.3.0",
   "torchtuples>=0.2.2",
+  "pyarrow>=12.0",
 ]
 
 [project.optional-dependencies]

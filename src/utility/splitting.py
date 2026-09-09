@@ -1,6 +1,7 @@
 """Reusable stratified survival-data splitting and preprocessing."""
 
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -33,6 +34,39 @@ def three_way_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
         test_size=relative_validation,
         random_state=seed + 1,
         stratify=data.event[train_validation],
+    )
+    return train, validation, test
+
+
+def time_event_stratified_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
+    """70/10/20-style split stratified jointly by time bands and event status.
+
+    The referenced semi-synthetic implementation uses 20 time bands plus the
+    event indicator. Quantile bands retain that intent while avoiding nearly
+    empty tail bands on heavily right-skewed survival times.
+    """
+    indices = np.arange(len(data.time))
+    n_bins = min(int(split_cfg.get("time_bins", 20)), max(2, len(indices) // 20))
+    event = np.asarray(data.event, dtype=int)
+    time_band = np.zeros(len(indices), dtype=int)
+    # Form bands within event status. Thus every stratum has support and the
+    # observed-time distribution is preserved conditionally on event status.
+    for status in np.unique(event):
+        mask = event == status
+        ranked = pd.Series(np.asarray(data.time)[mask]).rank(method="average")
+        time_band[mask] = pd.qcut(
+            ranked, q=min(n_bins, int(mask.sum())), labels=False, duplicates="drop"
+        ).to_numpy(dtype=int)
+    strata = event * n_bins + time_band
+    test_fraction = float(split_cfg["test_fraction"])
+    validation_fraction = float(split_cfg["validation_fraction"])
+    train_validation, test = train_test_split(
+        indices, test_size=test_fraction, random_state=seed, stratify=strata
+    )
+    relative_validation = validation_fraction / (1.0 - test_fraction)
+    train, validation = train_test_split(
+        train_validation, test_size=relative_validation, random_state=seed + 1,
+        stratify=strata[train_validation],
     )
     return train, validation, test
 
@@ -80,4 +114,5 @@ __all__ = [
     "split_survival_data",
     "subset_survival_data",
     "three_way_split_indices",
+    "time_event_stratified_split_indices",
 ]

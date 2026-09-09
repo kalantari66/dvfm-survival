@@ -342,6 +342,25 @@ def validate_config(cfg: dict) -> None:
             for key in ("dependence_samples_per_epoch", "dependence_samples_checkpoint"):
                 if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
                     raise ValueError(f"evaluation.{key} must be at least 2")
+    elif source == "support_cox_clayton_semisynthetic":
+        _require(data, "path", "data")
+        if str(_require(data, "copula", "data")).lower() != "clayton":
+            raise ValueError("SUPPORT semi-synthetic generation currently requires copula: clayton")
+        kendall_tau = float(_require(data, "kendall_tau", "data"))
+        if not 0.0 < kendall_tau < 1.0:
+            raise ValueError("data.kendall_tau must be in (0, 1) for Clayton")
+        rates = _require(data, "censoring_rates", "data")
+        if not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
+            raise ValueError("data.censoring_rates must contain values in (0, 1)")
+        seeds = _require(cfg, "seeds", "config")
+        for key in ("sampling", "split", "model"):
+            values = _require(seeds, key, "seeds")
+            if not values or not all(isinstance(seed, int) for seed in values):
+                raise ValueError(f"seeds.{key} must be a non-empty list of integers")
+        if len({len(seeds[key]) for key in ("sampling", "split", "model")}) != 1:
+            raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
+        if str(cfg["split"].get("stratify", "")).lower() != "time_event":
+            raise ValueError("SUPPORT semi-synthetic splits require split.stratify: time_event")
     elif source in {"real_file", "semi_synthetic_file"}:
         study_seeds = _require(study, "seeds", "study")
         if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):

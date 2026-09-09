@@ -2,7 +2,7 @@
 
 Research code for **Deep Variational Frailty Models (DVFM)** under dependent right censoring.
 
-The repository asks one falsifiable question: under which structural conditions can a shared-latent generative model recover the event-time distribution or dependence-generating frailty from right-censored observations? See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the experimental design, metrics, ablations, and claim-adjustment rules.
+The repository asks one falsifiable question: under which structural conditions can a shared-latent generative model recover the event-time distribution or dependence-generating frailty from right-censored observations? See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the overall design and [`SYNTHETIC.md`](SYNTHETIC.md) for the primary synthetic protocol.
 
 ## Install with Conda
 
@@ -59,6 +59,9 @@ dvfm-run --config configs/frailty_recovery_diagnostic.yaml
 
 # File-based semi-synthetic smoke example
 dvfm-run --config configs/semi_synthetic_example.yaml
+
+# SUPPORT Cox-margin/Clayton semi-synthetic pilot
+dvfm-run --config configs/semi_synthetic.yaml --validate-only
 ```
 
 Results are written below `results/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
@@ -88,6 +91,13 @@ The focused HACSurv feasibility run is also one GWF target:
 
 ```bash
 gwf -f workflows/hacsurv_synthetic/workflow.py run
+```
+
+The SUPPORT semi-synthetic pilot is submitted as one target:
+
+```bash
+gwf -f workflows/semi_synthetic/workflow.py status
+gwf -f workflows/semi_synthetic/workflow.py run
 ```
 
 ## Canonical experiment specification
