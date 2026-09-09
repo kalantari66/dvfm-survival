@@ -1,0 +1,19 @@
+\begin{table}
+\caption{Scenario-balanced semi-synthetic performance. Lower mean rank is better. Wins, ties, and losses use oracle IBS and are reported from each comparator's perspective.}
+\label{tab:semi_synthetic_models}
+\begin{tabular}{lrrrrr}
+\toprule
+Model & IBS rank & CI rank & MAE rank & Failures & W/T/L vs DVFM \\
+\midrule
+DVFM & 1.00 & 1.01 & 1.02 & 0 & -- \\
+HACSurv & 2.00 & 2.26 & 2.21 & 0 & 0/0/90 \\
+ClaytonAFT & 3.00 & 2.88 & 2.80 & 0 & 0/0/90 \\
+MTLR & 4.32 & 5.51 & 5.71 & 0 & 0/0/90 \\
+DeepSurv & 5.06 & 5.86 & 5.88 & 0 & 0/0/90 \\
+GBSA & 5.94 & 6.26 & 6.46 & 0 & 0/0/90 \\
+RSF & 7.17 & 6.60 & 6.46 & 0 & 0/0/90 \\
+DeepHit & 7.87 & 7.23 & 7.11 & 0 & 0/0/90 \\
+CoxPH & 8.64 & 7.40 & 7.36 & 0 & 0/0/90 \\
+\bottomrule
+\end{tabular}
+\end{table}
