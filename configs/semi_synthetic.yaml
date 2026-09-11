@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: semi_synthetic_support}
-resources: {cores: 4, memory: 25g, walltime: "06:00:00", partition: gpu-h200, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-h200, account: c2i-colon}
 study:
   name: semi-synthetic-support
   stage: pilot
@@ -14,7 +14,7 @@ data:
   name: support
   path: data/support.feather
   copula: clayton
-  kendall_tau: 0.50
+  kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
   censoring_rates: [0.25, 0.50, 0.75]
   cox_penalizer: 0.01
 split:
@@ -26,7 +26,7 @@ split:
 preprocessing:
   # SUPPORT continuous features are standardized and categorical features are
   # one-hot encoded once by the dataset-specific generator.
-  zscore_x: false
+  zscore_x: true
 models:
   # This first wiring run checks DVFM against the basic independence reference.
   # The full baseline roster is added after the generator has been validated.
