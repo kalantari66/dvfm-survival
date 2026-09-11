@@ -129,6 +129,3 @@ Run the complete experiment as one GWF target:
 gwf -f workflows/synthetic/workflow.py status
 gwf -f workflows/synthetic/workflow.py run
 ```
-
-The target requests one H200 GPU, four CPU cores, 25 GB memory, and 12 hours.
-Expected runtime is approximately seven to nine hours.
