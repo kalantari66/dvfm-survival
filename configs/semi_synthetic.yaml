@@ -57,3 +57,5 @@ evaluation:
   max_time_factor: 1.2
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
   save_predictions: false
+  # Subject-level validation/test latents and validation-calibrated recovery metrics.
+  save_latent_recovery: true

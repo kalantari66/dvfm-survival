@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,10 @@ def _fit_one_split(
     cfg: dict,
     device: torch.device,
     context: dict,
+    *,
+    latent_output_dir: Path | None = None,
+    validation_indices=None,
+    test_indices=None,
 ) -> tuple[list[dict], dict]:
     eval_cfg = cfg["evaluation"]
     model_cfg = cfg["models"]
@@ -200,6 +205,16 @@ def _fit_one_split(
             model.load_state_dict(artifacts["best_validation_elbo_state"])
         elif checkpoint != "final":
             raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
+        if latent_output_dir is not None:
+            from .latent_recovery import export_latent_recovery
+
+            # Diagnostic DataLoader iteration must not alter prediction MC draws.
+            with torch.random.fork_rng(devices=[]):
+                export_latent_recovery(
+                    model, validation, test, validation_indices, test_indices,
+                    latent_output_dir, {**context, "Model": "DVFM", "Checkpoint": checkpoint},
+                    int(c["batch_size"]), device,
+                )
         survival = predict_survival_curves(
             model=model,
             X=test.X,
@@ -350,9 +365,11 @@ def run(cfg: dict) -> pd.DataFrame:
             sampling_seed = seeds["sampling"]
             split_seed = seeds["split"]
             model_seed = seeds["model"]
-            for target_rate in data_cfg["censoring_rates"]:
+            tau_values = data_cfg["kendall_tau"]
+            tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
+            for target_tau, target_rate in product(tau_values, data_cfg["censoring_rates"]):
                 generated = generate_support_semisynthetic(
-                    dgp, kendall_tau=float(data_cfg["kendall_tau"]),
+                    dgp, kendall_tau=float(target_tau),
                     censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
                 )
                 train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
@@ -365,12 +382,12 @@ def run(cfg: dict) -> pd.DataFrame:
                     cfg["preprocessing"],
                 )
                 seed_everything(int(model_seed))
-                scenario = f"support_clayton_tau_0.50_censor_{float(target_rate):.2f}"
+                scenario = f"{data_cfg.get('name', 'support')}_clayton_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
                 context = {
                     "Study": study_cfg["name"], "Stage": study_cfg["stage"],
                     "Dataset Type": source, "Dataset": data_cfg.get("name", "support"),
                     "Source Path": str(data_cfg["path"]), "Scenario": scenario,
-                    "Copula": "clayton", "Dependence": "dependent_censoring",
+                    "Copula": "clayton", "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
                     "Theta": generated.clayton_theta,
                     "Target Kendall Tau": generated.target_kendall_tau,
                     "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
@@ -382,7 +399,10 @@ def run(cfg: dict) -> pd.DataFrame:
                     "Model Seed": int(model_seed),
                 }
                 split_rows, preds = _fit_one_split(
-                    train, validation, test, cfg, device, context
+                    train, validation, test, cfg, device, context,
+                    latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                       if cfg["evaluation"].get("save_latent_recovery", True) else None),
+                    validation_indices=validation_idx, test_indices=test_idx,
                 )
                 rows.extend(split_rows)
                 diagnostics.append({

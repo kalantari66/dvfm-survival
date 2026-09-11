@@ -390,9 +390,10 @@ def validate_config(cfg: dict) -> None:
         _require(data, "path", "data")
         if str(_require(data, "copula", "data")).lower() != "clayton":
             raise ValueError("SUPPORT semi-synthetic generation currently requires copula: clayton")
-        kendall_tau = float(_require(data, "kendall_tau", "data"))
-        if not 0.0 < kendall_tau < 1.0:
-            raise ValueError("data.kendall_tau must be in (0, 1) for Clayton")
+        tau_values = _require(data, "kendall_tau", "data")
+        tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
+        if not tau_values or any(not 0.0 <= float(tau) < 1.0 for tau in tau_values):
+            raise ValueError("data.kendall_tau must contain values in [0, 1) for Clayton")
         rates = _require(data, "censoring_rates", "data")
         if not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
             raise ValueError("data.censoring_rates must contain values in (0, 1)")

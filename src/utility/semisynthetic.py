@@ -138,17 +138,21 @@ def fit_support_semisynthetic_dgp(path: str | Path, *, cox_penalizer: float = 0.
     )
 
 
-def sample_clayton_uniforms(n_samples: int, kendall_tau: float, seed: int):
+def sample_clayton_uniforms(n_samples: int, kendall_tau: float, seed: int, *, return_frailty=False):
     """Sample bivariate Clayton uniforms using its Gamma frailty representation."""
     tau = float(kendall_tau)
-    if not 0.0 < tau < 1.0:
-        raise ValueError("Clayton kendall_tau must be in (0, 1)")
+    if not 0.0 <= tau < 1.0:
+        raise ValueError("Clayton kendall_tau must be in [0, 1)")
+    if tau == 0.0:
+        uniforms = np.random.default_rng(seed).uniform(size=(int(n_samples), 2))
+        return (uniforms, 0.0, None) if return_frailty else (uniforms, 0.0)
     theta = 2.0 * tau / (1.0 - tau)
     rng = np.random.default_rng(seed)
     frailty = rng.gamma(shape=1.0 / theta, scale=1.0, size=int(n_samples))
     noise = rng.exponential(size=(int(n_samples), 2))
     uniforms = (1.0 + noise / frailty[:, None]) ** (-1.0 / theta)
-    return np.clip(uniforms, 1e-12, 1.0 - 1e-12), theta
+    result = (np.clip(uniforms, 1e-12, 1.0 - 1e-12), theta)
+    return (*result, frailty) if return_frailty else result
 
 
 def generate_support_semisynthetic(
@@ -162,7 +166,15 @@ def generate_support_semisynthetic(
     target_censoring = float(censoring_rate)
     if not 0.0 < target_censoring < 1.0:
         raise ValueError("censoring_rate must be between 0 and 1")
-    uniforms, theta = sample_clayton_uniforms(len(dgp.X), kendall_tau, sampling_seed)
+    uniforms, theta, frailty = sample_clayton_uniforms(
+        len(dgp.X), kendall_tau, sampling_seed, return_frailty=True
+    )
+    # Match the diagnostic workflow's cohort-standardized log-frailty target.
+    # Independence has no shared random frailty to recover.
+    true_z = None
+    if frailty is not None:
+        log_frailty = np.log(np.clip(frailty, 1e-12, None))
+        true_z = (log_frailty - log_frailty.mean()) / max(log_frailty.std(), 1e-12)
     event_time = dgp.event_margin.inverse_survival(uniforms[:, 0], dgp.X)
     censor_base = dgp.censor_margin.inverse_survival(uniforms[:, 1], dgp.X)
 
@@ -178,6 +190,7 @@ def generate_support_semisynthetic(
         X=dgp.X.copy(), time=observed, event=event,
         feature_names=list(dgp.feature_names),
         true_event_time=event_time, true_censor_time=censor_time,
+        true_z=true_z,
     )
     return SemiSyntheticSample(
         data=data, target_kendall_tau=float(kendall_tau),

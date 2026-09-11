@@ -103,7 +103,8 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
     assert cfg["data"]["source"] == "support_cox_clayton_semisynthetic"
     assert cfg["data"]["copula"] == "clayton"
-    assert cfg["data"]["kendall_tau"] == 0.5
+    assert cfg["data"]["kendall_tau"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    assert cfg["evaluation"]["save_latent_recovery"] is True
     assert cfg["data"]["censoring_rates"] == [0.25, 0.5, 0.75]
     assert cfg["split"]["stratify"] == "time_event"
     assert cfg["split"]["validation_fraction"] == 0.10
