@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "preprocessing": {"zscore_x": False},
     "models": {
         "enabled": ["dvfm"],
-        "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100},
+        "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1},
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
         "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
@@ -82,6 +82,42 @@ def _require(mapping: dict, key: str, location: str) -> Any:
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else [value]
+
+
+def expand_seed_streams(seed_spec: list[int] | dict) -> list[dict[str, int]]:
+    """Resolve repeat seeds from the canonical list or legacy stream mapping."""
+    if isinstance(seed_spec, list):
+        if not seed_spec or not all(isinstance(seed, int) for seed in seed_spec):
+            raise ValueError("seeds must be a non-empty list of integers")
+        return [
+            {"dgp": seed, "sampling": seed, "split": seed, "model": seed}
+            for seed in seed_spec
+        ]
+    if not isinstance(seed_spec, dict):
+        raise ValueError("seeds must be a list of integers or a seed-stream mapping")
+    for key in ("dgp", "sampling", "split", "model"):
+        _require(seed_spec, key, "seeds")
+    if not isinstance(seed_spec["dgp"], int):
+        raise ValueError("seeds.dgp must be one integer")
+    for key in ("sampling", "split", "model"):
+        values = seed_spec[key]
+        if not values or not all(isinstance(seed, int) for seed in values):
+            raise ValueError(f"seeds.{key} must be a non-empty list of integers")
+    if len({len(seed_spec[key]) for key in ("sampling", "split", "model")}) != 1:
+        raise ValueError(
+            "seeds.sampling, seeds.split, and seeds.model must have equal length"
+        )
+    return [
+        {
+            "dgp": int(seed_spec["dgp"]),
+            "sampling": int(sampling),
+            "split": int(split),
+            "model": int(model),
+        }
+        for sampling, split, model in zip(
+            seed_spec["sampling"], seed_spec["split"], seed_spec["model"]
+        )
+    ]
 
 
 def expand_scenarios(data_cfg: dict) -> list[dict]:
@@ -161,16 +197,7 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     "Clayton Gamma-frailty scenarios require kendall_tau > 0"
                 )
-        seeds = _require(cfg, "seeds", "config")
-        for key in ("dgp", "sampling", "split", "model"):
-            _require(seeds, key, "seeds")
-        if not isinstance(seeds["dgp"], int):
-            raise ValueError("seeds.dgp must be one integer")
-        for key in ("sampling", "split", "model"):
-            if not seeds[key] or not all(isinstance(seed, int) for seed in seeds[key]):
-                raise ValueError(f"seeds.{key} must be a non-empty list of integers")
-        if len({len(seeds[key]) for key in ("sampling", "split", "model")}) != 1:
-            raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
+        expand_seed_streams(_require(cfg, "seeds", "config"))
         _require(cfg["split"], "validation_fraction", "split")
         if source == "gaussian_shared_frailty":
             dvfm = cfg["models"]["dvfm"]
@@ -233,7 +260,7 @@ def validate_config(cfg: dict) -> None:
                         raise ValueError(
                             "DVFM variant shape_mode must be conditional or global"
                         )
-                    if float(resolved.get("latent_loading_l1", 0.0)) < 0.0:
+                    if float(resolved.get("latent_loading_l1", 0.1)) < 0.0:
                         raise ValueError("DVFM variant latent_loading_l1 cannot be negative")
                     if float(resolved.get("latent_group_lasso", 0.0)) < 0.0:
                         raise ValueError("DVFM variant latent_group_lasso cannot be negative")
@@ -369,13 +396,7 @@ def validate_config(cfg: dict) -> None:
         rates = _require(data, "censoring_rates", "data")
         if not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
             raise ValueError("data.censoring_rates must contain values in (0, 1)")
-        seeds = _require(cfg, "seeds", "config")
-        for key in ("sampling", "split", "model"):
-            values = _require(seeds, key, "seeds")
-            if not values or not all(isinstance(seed, int) for seed in values):
-                raise ValueError(f"seeds.{key} must be a non-empty list of integers")
-        if len({len(seeds[key]) for key in ("sampling", "split", "model")}) != 1:
-            raise ValueError("seeds.sampling, seeds.split, and seeds.model must have equal length")
+        expand_seed_streams(_require(cfg, "seeds", "config"))
         if str(cfg["split"].get("stratify", "")).lower() != "time_event":
             raise ValueError("SUPPORT semi-synthetic splits require split.stratify: time_event")
     elif source in {"real_file", "semi_synthetic_file"}:
@@ -417,7 +438,7 @@ def validate_config(cfg: dict) -> None:
         scale_link = str(dvfm.get("scale_link", "softplus"))
         if scale_link not in {"softplus", "exp"}:
             raise ValueError("models.dvfm.scale_link must be softplus or exp")
-        if float(dvfm.get("latent_loading_l1", 0.0)) < 0.0:
+        if float(dvfm.get("latent_loading_l1", 0.1)) < 0.0:
             raise ValueError("models.dvfm.latent_loading_l1 cannot be negative")
         if float(dvfm.get("latent_group_lasso", 0.0)) < 0.0:
             raise ValueError("models.dvfm.latent_group_lasso cannot be negative")

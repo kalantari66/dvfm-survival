@@ -19,7 +19,7 @@ from sota.baselines import (
     train_deepsurv,
     train_mtlr,
 )
-from .config import expand_scenarios
+from .config import expand_scenarios, expand_seed_streams
 from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
 from utility.metrics import censoring_rate, collect_metrics
 from dvfm.model import DVFM
@@ -176,6 +176,7 @@ def _fit_one_split(
             latent_gate=str(c.get("latent_gate", "none")),
             gate_initial_value=float(c.get("gate_initial_value", 0.9)),
             gate_temperature=float(c.get("gate_temperature", 0.67)),
+            latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
         ).to(device)
         artifacts = train_dvfm(
             model,
@@ -190,7 +191,6 @@ def _fit_one_split(
             checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
             numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
             weight_decay=float(c.get("weight_decay", 0.0)),
-            latent_loading_l1=float(c.get("latent_loading_l1", 0.0)),
             latent_group_lasso=float(c.get("latent_group_lasso", 0.0)),
             gate_l1=float(c.get("gate_l1", 0.0)),
             return_artifacts=True,
@@ -344,9 +344,12 @@ def run(cfg: dict) -> pd.DataFrame:
             data_cfg["path"], cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
         )
         diagnostics = []
-        seed_cfg = cfg["seeds"]
-        repeats = zip(seed_cfg["sampling"], seed_cfg["split"], seed_cfg["model"])
-        for repeat, (sampling_seed, split_seed, model_seed) in enumerate(repeats):
+        seed_streams = expand_seed_streams(cfg["seeds"])
+        for repeat, seeds in enumerate(seed_streams):
+            dgp_seed = seeds["dgp"]
+            sampling_seed = seeds["sampling"]
+            split_seed = seeds["split"]
+            model_seed = seeds["model"]
             for target_rate in data_cfg["censoring_rates"]:
                 generated = generate_support_semisynthetic(
                     dgp, kendall_tau=float(data_cfg["kendall_tau"]),
@@ -374,7 +377,7 @@ def run(cfg: dict) -> pd.DataFrame:
                     "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
                     "Target Censoring Rate": generated.target_censoring_rate,
                     "Achieved Censoring Rate": generated.achieved_censoring_rate,
-                    "Repeat": repeat, "Fold": 0,
+                    "Repeat": repeat, "Fold": 0, "DGP Seed": int(dgp_seed),
                     "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
                     "Model Seed": int(model_seed),
                 }

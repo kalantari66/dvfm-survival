@@ -5,12 +5,9 @@ study:
   name: semi-synthetic-support
   stage: pilot
   output_dir: results/semi-synthetic-support
-seeds:
-  # Paired cohort, split, and optimization seeds. Every model sees the same
-  # generated cohort and the same indices within a repeat.
-  sampling: [0, 1, 2, 3, 4]
-  split: [100, 101, 102, 103, 104]
-  model: [200, 201, 202, 203, 204]
+# Repeat i independently initializes generation, splitting, and model fitting
+# with seed i. Every model sees the same cohort and split within a repeat.
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 compute: {device: cuda, torch_num_threads: 4}
 data:
   source: support_cox_clayton_semisynthetic
@@ -43,6 +40,8 @@ models:
     scale_link: exp
     dropout: 0.0
     weight_decay: 0.0001
+    # Use the same default-on shared-latent loading shrinkage as synthetic.
+    latent_loading_l1: 0.1
     epochs: 200
     learning_rate: 0.001
     batch_size: 64

@@ -29,17 +29,16 @@
 
 ## Latent regularization
 
-- Element-wise loading L1 helped modestly: `lambda = 0.1` reduced mean absolute Kendall-tau error from `0.182` to `0.168`, and the independence-cell error from `0.196` to `0.132`, without harming frailty recovery. It did not deactivate the latent dimension.
-- The hard-concrete gate failed: its learned value saturated near `1` for every penalty, worsened dependence calibration, and increased numerical warnings. Penalizing the clamped gate left little gradient after saturation, so this does not rule out a smooth gate.
-- Next test: smooth L1 gate, group-lasso over all latent-input weights, and their combination. Keep this separate from the completed experiment.
+- Latent-loading L1 with `alpha = 0.1` was the best overall regularizer: it reduced mean absolute Kendall-tau error from `0.182` to `0.168`, and the independence-cell error from `0.196` to `0.132`, without harming frailty recovery. It is now the default DVFM setting but does not fully solve dependence miscalibration or deactivate the latent dimension.
+- The hard-concrete gate failed: its learned value saturated near `1` and worsened dependence calibration. The smooth gate remained open at roughly `0.75--0.81`; it improved the independence cell but worsened strong-dependence recovery. Group lasso was not clearly better than direct latent-loading L1, and combining it with the smooth gate was unstable.
 
 ## Current decisions
 
 - Use oracle IBS as the primary synthetic prediction metric, with oracle CI and MAE as secondary metrics. Do not use IBS-Dep for now.
 - Report `oracle_joint_survival_ise` for DVFM and HACSurv to evaluate the full conditional event--censoring distribution beyond Kendall's tau.
-- Use separate DGP, sampling, split, and model seeds, and reuse identical censored cohorts across all compared models.
+- Use repeat seeds `0--9`, passing seed `i` independently to DGP generation, sampling, splitting, and model initialization; reuse identical censored cohorts across all compared models.
 - Keep train, validation, and test partitions separate; all checkpointing and hyperparameter selection must use validation data only.
 - Reject non-finite objectives/gradients and epochs with absolute ELBO, reconstruction NLL, or KL above 100.
-- Default DVFM settings for the next synthetic/semi-synthetic experiments: 200 epochs, learning rate `0.001`, batch size 64, `beta_max = 1`, warmup 50, no dropout, encoder `[64, 32]`, decoder `[32, 64]`, `weight_decay = 1e-4`, and best validation ELBO after warmup.
+- Default DVFM settings for the next synthetic/semi-synthetic experiments: 200 epochs, learning rate `0.001`, batch size 64, `beta_max = 1`, warmup 50, no dropout, encoder `[64, 32]`, decoder `[32, 64]`, `weight_decay = 1e-4`, latent-loading L1 `alpha = 0.1`, and best validation ELBO after warmup.
 - Keep latent dimension 1 for interpretable frailty recovery; treat larger latent dimensions as an ablation rather than a default.
 - Continue requiring validation IBS improvement, frailty Spearman within 0.03 of the reference, and no material worsening of Kendall's tau error before accepting later changes.

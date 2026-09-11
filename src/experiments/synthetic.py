@@ -19,7 +19,7 @@ from sota.baselines import (
     train_deepsurv,
     train_mtlr,
 )
-from .config import expand_scenarios
+from .config import expand_scenarios, expand_seed_streams
 from utility.data import SurvivalData
 from dvfm.model import DVFM
 from utility.data import SurvivalDataset
@@ -241,14 +241,16 @@ def _dvfm_variants(settings: dict) -> list[dict]:
     return variants
 
 
-def _generate_scenario(data_cfg: dict, scenario: dict, seed_cfg: dict, sampling_seed: int):
+def _generate_scenario(
+    data_cfg: dict, scenario: dict, dgp_seed: int, sampling_seed: int
+):
     mechanism = str(scenario.get("mechanism", "gaussian_shared_frailty")).lower()
     common = dict(
         n_samples=int(scenario.get("n_samples", data_cfg.get("n_samples"))),
         n_features=int(data_cfg["n_features"]),
         kendall_tau=float(scenario["kendall_tau"]),
         censoring_rate=float(scenario["censoring_rate"]),
-        dgp_seed=int(seed_cfg["dgp"]), sampling_seed=int(sampling_seed),
+        dgp_seed=int(dgp_seed), sampling_seed=int(sampling_seed),
     )
     if mechanism == "gaussian_shared_frailty":
         generated = generate_gaussian_shared_frailty(
@@ -508,15 +510,17 @@ def _fit_baseline(
 def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.DataFrame:
     """Run the size x tau x censoring x latent-dimension pilot."""
     data_cfg, model_cfg, evaluation = cfg["data"], cfg["models"], cfg["evaluation"]
-    seed_cfg = cfg["seeds"]
+    seed_streams = expand_seed_streams(cfg["seeds"])
     rows, histories, diagnostics, calibration, manifest = [], [], [], [], []
     for scenario in expand_scenarios(data_cfg):
         n_samples = int(scenario.get("n_samples", data_cfg.get("n_samples")))
-        for repeat, (sampling_seed, split_seed, model_seed) in enumerate(zip(
-            seed_cfg["sampling"], seed_cfg["split"], seed_cfg["model"]
-        )):
+        for repeat, seeds in enumerate(seed_streams):
+            dgp_seed = seeds["dgp"]
+            sampling_seed = seeds["sampling"]
+            split_seed = seeds["split"]
+            model_seed = seeds["model"]
             mechanism, generated = _generate_scenario(
-                data_cfg, scenario, seed_cfg, int(sampling_seed)
+                data_cfg, scenario, int(dgp_seed), int(sampling_seed)
             )
             full = SurvivalData(
                 generated.X, generated.observed_time, generated.event,
@@ -553,7 +557,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                 "empirical_marginal_kendall_tau": generated.empirical_marginal_kendall_tau,
                 "target_censoring_rate": float(scenario["censoring_rate"]),
                 "achieved_censoring_rate": generated.achieved_censoring_rate,
-                "repeat": repeat, "dgp_seed": int(seed_cfg["dgp"]),
+                "repeat": repeat, "dgp_seed": int(dgp_seed),
                 "sampling_seed": int(sampling_seed), "split_seed": int(split_seed),
                 "model_seed": int(model_seed),
             }
@@ -637,7 +641,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                     "scale_link": str(settings.get("scale_link", "softplus")),
                     "latent_path": str(settings.get("latent_path", "nonlinear")),
                     "shape_mode": str(settings.get("shape_mode", "conditional")),
-                    "latent_loading_l1": float(settings.get("latent_loading_l1", 0.0)),
+                    "latent_loading_l1": float(settings.get("latent_loading_l1", 0.1)),
                     "latent_group_lasso": float(settings.get("latent_group_lasso", 0.0)),
                     "latent_gate": str(settings.get("latent_gate", "none")),
                     "gate_l1": float(settings.get("gate_l1", 0.0)),
@@ -666,6 +670,7 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         latent_gate=str(settings.get("latent_gate", "none")),
                         gate_initial_value=float(settings.get("gate_initial_value", 0.9)),
                         gate_temperature=float(settings.get("gate_temperature", 0.67)),
+                        latent_loading_l1=float(settings.get("latent_loading_l1", 0.1)),
                     ).to(device)
                     artifacts = train_dvfm(
                         model, train_loader, validation_loader,
@@ -678,7 +683,6 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                             settings["numerical_failure_threshold"]
                         ),
                         weight_decay=float(settings.get("weight_decay", 0.0)),
-                        latent_loading_l1=float(settings.get("latent_loading_l1", 0.0)),
                         latent_group_lasso=float(settings.get("latent_group_lasso", 0.0)),
                         gate_l1=float(settings.get("gate_l1", 0.0)),
                         return_artifacts=True,

@@ -198,6 +198,19 @@ def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
     assert isinstance(history["gate_is_open"], bool)
 
 
+def test_dvfm_loading_l1_is_enabled_by_default_and_can_be_disabled():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8]
+    )
+    default_penalty, loading, _, _ = model.regularization_terms()
+    disabled_penalty, _, _, _ = model.regularization_terms(
+        latent_loading_l1=0.0
+    )
+    assert model.latent_loading_l1_alpha == 0.1
+    assert torch.allclose(default_penalty, 0.1 * loading)
+    assert float(disabled_penalty.detach()) == 0.0
+
+
 def test_dvfm_smooth_gate_and_group_lasso_have_gradients():
     model = DVFM(
         input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],

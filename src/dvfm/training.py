@@ -21,7 +21,7 @@ def train_dvfm(
     return_artifacts=False,
     numerical_failure_threshold=None,
     weight_decay=0.0,
-    latent_loading_l1=0.0,
+    latent_loading_l1=None,
     latent_group_lasso=0.0,
     gate_l1=0.0,
 ):

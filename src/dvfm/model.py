@@ -168,10 +168,13 @@ class DVFM(nn.Module):
                  encoder_dropout=None, decoder_dropout=None,
                  scale_link="softplus", latent_path="nonlinear",
                  shape_mode="conditional", latent_gate="none",
-                 gate_initial_value=0.9, gate_temperature=0.67):
+                 gate_initial_value=0.9, gate_temperature=0.67,
+                 latent_loading_l1=0.1):
         super().__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
+        if float(latent_loading_l1) < 0.0:
+            raise ValueError("latent_loading_l1 must be nonnegative")
         encoder_dropout = dropout if encoder_dropout is None else encoder_dropout
         decoder_dropout = dropout if decoder_dropout is None else decoder_dropout
         self.encoder = None if latent_dim == 0 else Encoder(
@@ -185,16 +188,25 @@ class DVFM(nn.Module):
             gate_temperature=gate_temperature,
         )
         self.latent_dim = latent_dim
+        # Alpha for the L1 penalty on decoder weights that carry the shared
+        # latent into the event and censoring margins.  It lives on the model
+        # so ordinary DVFM training uses the regularized method by default;
+        # callers may still override it for explicit ablations.
+        self.latent_loading_l1_alpha = float(latent_loading_l1)
 
     def regularization_terms(
-        self, latent_loading_l1=0.0, latent_group_lasso=0.0, gate_l1=0.0
+        self, latent_loading_l1=None, latent_group_lasso=0.0, gate_l1=0.0
     ):
         """Return differentiable L1 penalties and their unweighted diagnostics."""
         loading = self.decoder.latent_loading_l1()
         group_norm = self.decoder.latent_loading_group_norm()
         gate = self.decoder.gate_value(stochastic=False)
+        loading_alpha = (
+            self.latent_loading_l1_alpha
+            if latent_loading_l1 is None else float(latent_loading_l1)
+        )
         penalty = (
-            float(latent_loading_l1) * loading
+            loading_alpha * loading
             + float(latent_group_lasso) * group_norm
             + float(gate_l1) * gate.abs()
         )

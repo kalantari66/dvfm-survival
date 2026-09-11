@@ -1,16 +1,13 @@
 schema_version: 1
 workflow: {target_name: synthetic}
-resources: {cores: 4, memory: 25g, walltime: "06:00:00", partition: gpu-h200, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-h200, account: c2i-colon}
 study:
   name: synthetic
   stage: primary
   output_dir: results/synthetic
-seeds:
-  # One fixed DGP parameter seed and ten paired cohort/split/model repeats.
-  dgp: 2026
-  sampling: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  split: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
-  model: [200, 201, 202, 203, 204, 205, 206, 207, 208, 209]
+# Repeat i independently initializes the DGP, cohort sampler, split, and model
+# with seed i. All model variants within a repeat remain paired.
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 compute: {device: cuda, torch_num_threads: 4}
 data:
   source: gaussian_shared_frailty
@@ -18,7 +15,7 @@ data:
   n_features: 10
   calibration_samples: 50000
   grid:
-    kendall_tau: [0.00, 0.25, 0.50, 0.75]
+    kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     censoring_rate: [0.25, 0.50, 0.75]
 split:
   strategy: holdout
@@ -39,6 +36,9 @@ models:
     scale_link: exp
     dropout: 0.0
     weight_decay: 0.0001
+    # Default-on L1 shrinkage of the decoder weights carrying z into both
+    # event and censoring margins. Alpha selected by the paired ablation.
+    latent_loading_l1: 0.1
     epochs: 200
     learning_rate: 0.001
     batch_size: 64

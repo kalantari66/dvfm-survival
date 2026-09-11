@@ -51,14 +51,16 @@ applied.
 
 ## Experimental grid
 
-- Conditional Kendall's tau: `{0.00, 0.25, 0.50, 0.75}`.
+- Conditional Kendall's tau: `{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}`.
 - Censoring rate: `{0.25, 0.50, 0.75}`.
-- Ten paired sampling, split, and model seeds.
-- One fixed DGP parameter seed so coefficient changes are not confounded with
-  dependence or censoring changes.
+- Ten repeat seeds, numbered `0` through `9`. Within repeat `i`, seed `i`
+  independently initializes the DGP parameters, cohort sampling, data split,
+  and model optimization.
+- DGP parameters vary across repeats, but remain paired across every dependence
+  and censoring condition within a repeat.
 - Random 70% training, 10% validation, and 20% test split.
 
-This produces 120 independently sampled datasets. The identical cohort and
+This produces 270 independently sampled datasets. The identical cohort and
 split are used for the two DVFM specifications within every condition and seed.
 
 ## DVFM specifications
@@ -68,12 +70,15 @@ split are used for the two DVFM specifications within every condition and seed.
   not treated as a competing method.
 
 Both use encoder widths 64--32, decoder widths 32--64, batch size 64, learning
-rate `0.001`, weight decay `1e-4`, no dropout, and 200 epochs. The KL weight
-increases to `beta_max = 1` over the first 50 epochs.
+rate `0.001`, weight decay `1e-4`, no dropout, and 200 epochs. Decoder weights
+carrying the shared latent into the event and censoring margins receive the
+default L1 penalty `latent_loading_l1 = 0.1`; this coefficient is an explicit
+hyperparameter and the `latent_dim = 0` control incurs no latent-loading
+penalty. The KL weight increases to `beta_max = 1` over the first 50 epochs.
 
 The primary checkpoint is the numerically valid epoch with the best validation
 ELBO at or after epoch 50. Test data are not used for checkpoint selection.
-Together, the 120 datasets and two DVFM specifications produce 240 fits.
+Together, the 270 datasets and two DVFM specifications produce 540 fits.
 
 ## Evaluation
 
@@ -125,5 +130,5 @@ gwf -f workflows/synthetic/workflow.py status
 gwf -f workflows/synthetic/workflow.py run
 ```
 
-The target requests one H200 GPU, four CPU cores, 25 GB memory, and six hours.
-Expected runtime is approximately three to four hours.
+The target requests one H200 GPU, four CPU cores, 25 GB memory, and 12 hours.
+Expected runtime is approximately seven to nine hours.

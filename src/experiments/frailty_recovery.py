@@ -30,6 +30,7 @@ from dvfm.model import Decoder
 from utility.synthetic import generate_clayton_gamma_frailty, generate_gaussian_shared_frailty
 from utility.runtime import clone_state, seed_everything
 from utility.splitting import three_way_split_indices
+from .config import expand_seed_streams
 
 
 def _seed(seed: int) -> None:
@@ -428,10 +429,14 @@ def run_frailty_recovery_diagnostic(cfg: dict, out_dir: Path, device: torch.devi
     out_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = out_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    seeds = cfg["seeds"]
+    seed_streams = expand_seed_streams(cfg["seeds"])
     rows, recovery, subjects, histories, calibration, manifest = [], [], [], [], [], []
-    for repeat, (sampling_seed, split_seed, model_seed) in enumerate(zip(seeds["sampling"], seeds["split"], seeds["model"])):
-        seed_values = {"dgp": int(seeds["dgp"]), "sampling": int(sampling_seed)}
+    for repeat, seeds in enumerate(seed_streams):
+        dgp_seed = seeds["dgp"]
+        sampling_seed = seeds["sampling"]
+        split_seed = seeds["split"]
+        model_seed = seeds["model"]
+        seed_values = {"dgp": int(dgp_seed), "sampling": int(sampling_seed)}
         for mechanism in cfg["data"]["mechanisms"]:
             generated = _generate(mechanism, cfg, seed_values)
             full = SurvivalData(
@@ -448,7 +453,7 @@ def run_frailty_recovery_diagnostic(cfg: dict, out_dir: Path, device: torch.devi
                 "empirical_marginal_kendall_tau": generated.empirical_marginal_kendall_tau,
                 "target_censoring_rate": float(cfg["data"]["censoring_rate"]),
                 "achieved_censoring_rate": generated.achieved_censoring_rate,
-                "repeat": repeat, "dgp_seed": int(seeds["dgp"]),
+                "repeat": repeat, "dgp_seed": int(dgp_seed),
                 "sampling_seed": int(sampling_seed), "split_seed": int(split_seed),
                 "model_seed": int(model_seed),
             }

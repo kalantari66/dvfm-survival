@@ -28,25 +28,27 @@ Every generator must pass tests for deterministic seeding, finite positive times
 
 The full protocol is documented in [`SYNTHETIC.md`](SYNTHETIC.md), with
 `configs/synthetic.yaml` as its executable specification. It uses 10 repeats of
-10,000 subjects with 10 covariates over the same 12 shared-Gaussian-frailty
-conditions as the pilot: `kendall_tau` in `{0, 0.25, 0.50, 0.75}` crossed with
+10,000 subjects with 10 covariates over 27 shared-Gaussian-frailty conditions:
+`kendall_tau` in `{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}` crossed with
 censoring in `{0.25, 0.50, 0.75}`. This is a DVFM-only mechanistic experiment,
 not a model-comparison benchmark.
 Each seeded random holdout assigns 70% of subjects to training, 10% to
-validation, and 20% to testing. The 120 paired datasets therefore produce
-240 DVFM fits in one GWF target.
+validation, and 20% to testing. The 270 paired datasets therefore produce
+540 DVFM fits in one GWF target.
 
 The primary DVFM uses `latent_dim = 1`, matching the one-dimensional true
 frailty, and the same architecture with `latent_dim = 0` is an internal
 conditional-independence control. Both use the recovery-validated 200-epoch schedule
 (`beta_max = 1`, warmup 50, learning rate `0.001`, batch size 64), and the best
 numerically valid validation-ELBO checkpoint at or after epoch 50, with Adam
-weight decay `1e-4`. The full grid is submitted as one GWF target
+weight decay `1e-4` and default-on shared-latent loading L1 shrinkage
+(`latent_loading_l1 = 0.1`). The full grid is submitted as one GWF target
 with `workflows/synthetic/workflow.py` and writes to `results/synthetic/`.
 
 The DGP draws ten independent standard-normal covariates and a standard-normal
-subject frailty. Separate fixed Gaussian coefficient vectors govern event and
-censoring times. The same calibrated frailty loading enters both Weibull AFT
+subject frailty. Event and censoring coefficient vectors vary across the ten
+repeat seeds but remain paired across all conditions within each repeat. The
+same calibrated frailty loading enters both Weibull AFT
 predictors and is chosen to attain the requested conditional `kendall_tau`; a
 censoring intercept is then calibrated to attain the requested censoring rate.
 Observed follow-up is the minimum of latent event and censoring time. No
@@ -319,13 +321,17 @@ specification. It currently wires SUPPORT only and runs as one GWF target via
 6. makes a 70/10/20 split stratified jointly by event status and 20 observed-time
    quantile bands formed within event status.
 
-Five paired repeats are used initially. A repeat shares the sampled cohort and
-split between CoxPH and DVFM; sampling, split, and model seeds are recorded
-separately. Complete generated event/censor times are retained in memory only
+Ten paired repeats use seeds `0` through `9`. Repeat `i` independently supplies
+seed `i` to generation, splitting, and model initialization, while sharing the
+sampled cohort and split between CoxPH and DVFM. Complete generated event/censor times are retained in memory only
 for oracle evaluation, avoiding per-run NPZ clutter. `dgp_diagnostics.csv`
 records achieved censoring and empirical copula/marginal Kendall's tau. This is
 a wiring pilot; the full comparator roster and additional datasets are added
 only after these generator diagnostics pass.
+
+DVFM uses the same default-on latent-loading L1 coefficient as the primary
+synthetic experiment: `latent_loading_l1 = 0.1`. It remains configurable and
+can be set to zero for an explicit unregularized ablation.
 
 Two generators are required:
 1. **Foomani Algorithm 4:** retain real covariates and complete positive outcomes; fit the event marginal on the training partition only; map outcomes to event quantiles; sample censoring quantiles conditionally using a chosen copula; invert a calibrated censoring marginal; then form $$(\min(E,C), \mathbf{1}[E \le C])$$.
