@@ -22,10 +22,14 @@ def run_semi_synthetic_experiment(
     experiment_config: Path, result_dir: Path, cores: int, memory: str,
     walltime: str, partition: str, account: str,
 ) -> AnonymousTarget:
-    """Generate and fit all SUPPORT conditions in one SLURM allocation."""
+    """Generate and fit all configured datasets in one SLURM allocation."""
+    with experiment_config.open(encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)["data"]
+    datasets = data.get("datasets", [data])
+    dataset_paths = [Path(spec["path"]) for spec in datasets]
     inputs = [
         str(experiment_config),
-        str(PROJECT_ROOT / "data" / "support.feather"),
+        *(str(path if path.is_absolute() else PROJECT_ROOT / path) for path in dataset_paths),
         str(PROJECT_ROOT / "environment.yml"),
         str(PROJECT_ROOT / "pyproject.toml"),
         *sorted(

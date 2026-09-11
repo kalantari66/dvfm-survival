@@ -10,9 +10,14 @@ study:
 seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 compute: {device: cuda, torch_num_threads: 4}
 data:
-  source: support_cox_clayton_semisynthetic
-  name: support
-  path: data/support.feather
+  source: cox_clayton_semisynthetic
+  datasets:
+    - name: support
+      path: data/support.feather
+      time_column: duration
+      event_column: event
+      numeric_features: [x0, x7, x8, x9, x10, x11, x12, x13]
+      categorical_features: [x1, x2, x3, x4, x5, x6]
   copula: clayton
   kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
   censoring_rates: [0.25, 0.50, 0.75]
@@ -24,8 +29,8 @@ split:
   validation_fraction: 0.10
   test_fraction: 0.20
 preprocessing:
-  # SUPPORT continuous features are standardized and categorical features are
-  # one-hot encoded once by the dataset-specific generator.
+  # For every dataset, z-score numeric features using training-split statistics.
+  # Apply that scaler to validation/test; categorical features stay one-hot encoded.
   zscore_x: true
 models:
   # This first wiring run checks DVFM against the basic independence reference.

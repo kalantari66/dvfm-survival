@@ -131,6 +131,41 @@ def expand_scenarios(data_cfg: dict) -> list[dict]:
     return [dict(zip(keys, values)) for values in product(*[_as_list(grid[k]) for k in keys])]
 
 
+def semisynthetic_datasets(data: dict) -> list[dict]:
+    """Resolve named datasets, retaining compatibility with the SUPPORT schema."""
+    if data["source"] == "support_cox_clayton_semisynthetic":
+        return [dict(name=data.get("name", "support"), path=data["path"],
+                     time_column="duration", event_column="event",
+                     numeric_features=["x0", "x7", "x8", "x9", "x10", "x11", "x12", "x13"],
+                     categorical_features=["x1", "x2", "x3", "x4", "x5", "x6"])]
+    datasets = _require(data, "datasets", "data")
+    if not isinstance(datasets, list) or not datasets:
+        raise ValueError("data.datasets must be a non-empty list")
+    names = set()
+    for spec in datasets:
+        if not isinstance(spec, dict):
+            raise ValueError("Each dataset must be a mapping")
+        for key in ("name", "path", "time_column", "event_column"):
+            if not isinstance(_require(spec, key, "dataset"), str) or not spec[key]:
+                raise ValueError(f"dataset.{key} must be a non-empty string")
+        name = spec["name"]
+        if not all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in name):
+            raise ValueError("Dataset names must contain only ASCII letters, digits, '-' or '_'")
+        if name.lower() in names:
+            raise ValueError(f"Duplicate dataset name: {name}")
+        names.add(name.lower())
+        for key in ("numeric_features", "categorical_features"):
+            values = _require(spec, key, "dataset")
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
+                raise ValueError(f"dataset.{key} must be a list of column names")
+        features = spec["numeric_features"] + spec["categorical_features"]
+        if not features or len(set(features)) != len(features):
+            raise ValueError("Dataset features must be non-empty and unique")
+        if set(features) & {spec["time_column"], spec["event_column"]}:
+            raise ValueError("Dataset outcome columns cannot also be features")
+    return datasets
+
+
 def load_config(path: str | Path) -> dict:
     path = Path(path)
     with path.open("r", encoding="utf-8") as handle:
@@ -386,8 +421,8 @@ def validate_config(cfg: dict) -> None:
             for key in ("dependence_samples_per_epoch", "dependence_samples_checkpoint"):
                 if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
                     raise ValueError(f"evaluation.{key} must be at least 2")
-    elif source == "support_cox_clayton_semisynthetic":
-        _require(data, "path", "data")
+    elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
+        semisynthetic_datasets(data)
         if str(_require(data, "copula", "data")).lower() != "clayton":
             raise ValueError("SUPPORT semi-synthetic generation currently requires copula: clayton")
         tau_values = _require(data, "kendall_tau", "data")

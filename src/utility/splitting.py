@@ -101,10 +101,14 @@ def iter_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
 
 def preprocess_covariates(train, validation, test, cfg):
     if bool(cfg.get("zscore_x", False)):
-        scaler = StandardScaler().fit(train.X)
-        train.X = scaler.transform(train.X)
-        validation.X = scaler.transform(validation.X)
-        test.X = scaler.transform(test.X)
+        numeric_features = cfg.get("numeric_features")
+        columns = (list(range(train.X.shape[1])) if numeric_features is None else
+                   [train.feature_names.index(name) for name in numeric_features])
+        if columns:
+            scaler = StandardScaler().fit(train.X[:, columns])
+            for part in (train, validation, test):
+                part.X = np.asarray(part.X, dtype=float).copy()
+                part.X[:, columns] = scaler.transform(part.X[:, columns])
     return train, validation, test
 
 

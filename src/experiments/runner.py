@@ -20,7 +20,7 @@ from sota.baselines import (
     train_deepsurv,
     train_mtlr,
 )
-from .config import expand_scenarios, expand_seed_streams
+from .config import expand_scenarios, expand_seed_streams, semisynthetic_datasets
 from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
 from utility.metrics import censoring_rate, collect_metrics
 from dvfm.model import DVFM
@@ -315,16 +315,10 @@ def validate_inputs(cfg: dict) -> None:
     source = str(data_cfg["source"]).lower()
     if source in {"synthetic_copula", "gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
         return
-    path = Path(data_cfg["path"])
-    if not path.exists():
-        raise FileNotFoundError(path)
-    if source == "support_cox_clayton_semisynthetic":
-        if path.suffix.lower() not in {".feather", ".ftr"}:
-            raise ValueError("SUPPORT semi-synthetic input must be a Feather file")
-        required = {"duration", "event", *(f"x{i}" for i in range(14))}
-        missing = sorted(required - set(pd.read_feather(path).columns))
-        if missing:
-            raise ValueError(f"SUPPORT input is missing columns: {missing}")
+    if source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
+        from utility.semisynthetic import read_semisynthetic_source
+        for spec in semisynthetic_datasets(data_cfg):
+            read_semisynthetic_source(spec)
         return
     _load_dataset(data_cfg, source)
 
@@ -350,69 +344,70 @@ def run(cfg: dict) -> pd.DataFrame:
         from .frailty_recovery import run_frailty_recovery_diagnostic
 
         return run_frailty_recovery_diagnostic(cfg, out_dir, device)
-    elif source == "support_cox_clayton_semisynthetic":
+    elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
         from utility.semisynthetic import (
-            fit_support_semisynthetic_dgp, generate_support_semisynthetic,
+            fit_semisynthetic_dgp, generate_support_semisynthetic,
         )
 
-        dgp = fit_support_semisynthetic_dgp(
-            data_cfg["path"], cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
-        )
         diagnostics = []
-        seed_streams = expand_seed_streams(cfg["seeds"])
-        for repeat, seeds in enumerate(seed_streams):
-            dgp_seed = seeds["dgp"]
-            sampling_seed = seeds["sampling"]
-            split_seed = seeds["split"]
-            model_seed = seeds["model"]
-            tau_values = data_cfg["kendall_tau"]
-            tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
-            for target_tau, target_rate in product(tau_values, data_cfg["censoring_rates"]):
-                generated = generate_support_semisynthetic(
-                    dgp, kendall_tau=float(target_tau),
-                    censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
-                )
-                train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
-                    generated.data, cfg["split"], int(split_seed)
-                )
-                train, validation, test = _preprocess_three(
-                    _subset(generated.data, train_idx),
-                    _subset(generated.data, validation_idx),
-                    _subset(generated.data, test_idx),
-                    cfg["preprocessing"],
-                )
-                seed_everything(int(model_seed))
-                scenario = f"{data_cfg.get('name', 'support')}_clayton_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
-                context = {
-                    "Study": study_cfg["name"], "Stage": study_cfg["stage"],
-                    "Dataset Type": source, "Dataset": data_cfg.get("name", "support"),
-                    "Source Path": str(data_cfg["path"]), "Scenario": scenario,
-                    "Copula": "clayton", "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
-                    "Theta": generated.clayton_theta,
-                    "Target Kendall Tau": generated.target_kendall_tau,
-                    "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
-                    "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
-                    "Target Censoring Rate": generated.target_censoring_rate,
-                    "Achieved Censoring Rate": generated.achieved_censoring_rate,
-                    "Repeat": repeat, "Fold": 0, "DGP Seed": int(dgp_seed),
-                    "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
-                    "Model Seed": int(model_seed),
-                }
-                split_rows, preds = _fit_one_split(
-                    train, validation, test, cfg, device, context,
-                    latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
-                                       if cfg["evaluation"].get("save_latent_recovery", True) else None),
-                    validation_indices=validation_idx, test_indices=test_idx,
-                )
-                rows.extend(split_rows)
-                diagnostics.append({
-                    **context, "Censor Time Scale": generated.censor_time_scale,
-                    "Source Samples": dgp.source_n_samples,
-                    "Source Event Rate": dgp.source_event_rate,
-                    "Cox Penalizer": dgp.cox_penalizer,
-                })
-                if cfg["evaluation"].get("save_predictions", False):
-                    _save_predictions(out_dir, context, preds)
+        for dataset in semisynthetic_datasets(data_cfg):
+            dgp = fit_semisynthetic_dgp(
+                dataset, cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
+            )
+            seed_streams = expand_seed_streams(cfg["seeds"])
+            for repeat, seeds in enumerate(seed_streams):
+                dgp_seed = seeds["dgp"]
+                sampling_seed = seeds["sampling"]
+                split_seed = seeds["split"]
+                model_seed = seeds["model"]
+                tau_values = data_cfg["kendall_tau"]
+                tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
+                for target_tau, target_rate in product(tau_values, data_cfg["censoring_rates"]):
+                    generated = generate_support_semisynthetic(
+                        dgp, kendall_tau=float(target_tau),
+                        censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
+                    )
+                    train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
+                        generated.data, cfg["split"], int(split_seed)
+                    )
+                    train, validation, test = _preprocess_three(
+                        _subset(generated.data, train_idx),
+                        _subset(generated.data, validation_idx),
+                        _subset(generated.data, test_idx),
+                        {**cfg["preprocessing"], "numeric_features": dataset["numeric_features"]},
+                    )
+                    seed_everything(int(model_seed))
+                    scenario = f"{dataset['name']}_clayton_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
+                    context = {
+                        "Study": study_cfg["name"], "Stage": study_cfg["stage"],
+                        "Dataset Type": source, "Dataset": dataset["name"],
+                        "Source Path": str(dataset["path"]), "Scenario": scenario,
+                        "Copula": "clayton", "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
+                        "Theta": generated.clayton_theta,
+                        "Target Kendall Tau": generated.target_kendall_tau,
+                        "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
+                        "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
+                        "Target Censoring Rate": generated.target_censoring_rate,
+                        "Achieved Censoring Rate": generated.achieved_censoring_rate,
+                        "Repeat": repeat, "Fold": 0, "DGP Seed": int(dgp_seed),
+                        "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
+                        "Model Seed": int(model_seed),
+                    }
+                    split_rows, preds = _fit_one_split(
+                        train, validation, test, cfg, device, context,
+                        latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                           if cfg["evaluation"].get("save_latent_recovery", True) else None),
+                        validation_indices=validation_idx, test_indices=test_idx,
+                    )
+                    rows.extend(split_rows)
+                    diagnostics.append({
+                        **context, "Censor Time Scale": generated.censor_time_scale,
+                        "Source Samples": dgp.source_n_samples,
+                        "Source Event Rate": dgp.source_event_rate,
+                        "Cox Penalizer": dgp.cox_penalizer,
+                    })
+                    if cfg["evaluation"].get("save_predictions", False):
+                        _save_predictions(out_dir, context, preds)
         pd.DataFrame(diagnostics).to_csv(out_dir / "dgp_diagnostics.csv", index=False)
     elif source == "synthetic_copula":
         scenarios = expand_scenarios(data_cfg)

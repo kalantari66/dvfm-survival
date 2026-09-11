@@ -1,5 +1,41 @@
 # Semi-synthetic frailty recovery outputs
 
+## Configuring multiple datasets
+
+`data.source: cox_clayton_semisynthetic` accepts a non-empty `data.datasets`
+list. The checked-in configuration includes SUPPORT; append entries like:
+
+```yaml
+    - name: another_cohort
+      path: data/another_cohort.csv
+      time_column: followup
+      event_column: observed
+      numeric_features: [age, measurement]
+      categorical_features: [group]
+```
+
+Names must be unique (case-insensitive) and contain only ASCII letters, digits,
+hyphens or underscores. Specify both feature lists; either can be empty.
+Outcome columns cannot be features. Feather, CSV and Parquet files are supported.
+Events are interpreted as observed when their numeric value is positive.
+Rows with non-finite or non-positive durations are excluded; row indices in
+latent exports refer to the resulting filtered cohort.
+
+The top-level `seeds` list, models, splitting options, Cox penalizer, tau grid
+and censoring-rate grid apply to every dataset. Each dataset gets its own
+preprocessor and fitted Cox margins, followed by all repeats and conditions.
+Result tables include `Dataset`; latent directories and prediction filenames
+include the dataset name to keep runs distinct. The workflow tracks every
+configured input file. The older single-SUPPORT source remains supported.
+
+`preprocessing.zscore_x: true` applies to every dataset. After each split,
+numeric features are standardized using the training mean and standard deviation;
+validation/test use that same scaler. One-hot categorical columns are unchanged.
+This matches the numeric-scaling convention in survival-copula's preprocessing.
+The generator separately imputes/encodes the source cohort and standardizes its
+numeric features to fit the Cox margins defining the semi-synthetic DGP. That
+cohort-level DGP preparation is distinct from the training-split model scaler.
+
 The semi-synthetic SUPPORT runner exports latent recovery by default
 (`evaluation.save_latent_recovery: true`), independently of `save_predictions`.
 Each selected DVFM checkpoint produces a directory under

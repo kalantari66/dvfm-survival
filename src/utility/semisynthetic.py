@@ -81,7 +81,9 @@ class SemiSyntheticSample:
     censor_time_scale: float
 
 
-def _support_preprocessor() -> ColumnTransformer:
+def _support_preprocessor(numeric_features=None, categorical_features=None) -> ColumnTransformer:
+    numeric_features = SUPPORT_NUMERIC_FEATURES if numeric_features is None else numeric_features
+    categorical_features = SUPPORT_CATEGORICAL_FEATURES if categorical_features is None else categorical_features
     numeric = Pipeline([
         ("imputer", SimpleImputer(strategy="mean")),
         ("scaler", StandardScaler()),
@@ -91,8 +93,8 @@ def _support_preprocessor() -> ColumnTransformer:
         ("one_hot", OneHotEncoder(drop="first", handle_unknown="ignore", sparse_output=False)),
     ])
     return ColumnTransformer([
-        ("numeric", numeric, SUPPORT_NUMERIC_FEATURES),
-        ("categorical", categorical, SUPPORT_CATEGORICAL_FEATURES),
+        ("numeric", numeric, numeric_features),
+        ("categorical", categorical, categorical_features),
     ], verbose_feature_names_out=False)
 
 
@@ -114,20 +116,46 @@ def _fit_cox_margin(X: np.ndarray, feature_names: list[str], time, event, penali
 
 def fit_support_semisynthetic_dgp(path: str | Path, *, cox_penalizer: float = 0.01) -> SupportSemiSyntheticDGP:
     """Load SUPPORT, preprocess its covariates, and fit event/censor Cox margins."""
+    return fit_semisynthetic_dgp(dict(
+        path=path, time_column="duration", event_column="event",
+        numeric_features=SUPPORT_NUMERIC_FEATURES,
+        categorical_features=SUPPORT_CATEGORICAL_FEATURES,
+    ), cox_penalizer=cox_penalizer)
+
+
+def read_semisynthetic_source(spec):
+    """Read and check a real cohort before fitting semi-synthetic margins."""
+    path = Path(spec["path"])
+    if path.suffix.lower() in {".feather", ".ftr"}:
+        frame = pd.read_feather(path)
+    elif path.suffix.lower() == ".csv":
+        frame = pd.read_csv(path)
+    elif path.suffix.lower() in {".parquet", ".pq"}:
+        frame = pd.read_parquet(path)
+    else:
+        raise ValueError(f"Unsupported semi-synthetic input format: {path}")
+    required = set(spec["numeric_features"] + spec["categorical_features"] +
+                   [spec["time_column"], spec["event_column"]])
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"{path} is missing columns: {missing}")
+    return frame
+
+
+def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
+    """Fit Cox margins for a dataset with explicitly configured covariates."""
+    path = spec["path"]
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
-    frame = pd.read_feather(path)
-    required = set(SUPPORT_NUMERIC_FEATURES + SUPPORT_CATEGORICAL_FEATURES + ["duration", "event"])
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"SUPPORT file is missing columns: {missing}")
-    frame = frame.loc[np.isfinite(frame["duration"]) & (frame["duration"] > 0)].reset_index(drop=True)
-    event = (pd.to_numeric(frame["event"], errors="coerce").fillna(0) > 0).astype(int).to_numpy()
-    preprocessor = _support_preprocessor()
+    frame = read_semisynthetic_source(spec)
+    time_column, event_column = spec["time_column"], spec["event_column"]
+    frame = frame.loc[np.isfinite(frame[time_column]) & (frame[time_column] > 0)].reset_index(drop=True)
+    event = (pd.to_numeric(frame[event_column], errors="coerce").fillna(0) > 0).astype(int).to_numpy()
+    preprocessor = _support_preprocessor(spec["numeric_features"], spec["categorical_features"])
     X = np.asarray(preprocessor.fit_transform(frame), dtype=np.float64)
     feature_names = list(preprocessor.get_feature_names_out())
-    duration = frame["duration"].to_numpy(dtype=float)
+    duration = frame[time_column].to_numpy(dtype=float)
     event_margin = _fit_cox_margin(X, feature_names, duration, event, cox_penalizer)
     censor_margin = _fit_cox_margin(X, feature_names, duration, 1 - event, cox_penalizer)
     return SupportSemiSyntheticDGP(

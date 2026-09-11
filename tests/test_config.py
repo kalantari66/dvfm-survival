@@ -2,10 +2,26 @@ from pathlib import Path
 
 import pytest
 
-from experiments.config import expand_scenarios, expand_seed_streams, load_config
+from experiments.config import expand_scenarios, expand_seed_streams, load_config, semisynthetic_datasets
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_semisynthetic_dataset_names_and_features_are_validated():
+    data = load_config(ROOT / "configs/semi_synthetic.yaml")["data"]
+    data["datasets"].append({**data["datasets"][0], "name": "another_cohort"})
+    assert len(semisynthetic_datasets(data)) == 2
+    data["datasets"][1]["name"] = "SUPPORT"
+    with pytest.raises(ValueError, match="Duplicate dataset"):
+        semisynthetic_datasets(data)
+    data["datasets"][1]["name"] = "../outside"
+    with pytest.raises(ValueError, match="Dataset names"):
+        semisynthetic_datasets(data)
+    data["datasets"][1]["name"] = "another_cohort"
+    data["datasets"][1]["numeric_features"] = ["duration"]
+    with pytest.raises(ValueError, match="outcome columns"):
+        semisynthetic_datasets(data)
 
 
 def test_canonical_config_loads():
@@ -101,7 +117,8 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
 
 def test_support_semisynthetic_config_has_paired_generator_and_split():
     cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
-    assert cfg["data"]["source"] == "support_cox_clayton_semisynthetic"
+    assert cfg["data"]["source"] == "cox_clayton_semisynthetic"
+    assert cfg["data"]["datasets"][0]["name"] == "support"
     assert cfg["data"]["copula"] == "clayton"
     assert cfg["data"]["kendall_tau"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     assert cfg["evaluation"]["save_latent_recovery"] is True
