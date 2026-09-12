@@ -324,10 +324,14 @@ def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: floa
     tau = float(kendall_tau)
     if not 0.0 <= tau < 1.0:
         raise ValueError("kendall_tau must be in [0, 1)")
+    rng = np.random.default_rng(seed)
+    if name == "independence":
+        if tau != 0.0:
+            raise ValueError("The independence copula requires kendall_tau = 0")
+        return rng.uniform(size=(int(n_samples), 2)), 0.0, None
     if name == "clayton":
         uniforms, theta, frailty = sample_clayton_uniforms(n_samples, tau, seed, return_frailty=True)
         return uniforms, theta, frailty
-    rng = np.random.default_rng(seed)
     if name == "gaussian":
         rho = np.sin(np.pi * tau / 2.0)
         normals = rng.multivariate_normal([0.0, 0.0], [[1.0, rho], [rho, 1.0]], size=int(n_samples))
@@ -424,6 +428,8 @@ def semi_synthetic_joint_survival(dgp, sample, X, event_grid, censor_grid):
     v = np.exp(-dgp.censor_margin.relative_risk(x)[:, None] * censor_hazard[None, :])
     copula = sample.copula
     theta = sample.clayton_theta
+    if copula == "independence":
+        return u[:, :, None] * v[:, None, :]
     if copula == "clayton":
         return np.maximum(u[:, :, None] ** (-theta) + v[:, None, :] ** (-theta) - 1.0, 1e-12) ** (-1.0 / theta) if theta else u[:, :, None] * v[:, None, :]
     if copula == "frank":

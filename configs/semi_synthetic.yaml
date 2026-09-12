@@ -102,8 +102,8 @@ data:
       categorical_features: [Sex]
       subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
   copula: clayton  # Compatibility default; use copulas below for the full grid.
-  # Dependence-family robustness: product at tau=0 and Gaussian/Archimedean
-  # alternatives at positive tau.
+  # All four families are evaluated for positive tau. At tau=0 the runner
+  # emits one product-copula condition rather than four duplicates.
   copulas: [gaussian, clayton, frank, gumbel]
   kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
   # Match each source cohort's observed censoring rate; the copula still
@@ -121,11 +121,12 @@ preprocessing:
   # Apply that scaler to validation/test; categorical features stay one-hot encoded.
   zscore_x: true
 models:
-  # Every available baseline is evaluated on the same generated cohort/split.
-  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, deephit, gbsa, rsf, weibull_aft, bayesian_cox_gamma_frailty, dvfm]
+  # One representative independent learner per class plus dependent-censoring
+  # comparators. Tree, Weibull-AFT, and DeepHit sensitivity runs are appendix-only.
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
   dvfm:
-    # z=0 is the no-frailty ablation; higher dimensions assess overcomplete latents.
-    latent_dims: [0, 1, 5, 10]
+    # z=0 is the matched no-frailty control; z=1 matches the scalar DGP.
+    latent_dims: [0, 1]
     latent_dim: 1  # Backward-compatible default; the runner iterates latent_dims.
     encoder_hidden: [64, 32]
     decoder_hidden: [32, 64]
@@ -147,7 +148,7 @@ models:
     free_bits: 0.0
     mc_samples: 100
 evaluation:
-  n_time_points: 200
+  n_time_points: 100
   max_time_factor: 1.2
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   save_predictions: false

@@ -419,7 +419,14 @@ def run(cfg: dict) -> pd.DataFrame:
                     if isinstance(rate_specification, str) and rate_specification.lower() == "original"
                     else rate_specification
                 )
-                for copula, target_tau, target_rate in product(copulas, tau_values, target_rates):
+                # Every named copula reduces to product at tau=0, so produce
+                # one independence condition rather than four duplicates.
+                scenario_conditions = (
+                    (copula, target_tau, target_rate)
+                    for target_tau, target_rate in product(tau_values, target_rates)
+                    for copula in (["independence"] if float(target_tau) == 0.0 else copulas)
+                )
+                for copula, target_tau, target_rate in scenario_conditions:
                     generated = generate_semisynthetic(
                         dgp, kendall_tau=float(target_tau),
                         censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),

@@ -107,7 +107,7 @@ def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch)
     cfg["evaluation"]["n_time_points"] = 10
     results = run(cfg)
     assert len(results) == 8 * len(cfg["models"]["dvfm"]["latent_dims"])
-    assert set(results["latent_dim"]) == {0, 1, 5, 10}
+    assert set(results["latent_dim"]) == {0, 1}
     assert results.Scenario.nunique() == 4
     assert set(results.Dataset) == {"whas", "second"}
     assert fitted_datasets == ["whas", "second"]
