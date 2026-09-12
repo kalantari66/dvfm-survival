@@ -68,12 +68,15 @@ data:
       event_column: event
       numeric_features: [satisfaction_level, last_evaluation, number_projects, average_montly_hours, work_accident, promotion_last_5years]
       categorical_features: [department, salary]
+      # Preserve event-time distributions with event-status × quantile-time strata.
+      subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
     - name: mimic_iv
       path: data/mimic_all_causes.csv
       time_column: time
       event_column: event
       numeric_features: [SOFA, abs_lymphocytes_max, abs_lymphocytes_min, age, aniongap_max, aniongap_min, aniongap_range, bicarbonate_max, bicarbonate_min, bicarbonate_range, bun_max, bun_min, bun_range, calcium_max, calcium_min, calcium_range, chloride_max, chloride_min, chloride_range, creatinine_max, creatinine_min, creatinine_range, dbp_max, dbp_mean, dbp_min, dbp_range, glucose_1_max, glucose_1_min, glucose_1_range, glucose_max, glucose_mean, glucose_min, glucose_range, heart_rate_max, heart_rate_mean, heart_rate_min, heart_rate_range, hematocrit_max, hematocrit_min, hematocrit_range, hemoglobin_max, hemoglobin_min, hemoglobin_range, inr_max, inr_min, inr_range, mbp_max, mbp_mean, mbp_min, mbp_range, platelets_max, platelets_min, platelets_range, potassium_max, potassium_min, potassium_range, pt_max, pt_min, pt_range, ptt_max, ptt_min, ptt_range, resp_rate_max, resp_rate_mean, resp_rate_min, resp_rate_range, sbp_max, sbp_mean, sbp_min, sbp_range, sodium_max, sodium_min, sodium_range, spo2_max, spo2_mean, spo2_min, spo2_range, temperature_max, temperature_mean, temperature_min, temperature_range, wbc_max, wbc_min, wbc_range, weight]
       categorical_features: [is_male, is_white, renal, cns, coagulation, cardiovascular]
+      subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
     - name: seer_brain
       path: data/seer_brain.csv
       rename_columns: {Survival months: time}
@@ -81,6 +84,7 @@ data:
       event_column: event
       numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+]
       categorical_features: [Sex, Behavior recode for analysis, SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+)]
+      subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
     - name: seer_liver
       path: data/seer_liver.csv
       rename_columns: {Survival months: time}
@@ -88,6 +92,7 @@ data:
       event_column: event
       numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+, "Derived AJCC Stage Group, 6th ed (2004-2015)", "Derived AJCC T, 6th ed (2004-2015)", "Derived AJCC N, 6th ed (2004-2015)", "Derived AJCC M, 6th ed (2004-2015)", "Derived AJCC Stage Group, 7th ed (2010-2015)"]
       categorical_features: [Sex]
+      subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
     - name: seer_stomach
       path: data/seer_stomach.csv
       rename_columns: {Survival months: time}
@@ -95,9 +100,11 @@ data:
       event_column: event
       numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+, "Derived AJCC Stage Group, 6th ed (2004-2015)", "Derived AJCC T, 6th ed (2004-2015)", "Derived AJCC N, 6th ed (2004-2015)", "Derived AJCC M, 6th ed (2004-2015)", "Derived AJCC Stage Group, 7th ed (2010-2015)"]
       categorical_features: [Sex]
+      subsample: {target_size: 10000, time_bins: 10, random_seed: 42}
   copula: clayton  # Compatibility default; use copulas below for the full grid.
-  # Set to [gaussian, clayton, frank] for the full copula comparison.
-  copulas: [clayton]
+  # Dependence-family robustness: product at tau=0 and Gaussian/Archimedean
+  # alternatives at positive tau.
+  copulas: [gaussian, clayton, frank, gumbel]
   kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
   # Match each source cohort's observed censoring rate; the copula still
   # induces event/censor dependence in the generated DGP.
@@ -114,9 +121,8 @@ preprocessing:
   # Apply that scaler to validation/test; categorical features stay one-hot encoded.
   zscore_x: true
 models:
-  # This first wiring run checks DVFM against the basic independence reference.
-  # The full baseline roster is added after the generator has been validated.
-  enabled: [coxph, dvfm]
+  # Every available baseline is evaluated on the same generated cohort/split.
+  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, deephit, gbsa, rsf, weibull_aft, bayesian_cox_gamma_frailty, dvfm]
   dvfm:
     # z=0 is the no-frailty ablation; higher dimensions assess overcomplete latents.
     latent_dims: [0, 1, 5, 10]

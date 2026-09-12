@@ -123,6 +123,16 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
         "employee", "mimic_iv", "seer_brain", "seer_liver", "seer_stomach",
     ]
     assert cfg["data"]["copula"] == "clayton"
+    assert cfg["data"]["copulas"] == ["gaussian", "clayton", "frank", "gumbel"]
+    subsampled = {
+        item["name"]: item["subsample"] for item in cfg["data"]["datasets"]
+        if "subsample" in item
+    }
+    assert set(subsampled) == {
+        "employee", "mimic_iv", "seer_brain", "seer_liver", "seer_stomach",
+    }
+    assert all(item == {"target_size": 10000, "time_bins": 10, "random_seed": 42}
+               for item in subsampled.values())
     assert cfg["data"]["kendall_tau"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     assert cfg["evaluation"]["save_latent_recovery"] is True
     assert cfg["data"]["censoring_rates"] == "original"
@@ -134,6 +144,10 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
         "best_validation_elbo_post_warmup"
     )
     assert cfg["models"]["dvfm"]["scale_link"] == "exp"
+    assert set(cfg["models"]["enabled"]) == {
+        "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "deephit",
+        "gbsa", "rsf", "weibull_aft", "bayesian_cox_gamma_frailty", "dvfm",
+    }
 
 
 def test_hyperparameter_sweep_is_paired_and_keeps_reference_fixed():

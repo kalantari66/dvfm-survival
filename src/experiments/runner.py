@@ -511,6 +511,10 @@ def run(cfg: dict) -> pd.DataFrame:
                     diagnostics.append({
                         **context, "Censor Time Scale": generated.censor_time_scale,
                         "Source Samples": dgp.source_n_samples,
+                        "Source Samples Before Subsampling": getattr(
+                            dgp, "source_n_samples_before_subsampling", dgp.source_n_samples
+                        ),
+                        "Subsample Target Size": getattr(dgp, "subsample_target_size", None),
                         "Source Event Rate": dgp.source_event_rate,
                         "Raw Features": len(dataset["numeric_features"]) + len(dataset["categorical_features"]),
                         "Encoded Features": len(dgp.feature_names),

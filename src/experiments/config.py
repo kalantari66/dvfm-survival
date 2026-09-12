@@ -170,6 +170,14 @@ def semisynthetic_datasets(data: dict) -> list[dict]:
             raise ValueError("Dataset features must be non-empty and unique")
         if set(features) & {spec["time_column"], spec["event_column"]}:
             raise ValueError("Dataset outcome columns cannot also be features")
+        subsample = spec.get("subsample")
+        if subsample is not None:
+            if not isinstance(subsample, dict):
+                raise ValueError("dataset.subsample must be a mapping")
+            if int(_require(subsample, "target_size", "dataset.subsample")) < 1:
+                raise ValueError("dataset.subsample.target_size must be positive")
+            if int(subsample.get("time_bins", 10)) < 2:
+                raise ValueError("dataset.subsample.time_bins must be at least 2")
     return datasets
 
 
@@ -432,7 +440,7 @@ def validate_config(cfg: dict) -> None:
         semisynthetic_datasets(data)
         copulas = data.get("copulas", [data.get("copula", "clayton")])
         copulas = [str(copula).lower() for copula in copulas]
-        supported_copulas = {"gaussian", "clayton", "frank"}
+        supported_copulas = {"gaussian", "clayton", "frank", "gumbel"}
         if not copulas or set(copulas) - supported_copulas:
             raise ValueError(f"data.copulas must contain only {sorted(supported_copulas)}")
         tau_values = _require(data, "kendall_tau", "data")

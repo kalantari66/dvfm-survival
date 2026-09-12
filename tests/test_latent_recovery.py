@@ -97,7 +97,7 @@ def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch)
     cfg["study"]["output_dir"] = str(tmp_path)
     cfg["compute"]["device"] = "cpu"
     cfg["seeds"] = [0, 1]
-    cfg["data"].update(kendall_tau=[0, .5], censoring_rates=[.5])
+    cfg["data"].update(copulas=["clayton"], kendall_tau=[0, .5], censoring_rates=[.5])
     cfg["data"]["datasets"] = cfg["data"]["datasets"][:1]
     cfg["data"]["datasets"].append({**cfg["data"]["datasets"][0], "name": "second"})
     for spec in cfg["data"]["datasets"]:

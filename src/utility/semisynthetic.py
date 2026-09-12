@@ -74,6 +74,8 @@ class SupportSemiSyntheticDGP:
     cox_penalizer: float
     source_time: np.ndarray
     source_event: np.ndarray
+    source_n_samples_before_subsampling: int
+    subsample_target_size: int | None
 
 
 @dataclass
@@ -169,6 +171,54 @@ def _source_label(spec: dict) -> str:
     return str(spec.get("path", f"builtin:{spec.get('loader', 'unknown')}"))
 
 
+def stratified_time_event_subsample(
+    frame: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    target_size: int,
+    time_bins: int = 10,
+    random_seed: int = 42,
+) -> pd.DataFrame:
+    """Draw an exact sample stratified by event status and quantile time bins.
+
+    This follows the Lillelund et al. semi-synthetic protocol. Exact
+    largest-remainder allocation preserves the joint stratum proportions while
+    avoiding the size drift introduced by independently rounding each stratum.
+    """
+    target_size = int(target_size)
+    if target_size < 1:
+        raise ValueError("subsample.target_size must be positive")
+    if target_size >= len(frame):
+        return frame.reset_index(drop=True).copy()
+    if int(time_bins) < 2:
+        raise ValueError("subsample.time_bins must be at least 2")
+    event = (pd.to_numeric(frame[event_column], errors="coerce").fillna(0) > 0).astype(int)
+    time_bin = pd.qcut(
+        frame[time_column], q=min(int(time_bins), len(frame)),
+        labels=False, duplicates="drop",
+    )
+    strata = pd.DataFrame({"event": event, "time_bin": time_bin}, index=frame.index)
+    counts = strata.value_counts(sort=False).sort_index()
+    expected = counts.to_numpy(dtype=float) * target_size / len(frame)
+    allocation = np.floor(expected).astype(int)
+    remainder = target_size - int(allocation.sum())
+    for position in np.argsort(-(expected - allocation), kind="stable")[:remainder]:
+        allocation[position] += 1
+
+    rng = np.random.default_rng(int(random_seed))
+    selected: list[np.ndarray] = []
+    for ((status, bin_id), _), n_draw in zip(counts.items(), allocation):
+        if n_draw == 0:
+            continue
+        members = strata.index[
+            (strata["event"] == status) & (strata["time_bin"] == bin_id)
+        ].to_numpy()
+        selected.append(rng.choice(members, size=int(n_draw), replace=False))
+    indices = np.concatenate(selected)
+    return frame.loc[indices[rng.permutation(len(indices))]].reset_index(drop=True).copy()
+
+
 def load_semisynthetic_source(spec):
     """Read and check a real cohort before fitting semi-synthetic margins."""
     if spec.get("loader"):
@@ -206,6 +256,15 @@ def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
     frame = load_semisynthetic_source(spec)
     time_column, event_column = spec["time_column"], spec["event_column"]
     frame = frame.loc[np.isfinite(frame[time_column]) & (frame[time_column] > 0)].reset_index(drop=True)
+    source_n_samples_before_subsampling = len(frame)
+    subsample = spec.get("subsample")
+    if subsample:
+        frame = stratified_time_event_subsample(
+            frame, time_column=time_column, event_column=event_column,
+            target_size=int(subsample["target_size"]),
+            time_bins=int(subsample.get("time_bins", 10)),
+            random_seed=int(subsample.get("random_seed", 42)),
+        )
     event = (pd.to_numeric(frame[event_column], errors="coerce").fillna(0) > 0).astype(int).to_numpy()
     preprocessor = _semisynthetic_preprocessor(spec["numeric_features"], spec["categorical_features"])
     X = np.asarray(preprocessor.fit_transform(frame), dtype=np.float64)
@@ -219,6 +278,8 @@ def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
         source_n_samples=len(frame), source_event_rate=float(event.mean()),
         cox_penalizer=float(cox_penalizer), source_time=duration,
         source_event=event,
+        source_n_samples_before_subsampling=source_n_samples_before_subsampling,
+        subsample_target_size=None if not subsample else int(subsample["target_size"]),
     )
 
 
@@ -280,6 +341,23 @@ def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: floa
         b = np.exp(-theta)
         v = -np.log1p(w * (b - 1.0) / (a - w * (a - 1.0))) / theta
         return np.column_stack([u, np.clip(v, 1e-12, 1.0 - 1e-12)]), theta, None
+    if name == "gumbel":
+        # Gumbel's Archimedean parameter is theta=1/(1-tau).  Its
+        # Marshall--Olkin representation uses a positive alpha-stable shared
+        # frailty, alpha=1/theta.  At tau=0 the copula is exactly product.
+        if tau == 0.0:
+            return rng.uniform(size=(int(n_samples), 2)), 1.0, None
+        theta = 1.0 / (1.0 - tau)
+        alpha = 1.0 / theta
+        angle = rng.uniform(1e-12, np.pi - 1e-12, size=int(n_samples))
+        exponential = rng.exponential(size=int(n_samples))
+        frailty = (
+            np.sin(alpha * angle) / np.power(np.sin(angle), 1.0 / alpha)
+            * np.power(np.sin((1.0 - alpha) * angle) / exponential, (1.0 - alpha) / alpha)
+        )
+        noise = rng.exponential(size=(int(n_samples), 2))
+        uniforms = np.exp(-np.power(noise / frailty[:, None], alpha))
+        return np.clip(uniforms, 1e-12, 1.0 - 1e-12), float(theta), frailty
     raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
 
 
@@ -358,6 +436,12 @@ def semi_synthetic_joint_survival(dgp, sample, X, event_grid, censor_grid):
         points = np.stack(np.broadcast_arrays(ndtri(u[:, :, None]), ndtri(v[:, None, :])), axis=-1)
         flat = points.reshape(-1, 2)
         return multivariate_normal.cdf(flat, mean=[0.0, 0.0], cov=[[1.0, rho], [rho, 1.0]]).reshape(points.shape[:-1])
+    if copula == "gumbel":
+        if theta == 1.0:
+            return u[:, :, None] * v[:, None, :]
+        log_u = -np.log(np.clip(u[:, :, None], 1e-12, 1.0))
+        log_v = -np.log(np.clip(v[:, None, :], 1e-12, 1.0))
+        return np.exp(-np.power(log_u ** theta + log_v ** theta, 1.0 / theta))
     raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
 
 
@@ -420,6 +504,7 @@ def plot_event_distribution_comparison(dgp, sample, output_path, *, title: str):
 __all__ = [
     "CoxMargin", "SemiSyntheticSample", "SupportSemiSyntheticDGP",
     "fit_support_semisynthetic_dgp", "fit_semisynthetic_dgp", "load_semisynthetic_source", "read_semisynthetic_source",
+    "stratified_time_event_subsample",
     "generate_semisynthetic", "generate_support_semisynthetic",
     "sample_clayton_uniforms", "sample_semisynthetic_uniforms",
     "semi_synthetic_joint_survival", "plot_event_distribution_comparison",
