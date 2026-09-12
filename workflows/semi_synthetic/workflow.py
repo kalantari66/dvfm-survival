@@ -58,7 +58,11 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
         *sorted(path for package in ("dvfm", "experiments", "sota", "utility")
                 for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
     ]
-    return AnonymousTarget(inputs=inputs, outputs=outputs, options=_options(resources), spec=spec)
+    return AnonymousTarget(
+        inputs=[str(path) for path in inputs],
+        outputs=[str(path) for path in outputs],
+        options=_options(resources), spec=spec,
+    )
 
 
 def aggregate(result_root: Path, datasets: list[dict], resources: dict) -> AnonymousTarget:
@@ -82,7 +86,10 @@ def aggregate(result_root: Path, datasets: list[dict], resources: dict) -> Anony
     """
     options = _options(resources)
     options.pop("gres")
-    return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
+    return AnonymousTarget(
+        inputs=[str(path) for path in inputs],
+        outputs=[str(path) for path in outputs], options=options, spec=spec,
+    )
 
 
 with EXPERIMENT_CONFIG.open(encoding="utf-8") as handle:
