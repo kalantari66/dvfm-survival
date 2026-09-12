@@ -11,15 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_semisynthetic_dataset_names_and_features_are_validated():
     data = load_config(ROOT / "configs/semi_synthetic.yaml")["data"]
     data["datasets"].append({**data["datasets"][0], "name": "another_cohort"})
-    assert len(semisynthetic_datasets(data)) == 2
-    data["datasets"][1]["name"] = "SUPPORT"
+    assert len(semisynthetic_datasets(data)) == 13
+    data["datasets"][-1]["name"] = "WHAS"
     with pytest.raises(ValueError, match="Duplicate dataset"):
         semisynthetic_datasets(data)
-    data["datasets"][1]["name"] = "../outside"
+    data["datasets"][-1]["name"] = "../outside"
     with pytest.raises(ValueError, match="Dataset names"):
         semisynthetic_datasets(data)
-    data["datasets"][1]["name"] = "another_cohort"
-    data["datasets"][1]["numeric_features"] = ["duration"]
+    data["datasets"][-1]["name"] = "another_cohort"
+    data["datasets"][-1]["numeric_features"] = ["time"]
     with pytest.raises(ValueError, match="outcome columns"):
         semisynthetic_datasets(data)
 
@@ -118,11 +118,14 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
 def test_support_semisynthetic_config_has_paired_generator_and_split():
     cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
     assert cfg["data"]["source"] == "cox_clayton_semisynthetic"
-    assert cfg["data"]["datasets"][0]["name"] == "support"
+    assert [item["name"] for item in cfg["data"]["datasets"]] == [
+        "whas", "gbsg", "metabric", "churn", "nacd", "flchain", "support",
+        "employee", "mimic_iv", "seer_brain", "seer_liver", "seer_stomach",
+    ]
     assert cfg["data"]["copula"] == "clayton"
     assert cfg["data"]["kendall_tau"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     assert cfg["evaluation"]["save_latent_recovery"] is True
-    assert cfg["data"]["censoring_rates"] == [0.25, 0.5, 0.75]
+    assert cfg["data"]["censoring_rates"] == "original"
     assert cfg["split"]["stratify"] == "time_event"
     assert cfg["split"]["validation_fraction"] == 0.10
     assert cfg["split"]["test_fraction"] == 0.20

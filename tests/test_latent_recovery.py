@@ -98,6 +98,7 @@ def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch)
     cfg["compute"]["device"] = "cpu"
     cfg["seeds"] = [0, 1]
     cfg["data"].update(kendall_tau=[0, .5], censoring_rates=[.5])
+    cfg["data"]["datasets"] = cfg["data"]["datasets"][:1]
     cfg["data"]["datasets"].append({**cfg["data"]["datasets"][0], "name": "second"})
     for spec in cfg["data"]["datasets"]:
         spec.update(numeric_features=["x", "y"], categorical_features=[])
@@ -108,8 +109,8 @@ def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch)
     assert len(results) == 8 * len(cfg["models"]["dvfm"]["latent_dims"])
     assert set(results["latent_dim"]) == {0, 1, 5, 10}
     assert results.Scenario.nunique() == 4
-    assert set(results.Dataset) == {"support", "second"}
-    assert fitted_datasets == ["support", "second"]
+    assert set(results.Dataset) == {"whas", "second"}
+    assert fitted_datasets == ["whas", "second"]
     exports = list((tmp_path / "latent_recovery").glob("*/latent_recovery_metadata.json"))
     assert len(exports) == 8
     assert len(list((tmp_path / "latent_recovery").glob("*/latent_recovery_test.csv"))) == 4

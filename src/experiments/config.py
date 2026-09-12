@@ -145,9 +145,16 @@ def semisynthetic_datasets(data: dict) -> list[dict]:
     for spec in datasets:
         if not isinstance(spec, dict):
             raise ValueError("Each dataset must be a mapping")
-        for key in ("name", "path", "time_column", "event_column"):
+        for key in ("name", "time_column", "event_column"):
             if not isinstance(_require(spec, key, "dataset"), str) or not spec[key]:
                 raise ValueError(f"dataset.{key} must be a non-empty string")
+        source_count = int(bool(spec.get("path"))) + int(bool(spec.get("loader")))
+        if source_count != 1:
+            raise ValueError("Each dataset must define exactly one of path or loader")
+        if spec.get("path") and not isinstance(spec["path"], str):
+            raise ValueError("dataset.path must be a non-empty string")
+        if spec.get("loader") and not isinstance(spec["loader"], str):
+            raise ValueError("dataset.loader must be a non-empty string")
         name = spec["name"]
         if not all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in name):
             raise ValueError("Dataset names must contain only ASCII letters, digits, '-' or '_'")
@@ -433,7 +440,10 @@ def validate_config(cfg: dict) -> None:
         if not tau_values or any(not 0.0 <= float(tau) < 1.0 for tau in tau_values):
             raise ValueError("data.kendall_tau must contain values in [0, 1)")
         rates = _require(data, "censoring_rates", "data")
-        if not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
+        if isinstance(rates, str):
+            if rates.lower() != "original":
+                raise ValueError("data.censoring_rates must be 'original' or values in (0, 1)")
+        elif not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
             raise ValueError("data.censoring_rates must contain values in (0, 1)")
         expand_seed_streams(_require(cfg, "seeds", "config"))
         if str(cfg["split"].get("stratify", "")).lower() != "time_event":

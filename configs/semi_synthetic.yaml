@@ -1,8 +1,8 @@
 schema_version: 1
-workflow: {target_name: semi_synthetic_support}
+workflow: {target_name: semi_synthetic}
 resources: {cores: 4, memory: 25g, walltime: "24:00:00", partition: gpu-l40s, account: c2i-colon}
 study:
-  name: semi-synthetic-support
+  name: semi-synthetic
   stage: pilot
   # Per-dataset jobs write to results/semi-synthetic/<dataset>; root-level
   # files are the cross-dataset aggregates assembled by the GWF workflow.
@@ -14,17 +14,94 @@ compute: {device: cuda, torch_num_threads: 4}
 data:
   source: cox_clayton_semisynthetic
   datasets:
+    - name: whas
+      loader: whas500
+      time_column: time
+      event_column: event
+      numeric_features: [age, bmi, diasbp, hr, los, sysbp]
+      categorical_features: [afb, av3, chf, cvd, gender, miord, mitype, sho]
+    - name: gbsg
+      path: data/gbsg.csv
+      rename_columns: {status: event, rfstime: time}
+      drop_columns: [pid]
+      time_column: time
+      event_column: event
+      numeric_features: [age, size, grade, nodes, pgr, er]
+      categorical_features: [meno, hormon]
+    - name: metabric
+      path: data/metabric.feather
+      time_column: duration
+      event_column: event
+      numeric_features: [x0, x1, x2, x3, x8]
+      categorical_features: [x4, x5, x6, x7]
+    - name: churn
+      path: data/churn.csv
+      rename_columns: {months_active: time, churned: event}
+      time_column: time
+      event_column: event
+      numeric_features: [product_data_storage, csat_score, articles_viewed, smartphone_notifications_viewed, social_media_ads_viewed, marketing_emails_clicked, minutes_customer_support]
+      categorical_features: [us_region, product_travel_expense, product_payroll, product_accounting, company_size]
+    - name: nacd
+      path: data/nacd_full.csv
+      rename_columns: {delta: event}
+      drop_columns: [PERFORMANCE_STATUS, STAGE_NUMERICAL, AGE65]
+      time_column: time
+      event_column: event
+      numeric_features: [BOX1_SCORE, BOX2_SCORE, BOX3_SCORE, BMI, WEIGHT_CHANGEPOINT, AGE, GRANULOCYTES, LDH_SERUM, LYMPHOCYTES, PLATELET, WBC_COUNT, CALCIUM_SERUM, HGB, CREATININE_SERUM, ALBUMIN]
+      categorical_features: [GENDER, PERFORMANCE_STATUS_0, PERFORMANCE_STATUS_1, PERFORMANCE_STATUS_2, PERFORMANCE_STATUS_3, PERFORMANCE_STATUS_4, NO_PROBLEM, NO_APPETITE, NAUSEA, CONSTIPATION, SORE_MOUTH, TASTE_FUNNY, SMELL, SWALLOW, FEEL_FULL, PAIN, OTHER, VOMIT, DIARRHEA, DRY_MOUTH, DENTAL_PROBLEM, SITE_BRUNCHUS_LUNG, SITE_COLORECTAL, SITE_HEAD_AND_NECK, SITE_ESOPHAGUS, SITE_PANCREAS, SITE_STOMACH, SITE_OTHER_DIGESTIVE, MISC, STAGE_1, STAGE_2, STAGE_3, STAGE_4]
+    - name: flchain
+      loader: flchain
+      time_column: time
+      event_column: event
+      numeric_features: [age, creatinine, kappa, lambda, sample.yr]
+      categorical_features: [chapter, flc.grp, mgus, sex]
     - name: support
       path: data/support.feather
       time_column: duration
       event_column: event
       numeric_features: [x0, x7, x8, x9, x10, x11, x12, x13]
       categorical_features: [x1, x2, x3, x4, x5, x6]
+    - name: employee
+      path: data/employee_attrition.csv
+      rename_columns: {time_spend_company: time, left: event}
+      time_column: time
+      event_column: event
+      numeric_features: [satisfaction_level, last_evaluation, number_projects, average_montly_hours, work_accident, promotion_last_5years]
+      categorical_features: [department, salary]
+    - name: mimic_iv
+      path: data/mimic_all_causes.csv
+      time_column: time
+      event_column: event
+      numeric_features: [SOFA, abs_lymphocytes_max, abs_lymphocytes_min, age, aniongap_max, aniongap_min, aniongap_range, bicarbonate_max, bicarbonate_min, bicarbonate_range, bun_max, bun_min, bun_range, calcium_max, calcium_min, calcium_range, chloride_max, chloride_min, chloride_range, creatinine_max, creatinine_min, creatinine_range, dbp_max, dbp_mean, dbp_min, dbp_range, glucose_1_max, glucose_1_min, glucose_1_range, glucose_max, glucose_mean, glucose_min, glucose_range, heart_rate_max, heart_rate_mean, heart_rate_min, heart_rate_range, hematocrit_max, hematocrit_min, hematocrit_range, hemoglobin_max, hemoglobin_min, hemoglobin_range, inr_max, inr_min, inr_range, mbp_max, mbp_mean, mbp_min, mbp_range, platelets_max, platelets_min, platelets_range, potassium_max, potassium_min, potassium_range, pt_max, pt_min, pt_range, ptt_max, ptt_min, ptt_range, resp_rate_max, resp_rate_mean, resp_rate_min, resp_rate_range, sbp_max, sbp_mean, sbp_min, sbp_range, sodium_max, sodium_min, sodium_range, spo2_max, spo2_mean, spo2_min, spo2_range, temperature_max, temperature_mean, temperature_min, temperature_range, wbc_max, wbc_min, wbc_range, weight]
+      categorical_features: [is_male, is_white, renal, cns, coagulation, cardiovascular]
+    - name: seer_brain
+      path: data/seer_brain.csv
+      rename_columns: {Survival months: time}
+      time_column: time
+      event_column: event
+      numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+]
+      categorical_features: [Sex, Behavior recode for analysis, SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+)]
+    - name: seer_liver
+      path: data/seer_liver.csv
+      rename_columns: {Survival months: time}
+      time_column: time
+      event_column: event
+      numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+, "Derived AJCC Stage Group, 6th ed (2004-2015)", "Derived AJCC T, 6th ed (2004-2015)", "Derived AJCC N, 6th ed (2004-2015)", "Derived AJCC M, 6th ed (2004-2015)", "Derived AJCC Stage Group, 7th ed (2010-2015)"]
+      categorical_features: [Sex]
+    - name: seer_stomach
+      path: data/seer_stomach.csv
+      rename_columns: {Survival months: time}
+      time_column: time
+      event_column: event
+      numeric_features: [Grade (thru 2017), Combined Summary Stage (2004+), Summary stage 2000 (1998-2017), SEER historic stage A (1973-2015), RX Summ--Scope Reg LN Sur (2003+), RX Summ--Surg Oth Reg/Dis (2003+), RX Summ--Surg Prim Site (1998+), Age recode with single ages and 85+, "Derived AJCC Stage Group, 6th ed (2004-2015)", "Derived AJCC T, 6th ed (2004-2015)", "Derived AJCC N, 6th ed (2004-2015)", "Derived AJCC M, 6th ed (2004-2015)", "Derived AJCC Stage Group, 7th ed (2010-2015)"]
+      categorical_features: [Sex]
   copula: clayton  # Compatibility default; use copulas below for the full grid.
   # Set to [gaussian, clayton, frank] for the full copula comparison.
   copulas: [clayton]
   kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-  censoring_rates: [0.25, 0.50, 0.75]
+  # Match each source cohort's observed censoring rate; the copula still
+  # induces event/censor dependence in the generated DGP.
+  censoring_rates: original
   cox_penalizer: 0.01
 split:
   strategy: holdout
@@ -68,6 +145,8 @@ evaluation:
   max_time_factor: 1.2
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   save_predictions: false
+  # Per-scenario source-versus-generated event/censoring distribution checks.
+  save_event_distribution_plots: true
   # Subject-level validation/test latents and validation-calibrated recovery metrics.
   save_latent_recovery: true
   dependence_samples: 2000

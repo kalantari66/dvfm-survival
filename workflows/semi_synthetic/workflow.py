@@ -13,6 +13,7 @@ EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "semi_synthetic.yaml"
 RUNNER = PROJECT_ROOT / "scripts" / "run_semi_synthetic_dataset.py"
 AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_results.py"
 RESULT_FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
+CROSS_DATASET_FILES = (*RESULT_FILES, "dataset_characteristics.csv")
 
 
 def _options(resources: dict) -> dict[str, str]:
@@ -27,9 +28,11 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
     """Run exactly one configured dataset with the YAML's resource allocation."""
     name = str(dataset["name"])
     result_dir = result_root / name
-    source_path = Path(dataset["path"])
-    if not source_path.is_absolute():
-        source_path = PROJECT_ROOT / source_path
+    source_path = None
+    if dataset.get("path"):
+        source_path = Path(dataset["path"])
+        if not source_path.is_absolute():
+            source_path = PROJECT_ROOT / source_path
     outputs = [result_dir / filename for filename in RESULT_FILES]
     outputs.extend([result_dir / "resolved_config.json", result_dir / "_SUCCESS"])
     checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
@@ -53,11 +56,13 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
     echo "[GWF] $(date) completed semi-synthetic dataset: {name}"
     """
     inputs = [
-        EXPERIMENT_CONFIG, RUNNER, source_path, PROJECT_ROOT / "environment.yml",
+        EXPERIMENT_CONFIG, RUNNER, PROJECT_ROOT / "environment.yml",
         PROJECT_ROOT / "pyproject.toml",
         *sorted(path for package in ("dvfm", "experiments", "sota", "utility")
                 for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
     ]
+    if source_path is not None:
+        inputs.append(source_path)
     return AnonymousTarget(
         inputs=[str(path) for path in inputs],
         outputs=[str(path) for path in outputs],
@@ -71,7 +76,7 @@ def aggregate(result_root: Path, datasets: list[dict], resources: dict) -> Anony
     inputs = [AGGREGATOR, EXPERIMENT_CONFIG, *(
         result_root / name / filename for name in names for filename in RESULT_FILES
     )]
-    outputs = [result_root / filename for filename in RESULT_FILES]
+    outputs = [result_root / filename for filename in CROSS_DATASET_FILES]
     outputs.extend([result_root / "resolved_config.json", result_root / "_SUCCESS"])
     checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
     spec = f"""

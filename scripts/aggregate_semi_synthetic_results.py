@@ -27,6 +27,21 @@ def main() -> None:
     for filename in FILES:
         frames = [pd.read_csv(root / name / filename) for name in names]
         pd.concat(frames, ignore_index=True).to_csv(root / filename, index=False)
+    diagnostics = pd.read_csv(root / "dgp_diagnostics.csv")
+    characteristics = (
+        diagnostics.sort_values(["Dataset", "Repeat"])
+        .drop_duplicates("Dataset")
+        .loc[:, ["Dataset", "Source Samples", "Raw Features", "Encoded Features", "Source Event Rate"]]
+        .rename(columns={
+            "Source Samples": "$N$",
+            "Raw Features": "Raw features",
+            "Encoded Features": "Encoded features",
+            "Source Event Rate": "Original event rate",
+        })
+    )
+    characteristics["Original censoring rate"] = 1.0 - characteristics["Original event rate"]
+    characteristics["Split"] = "70/10/20"
+    characteristics.to_csv(root / "dataset_characteristics.csv", index=False)
     (root / "resolved_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 

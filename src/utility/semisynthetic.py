@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import math
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +72,8 @@ class SupportSemiSyntheticDGP:
     source_n_samples: int
     source_event_rate: float
     cox_penalizer: float
+    source_time: np.ndarray
+    source_event: np.ndarray
 
 
 @dataclass
@@ -86,7 +89,12 @@ class SemiSyntheticSample:
     copula: str = "clayton"
 
 
-def _support_preprocessor(numeric_features=None, categorical_features=None) -> ColumnTransformer:
+def _semisynthetic_preprocessor(numeric_features=None, categorical_features=None) -> ColumnTransformer:
+    """Impute, z-score numeric covariates, and one-hot encode categoricals.
+
+    The historical name of this helper referred to SUPPORT, but this is the
+    common preprocessing contract for every real-cohort semi-synthetic DGP.
+    """
     numeric_features = SUPPORT_NUMERIC_FEATURES if numeric_features is None else numeric_features
     categorical_features = SUPPORT_CATEGORICAL_FEATURES if categorical_features is None else categorical_features
     numeric = Pipeline([
@@ -101,6 +109,10 @@ def _support_preprocessor(numeric_features=None, categorical_features=None) -> C
         ("numeric", numeric, numeric_features),
         ("categorical", categorical, categorical_features),
     ], verbose_feature_names_out=False)
+
+
+# Kept private for compatibility with any downstream exploratory notebooks.
+_support_preprocessor = _semisynthetic_preprocessor
 
 
 def _fit_cox_margin(X: np.ndarray, feature_names: list[str], time, event, penalizer: float) -> CoxMargin:
@@ -128,36 +140,74 @@ def fit_support_semisynthetic_dgp(path: str | Path, *, cox_penalizer: float = 0.
     ), cox_penalizer=cox_penalizer)
 
 
-def read_semisynthetic_source(spec):
+def _load_builtin_semisynthetic_source(loader: str) -> pd.DataFrame:
+    """Load cohorts distributed by scikit-survival into the common schema."""
+    try:
+        from sksurv.datasets import load_flchain, load_whas500
+    except ImportError as exc:  # pragma: no cover - depends on optional install
+        raise ImportError(
+            "Built-in semi-synthetic datasets require scikit-survival. "
+            "Install the project environment before running WHAS or FLCHAIN."
+        ) from exc
+    name = str(loader).lower()
+    if name == "whas500":
+        covariates, outcome = load_whas500()
+        frame = pd.DataFrame(covariates)
+        frame["time"] = outcome["lenfol"]
+        frame["event"] = outcome["fstat"]
+        return frame
+    if name == "flchain":
+        covariates, outcome = load_flchain()
+        frame = pd.DataFrame(covariates)
+        frame["time"] = outcome["futime"]
+        frame["event"] = outcome["death"]
+        return frame
+    raise ValueError(f"Unsupported built-in semi-synthetic loader: {loader}")
+
+
+def _source_label(spec: dict) -> str:
+    return str(spec.get("path", f"builtin:{spec.get('loader', 'unknown')}"))
+
+
+def load_semisynthetic_source(spec):
     """Read and check a real cohort before fitting semi-synthetic margins."""
-    path = Path(spec["path"])
-    if path.suffix.lower() in {".feather", ".ftr"}:
-        frame = pd.read_feather(path)
-    elif path.suffix.lower() == ".csv":
-        frame = pd.read_csv(path)
-    elif path.suffix.lower() in {".parquet", ".pq"}:
-        frame = pd.read_parquet(path)
+    if spec.get("loader"):
+        frame = _load_builtin_semisynthetic_source(spec["loader"])
     else:
-        raise ValueError(f"Unsupported semi-synthetic input format: {path}")
+        path = Path(spec["path"])
+        if path.suffix.lower() in {".feather", ".ftr"}:
+            frame = pd.read_feather(path)
+        elif path.suffix.lower() == ".csv":
+            frame = pd.read_csv(path)
+        elif path.suffix.lower() in {".parquet", ".pq"}:
+            frame = pd.read_parquet(path)
+        else:
+            raise ValueError(f"Unsupported semi-synthetic input format: {path}")
+    rename_columns = spec.get("rename_columns", {})
+    if rename_columns:
+        frame = frame.rename(columns=rename_columns)
+    drop_columns = spec.get("drop_columns", [])
+    if drop_columns:
+        frame = frame.drop(columns=drop_columns)
     required = set(spec["numeric_features"] + spec["categorical_features"] +
                    [spec["time_column"], spec["event_column"]])
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise ValueError(f"{path} is missing columns: {missing}")
+        raise ValueError(f"{_source_label(spec)} is missing columns: {missing}")
     return frame
+
+
+# Compatibility spelling used by the first SUPPORT-only runner.
+read_semisynthetic_source = load_semisynthetic_source
 
 
 def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
     """Fit Cox margins for a dataset with explicitly configured covariates."""
-    path = spec["path"]
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    frame = read_semisynthetic_source(spec)
+    frame = load_semisynthetic_source(spec)
     time_column, event_column = spec["time_column"], spec["event_column"]
     frame = frame.loc[np.isfinite(frame[time_column]) & (frame[time_column] > 0)].reset_index(drop=True)
     event = (pd.to_numeric(frame[event_column], errors="coerce").fillna(0) > 0).astype(int).to_numpy()
-    preprocessor = _support_preprocessor(spec["numeric_features"], spec["categorical_features"])
+    preprocessor = _semisynthetic_preprocessor(spec["numeric_features"], spec["categorical_features"])
     X = np.asarray(preprocessor.fit_transform(frame), dtype=np.float64)
     feature_names = list(preprocessor.get_feature_names_out())
     duration = frame[time_column].to_numpy(dtype=float)
@@ -167,7 +217,8 @@ def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
         X=X.astype(np.float32), feature_names=feature_names,
         event_margin=event_margin, censor_margin=censor_margin,
         source_n_samples=len(frame), source_event_rate=float(event.mean()),
-        cox_penalizer=float(cox_penalizer),
+        cox_penalizer=float(cox_penalizer), source_time=duration,
+        source_event=event,
     )
 
 
@@ -232,7 +283,7 @@ def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: floa
     raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
 
 
-def generate_support_semisynthetic(
+def generate_semisynthetic(
     dgp: SupportSemiSyntheticDGP,
     *,
     kendall_tau: float,
@@ -240,7 +291,7 @@ def generate_support_semisynthetic(
     sampling_seed: int,
     copula: str = "clayton",
 ) -> SemiSyntheticSample:
-    """Resample complete event/censor times while retaining SUPPORT covariates."""
+    """Resample complete event/censor times while retaining source covariates."""
     target_censoring = float(censoring_rate)
     if not 0.0 < target_censoring < 1.0:
         raise ValueError("censoring_rate must be between 0 and 1")
@@ -280,6 +331,10 @@ def generate_support_semisynthetic(
     )
 
 
+# Public backwards compatibility for the original SUPPORT-only notebook API.
+generate_support_semisynthetic = generate_semisynthetic
+
+
 def semi_synthetic_joint_survival(dgp, sample, X, event_grid, censor_grid):
     """Exact copula joint survival surface for fitted Cox margins of one DGP."""
     x = np.asarray(X, dtype=float)
@@ -306,9 +361,66 @@ def semi_synthetic_joint_survival(dgp, sample, X, event_grid, censor_grid):
     raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
 
 
+def plot_event_distribution_comparison(dgp, sample, output_path, *, title: str):
+    """Compare source and generated observed-time distributions on shared axes.
+
+    The event and censoring margins are fitted independently from the source
+    cohort, so this plot deliberately checks marginals rather than copula
+    dependence.  The copula governs their joint association, not either target
+    marginal distribution.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from lifelines import KaplanMeierFitter
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    source_time = np.asarray(dgp.source_time, dtype=float)
+    source_event = np.asarray(dgp.source_event, dtype=int)
+    generated_time = np.asarray(sample.data.time, dtype=float)
+    generated_event = np.asarray(sample.data.event, dtype=int)
+    maximum = float(max(source_time.max(), generated_time.max()))
+    intervals = math.ceil(math.log2(max(len(source_time), len(generated_time))) + 1)
+    bins = np.linspace(0.0, maximum, intervals)
+    colors = {"event": "#55A868", "censored": "#4C72B0"}
+
+    fig = Figure(figsize=(12.0, 4.8))
+    FigureCanvasAgg(fig)
+    axes = fig.subplots(1, 2, sharex=True, sharey=True)
+    for ax, name, times, events in (
+        (axes[0], "Original cohort", source_time, source_event),
+        (axes[1], "Semi-synthetic cohort", generated_time, generated_event),
+    ):
+        km = KaplanMeierFitter().fit(times, event_observed=events)
+        ax.step(km.survival_function_.index, km.survival_function_.iloc[:, 0],
+                color="#0173B2", linewidth=2.5, where="post", zorder=3)
+        ax.set(title=f"{name} (censoring = {100 * (1 - events.mean()):.1f}%)",
+               xlabel="Time", ylim=(0, 1.05), xlim=(0, maximum))
+        ax.set_ylabel("Survival probability")
+        ax.grid(visible=True, which="major", linestyle="--", linewidth=0.5, alpha=0.4)
+
+        counts = ax.twinx()
+        counts.hist(
+            [times[events == 1], times[events == 0]], bins=bins,
+            histtype="barstacked", stacked=True, alpha=0.78,
+            color=[colors["event"], colors["censored"]], zorder=2,
+            label=["Event", "Censored"],
+        )
+        counts.set_ylabel("Count")
+        counts.yaxis.grid(False)
+        counts.legend(loc="upper right", frameon=True)
+        ax.set_zorder(counts.get_zorder() + 1)
+        ax.patch.set_visible(False)
+
+    fig.suptitle(title, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+
 __all__ = [
     "CoxMargin", "SemiSyntheticSample", "SupportSemiSyntheticDGP",
-    "fit_support_semisynthetic_dgp", "generate_support_semisynthetic",
+    "fit_support_semisynthetic_dgp", "fit_semisynthetic_dgp", "load_semisynthetic_source", "read_semisynthetic_source",
+    "generate_semisynthetic", "generate_support_semisynthetic",
     "sample_clayton_uniforms", "sample_semisynthetic_uniforms",
-    "semi_synthetic_joint_survival",
+    "semi_synthetic_joint_survival", "plot_event_distribution_comparison",
 ]

@@ -365,9 +365,9 @@ def validate_inputs(cfg: dict) -> None:
     if source in {"synthetic_copula", "gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
         return
     if source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
-        from utility.semisynthetic import read_semisynthetic_source
+        from utility.semisynthetic import load_semisynthetic_source
         for spec in semisynthetic_datasets(data_cfg):
-            read_semisynthetic_source(spec)
+            load_semisynthetic_source(spec)
         return
     _load_dataset(data_cfg, source)
 
@@ -395,8 +395,8 @@ def run(cfg: dict) -> pd.DataFrame:
         return run_frailty_recovery_diagnostic(cfg, out_dir, device)
     elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
         from utility.semisynthetic import (
-            fit_semisynthetic_dgp, generate_support_semisynthetic,
-            semi_synthetic_joint_survival,
+            fit_semisynthetic_dgp, generate_semisynthetic,
+            plot_event_distribution_comparison, semi_synthetic_joint_survival,
         )
 
         diagnostics = []
@@ -413,8 +413,14 @@ def run(cfg: dict) -> pd.DataFrame:
                 tau_values = data_cfg["kendall_tau"]
                 tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
                 copulas = data_cfg.get("copulas", [data_cfg.get("copula", "clayton")])
-                for copula, target_tau, target_rate in product(copulas, tau_values, data_cfg["censoring_rates"]):
-                    generated = generate_support_semisynthetic(
+                rate_specification = data_cfg["censoring_rates"]
+                target_rates = (
+                    [1.0 - float(dgp.source_event_rate)]
+                    if isinstance(rate_specification, str) and rate_specification.lower() == "original"
+                    else rate_specification
+                )
+                for copula, target_tau, target_rate in product(copulas, tau_values, target_rates):
+                    generated = generate_semisynthetic(
                         dgp, kendall_tau=float(target_tau),
                         censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
                         copula=str(copula),
@@ -433,7 +439,7 @@ def run(cfg: dict) -> pd.DataFrame:
                     context = {
                         "Study": study_cfg["name"], "Stage": study_cfg["stage"],
                         "Dataset Type": source, "Dataset": dataset["name"],
-                        "Source Path": str(dataset["path"]), "Scenario": scenario,
+                        "Source Path": str(dataset.get("path", f"builtin:{dataset.get('loader')}")), "Scenario": scenario,
                         "Copula": str(copula).lower(), "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
                         "Theta": generated.clayton_theta,
                         "Target Kendall Tau": generated.target_kendall_tau,
@@ -441,10 +447,25 @@ def run(cfg: dict) -> pd.DataFrame:
                         "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
                         "Target Censoring Rate": generated.target_censoring_rate,
                         "Achieved Censoring Rate": generated.achieved_censoring_rate,
+                        "Censoring Rate Source": "original_cohort" if isinstance(rate_specification, str) else "configured",
                         "Repeat": repeat, "Fold": 0, "DGP Seed": int(dgp_seed),
                         "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
                         "Model Seed": int(model_seed),
                     }
+                    if (
+                        cfg["evaluation"].get("save_event_distribution_plots", False)
+                        and hasattr(dgp, "source_time")
+                        and hasattr(dgp, "source_event")
+                    ):
+                        plot_event_distribution_comparison(
+                            dgp, generated,
+                            out_dir / "figures" / f"event_distribution_{scenario}_repeat_{repeat}.pdf",
+                            title=(
+                                f"{dataset['name']} | {str(copula).title()} copula | "
+                                f"target $\\tau$ = {float(target_tau):.2f} | "
+                                f"repeat {repeat}"
+                            ),
+                        )
                     joint_evaluation = None
                     if (
                         cfg["evaluation"].get("compute_oracle_joint_survival_ise", False)
@@ -491,6 +512,8 @@ def run(cfg: dict) -> pd.DataFrame:
                         **context, "Censor Time Scale": generated.censor_time_scale,
                         "Source Samples": dgp.source_n_samples,
                         "Source Event Rate": dgp.source_event_rate,
+                        "Raw Features": len(dataset["numeric_features"]) + len(dataset["categorical_features"]),
+                        "Encoded Features": len(dgp.feature_names),
                         "Cox Penalizer": dgp.cox_penalizer,
                     })
                     if cfg["evaluation"].get("save_predictions", False):
