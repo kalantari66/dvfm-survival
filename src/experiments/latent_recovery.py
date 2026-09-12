@@ -24,6 +24,7 @@ def export_latent_recovery(model, validation, test, validation_indices, test_ind
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    metric_frame = pd.DataFrame()
     metadata = dict(context)
     if validation.true_z is None or test.true_z is None:
         metadata["status"] = "unavailable_no_true_frailty"
@@ -90,6 +91,8 @@ def export_latent_recovery(model, validation, test, validation_indices, test_ind
                             "coverage_95": float(subset.covered_95.mean()) if representation == "Validation-calibrated" else np.nan,
                             "mean_interval_width": float(subset.interval_width.mean()) if representation == "Validation-calibrated" else np.nan,
                         })
-            pd.DataFrame(rows).to_csv(output_dir / "latent_calibration_metrics.csv", index=False)
+            metric_frame = pd.DataFrame(rows)
+            metric_frame.to_csv(output_dir / "latent_calibration_metrics.csv", index=False)
     with (output_dir / "latent_recovery_metadata.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
+    return metric_frame

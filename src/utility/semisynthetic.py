@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from lifelines import CoxPHFitter
-from scipy.stats import kendalltau
+from scipy.integrate import quad
+from scipy.optimize import brentq
+from scipy.special import ndtr, ndtri
+from scipy.stats import kendalltau, multivariate_normal
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -79,6 +83,7 @@ class SemiSyntheticSample:
     target_censoring_rate: float
     achieved_censoring_rate: float
     censor_time_scale: float
+    copula: str = "clayton"
 
 
 def _support_preprocessor(numeric_features=None, categorical_features=None) -> ColumnTransformer:
@@ -183,19 +188,64 @@ def sample_clayton_uniforms(n_samples: int, kendall_tau: float, seed: int, *, re
     return (*result, frailty) if return_frailty else result
 
 
+@lru_cache(maxsize=None)
+def frank_theta_from_tau(kendall_tau: float) -> float:
+    """Invert Frank's Kendall-tau relationship for a positive dependence target."""
+    tau = float(kendall_tau)
+    if tau == 0.0:
+        return 0.0
+
+    def tau_from_theta(theta: float) -> float:
+        # Algebraically x / (exp(x) - 1), evaluated without overflow for large x.
+        debye_1 = quad(
+            lambda x: 1.0 if x == 0.0 else x * np.exp(-x) / (1.0 - np.exp(-x)),
+            0.0, theta, limit=100,
+        )[0] / theta
+        return 1.0 - 4.0 / theta + 4.0 * debye_1 / theta
+
+    return float(brentq(lambda theta: tau_from_theta(theta) - tau, 1e-8, 1e4))
+
+
+def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: float, seed: int):
+    """Sample event/censor survival uniforms for the supported semi-synthetic copulas."""
+    name = str(copula).lower()
+    tau = float(kendall_tau)
+    if not 0.0 <= tau < 1.0:
+        raise ValueError("kendall_tau must be in [0, 1)")
+    if name == "clayton":
+        uniforms, theta, frailty = sample_clayton_uniforms(n_samples, tau, seed, return_frailty=True)
+        return uniforms, theta, frailty
+    rng = np.random.default_rng(seed)
+    if name == "gaussian":
+        rho = np.sin(np.pi * tau / 2.0)
+        normals = rng.multivariate_normal([0.0, 0.0], [[1.0, rho], [rho, 1.0]], size=int(n_samples))
+        return np.clip(ndtr(normals), 1e-12, 1.0 - 1e-12), float(rho), None
+    if name == "frank":
+        theta = frank_theta_from_tau(tau)
+        if theta == 0.0:
+            return rng.uniform(size=(int(n_samples), 2)), theta, None
+        u, w = rng.uniform(size=(2, int(n_samples)))
+        a = np.exp(-theta * u)
+        b = np.exp(-theta)
+        v = -np.log1p(w * (b - 1.0) / (a - w * (a - 1.0))) / theta
+        return np.column_stack([u, np.clip(v, 1e-12, 1.0 - 1e-12)]), theta, None
+    raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
+
+
 def generate_support_semisynthetic(
     dgp: SupportSemiSyntheticDGP,
     *,
     kendall_tau: float,
     censoring_rate: float,
     sampling_seed: int,
+    copula: str = "clayton",
 ) -> SemiSyntheticSample:
     """Resample complete event/censor times while retaining SUPPORT covariates."""
     target_censoring = float(censoring_rate)
     if not 0.0 < target_censoring < 1.0:
         raise ValueError("censoring_rate must be between 0 and 1")
-    uniforms, theta, frailty = sample_clayton_uniforms(
-        len(dgp.X), kendall_tau, sampling_seed, return_frailty=True
+    uniforms, theta, frailty = sample_semisynthetic_uniforms(
+        len(dgp.X), copula, kendall_tau, sampling_seed
     )
     # Match the diagnostic workflow's cohort-standardized log-frailty target.
     # Independence has no shared random frailty to recover.
@@ -226,12 +276,39 @@ def generate_support_semisynthetic(
         empirical_marginal_kendall_tau=float(kendalltau(event_time, censor_time).statistic),
         clayton_theta=float(theta), target_censoring_rate=target_censoring,
         achieved_censoring_rate=float(1.0 - event.mean()),
-        censor_time_scale=censor_scale,
+        censor_time_scale=censor_scale, copula=str(copula).lower(),
     )
+
+
+def semi_synthetic_joint_survival(dgp, sample, X, event_grid, censor_grid):
+    """Exact copula joint survival surface for fitted Cox margins of one DGP."""
+    x = np.asarray(X, dtype=float)
+    event_hazard = np.interp(event_grid, dgp.event_margin.baseline_times,
+                             dgp.event_margin.baseline_cumulative_hazard)
+    censor_hazard = np.interp(censor_grid / sample.censor_time_scale, dgp.censor_margin.baseline_times,
+                              dgp.censor_margin.baseline_cumulative_hazard)
+    u = np.exp(-dgp.event_margin.relative_risk(x)[:, None] * event_hazard[None, :])
+    v = np.exp(-dgp.censor_margin.relative_risk(x)[:, None] * censor_hazard[None, :])
+    copula = sample.copula
+    theta = sample.clayton_theta
+    if copula == "clayton":
+        return np.maximum(u[:, :, None] ** (-theta) + v[:, None, :] ** (-theta) - 1.0, 1e-12) ** (-1.0 / theta) if theta else u[:, :, None] * v[:, None, :]
+    if copula == "frank":
+        if theta == 0.0:
+            return u[:, :, None] * v[:, None, :]
+        numerator = np.expm1(-theta * u[:, :, None]) * np.expm1(-theta * v[:, None, :])
+        return -np.log1p(numerator / np.expm1(-theta)) / theta
+    if copula == "gaussian":
+        rho = theta
+        points = np.stack(np.broadcast_arrays(ndtri(u[:, :, None]), ndtri(v[:, None, :])), axis=-1)
+        flat = points.reshape(-1, 2)
+        return multivariate_normal.cdf(flat, mean=[0.0, 0.0], cov=[[1.0, rho], [rho, 1.0]]).reshape(points.shape[:-1])
+    raise ValueError(f"Unsupported semi-synthetic copula: {copula}")
 
 
 __all__ = [
     "CoxMargin", "SemiSyntheticSample", "SupportSemiSyntheticDGP",
     "fit_support_semisynthetic_dgp", "generate_support_semisynthetic",
-    "sample_clayton_uniforms",
+    "sample_clayton_uniforms", "sample_semisynthetic_uniforms",
+    "semi_synthetic_joint_survival",
 ]

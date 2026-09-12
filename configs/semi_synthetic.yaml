@@ -18,7 +18,9 @@ data:
       event_column: event
       numeric_features: [x0, x7, x8, x9, x10, x11, x12, x13]
       categorical_features: [x1, x2, x3, x4, x5, x6]
-  copula: clayton
+  copula: clayton  # Compatibility default; use copulas below for the full grid.
+  # Set to [gaussian, clayton, frank] for the full copula comparison.
+  copulas: [clayton]
   kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
   censoring_rates: [0.25, 0.50, 0.75]
   cox_penalizer: 0.01
@@ -37,7 +39,9 @@ models:
   # The full baseline roster is added after the generator has been validated.
   enabled: [coxph, dvfm]
   dvfm:
-    latent_dim: 1
+    # z=0 is the no-frailty ablation; higher dimensions assess overcomplete latents.
+    latent_dims: [0, 1, 5, 10]
+    latent_dim: 1  # Backward-compatible default; the runner iterates latent_dims.
     encoder_hidden: [64, 32]
     decoder_hidden: [32, 64]
     # Enabled from the dependence-calibration ablation, while remaining an
@@ -60,7 +64,15 @@ models:
 evaluation:
   n_time_points: 200
   max_time_factor: 1.2
-  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae]
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   save_predictions: false
   # Subject-level validation/test latents and validation-calibrated recovery metrics.
   save_latent_recovery: true
+  dependence_samples: 2000
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 15
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 128
+  joint_dgp_samples: 2000
+  joint_model_samples: 500
+  joint_model_batch_size: 32

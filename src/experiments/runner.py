@@ -22,7 +22,11 @@ from sota.baselines import (
 )
 from .config import expand_scenarios, expand_seed_streams, semisynthetic_datasets
 from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
-from utility.metrics import censoring_rate, collect_metrics
+from utility.metrics import (
+    JointSurvivalEvaluation, censoring_rate, collect_metrics,
+    learned_conditional_kendall_tau, oracle_joint_survival_ise,
+    predict_dvfm_joint_survival,
+)
 from dvfm.model import DVFM
 from utility.data import SurvivalDataset
 from dvfm.prediction import get_median_survival_time, predict_survival_curves
@@ -58,6 +62,7 @@ def _fit_one_split(
     latent_output_dir: Path | None = None,
     validation_indices=None,
     test_indices=None,
+    joint_evaluation: JointSurvivalEvaluation | None = None,
 ) -> tuple[list[dict], dict]:
     eval_cfg = cfg["evaluation"]
     model_cfg = cfg["models"]
@@ -205,16 +210,31 @@ def _fit_one_split(
             model.load_state_dict(artifacts["best_validation_elbo_state"])
         elif checkpoint != "final":
             raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
+        frailty_summary = {}
         if latent_output_dir is not None:
             from .latent_recovery import export_latent_recovery
 
             # Diagnostic DataLoader iteration must not alter prediction MC draws.
             with torch.random.fork_rng(devices=[]):
-                export_latent_recovery(
+                latent_metrics = export_latent_recovery(
                     model, validation, test, validation_indices, test_indices,
                     latent_output_dir, {**context, "Model": "DVFM", "Checkpoint": checkpoint},
                     int(c["batch_size"]), device,
                 )
+            if not latent_metrics.empty:
+                selected = latent_metrics.loc[
+                    latent_metrics["split"].eq("test")
+                    & latent_metrics["subgroup"].eq("All")
+                    & latent_metrics["representation"].eq("Validation-calibrated")
+                ]
+                if not selected.empty:
+                    record = selected.iloc[0]
+                    frailty_summary = {
+                        "frailty_pearson": record["pearson"],
+                        "frailty_spearman": record["spearman"],
+                        "frailty_r2_calibrated": record["r2"],
+                        "frailty_rmse_calibrated": record["rmse"],
+                    }
         survival = predict_survival_curves(
             model=model,
             X=test.X,
@@ -239,7 +259,30 @@ def _fit_one_split(
             "latent_loading_group_norm": float(
                 model.decoder.latent_loading_group_norm().detach().cpu()
             ),
+            "latent_dim": int(c["latent_dim"]),
+            **frailty_summary,
         }
+        target_tau = context.get("Target Kendall Tau")
+        if target_tau is not None:
+            learned_tau = learned_conditional_kendall_tau(
+                model, np.mean(train.X, axis=0),
+                int(eval_cfg.get("dependence_samples", 2000)), device,
+            )
+            predictions["DVFM"].update({
+                "learned_conditional_kendall_tau": learned_tau,
+                "conditional_kendall_tau_error": learned_tau - float(target_tau),
+                "absolute_conditional_kendall_tau_error": abs(learned_tau - float(target_tau)),
+            })
+        if joint_evaluation is not None:
+            joint_prediction = predict_dvfm_joint_survival(
+                model, joint_evaluation,
+                mc_samples=int(eval_cfg.get("joint_model_samples", c["mc_samples"])),
+                batch_size=int(eval_cfg.get("joint_model_batch_size", c["batch_size"])),
+                seed=0, device=device,
+            )
+            predictions["DVFM"]["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+                joint_prediction, joint_evaluation
+            )
 
     metadata = dict(context)
     metadata.update(
@@ -280,6 +323,12 @@ def _fit_one_split(
         prefix = f"{name} "
         clean_metrics = {key.removeprefix(prefix): value for key, value in metrics.items()}
         row.update(clean_metrics)
+        row.update({
+            "oracle_ibs": clean_metrics.get("IBS Oracle", np.nan),
+            "oracle_ci": clean_metrics.get("CI Oracle", np.nan),
+            "oracle_mae": clean_metrics.get("MAE Oracle", np.nan),
+            "numerical_failure": False,
+        })
         row.update({
             key: value for key, value in pred.items()
             if key not in {"median", "survival"}
@@ -347,6 +396,7 @@ def run(cfg: dict) -> pd.DataFrame:
     elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
         from utility.semisynthetic import (
             fit_semisynthetic_dgp, generate_support_semisynthetic,
+            semi_synthetic_joint_survival,
         )
 
         diagnostics = []
@@ -362,10 +412,12 @@ def run(cfg: dict) -> pd.DataFrame:
                 model_seed = seeds["model"]
                 tau_values = data_cfg["kendall_tau"]
                 tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
-                for target_tau, target_rate in product(tau_values, data_cfg["censoring_rates"]):
+                copulas = data_cfg.get("copulas", [data_cfg.get("copula", "clayton")])
+                for copula, target_tau, target_rate in product(copulas, tau_values, data_cfg["censoring_rates"]):
                     generated = generate_support_semisynthetic(
                         dgp, kendall_tau=float(target_tau),
                         censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
+                        copula=str(copula),
                     )
                     train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
                         generated.data, cfg["split"], int(split_seed)
@@ -377,12 +429,12 @@ def run(cfg: dict) -> pd.DataFrame:
                         {**cfg["preprocessing"], "numeric_features": dataset["numeric_features"]},
                     )
                     seed_everything(int(model_seed))
-                    scenario = f"{dataset['name']}_clayton_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
+                    scenario = f"{dataset['name']}_{str(copula).lower()}_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
                     context = {
                         "Study": study_cfg["name"], "Stage": study_cfg["stage"],
                         "Dataset Type": source, "Dataset": dataset["name"],
                         "Source Path": str(dataset["path"]), "Scenario": scenario,
-                        "Copula": "clayton", "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
+                        "Copula": str(copula).lower(), "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
                         "Theta": generated.clayton_theta,
                         "Target Kendall Tau": generated.target_kendall_tau,
                         "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
@@ -393,13 +445,48 @@ def run(cfg: dict) -> pd.DataFrame:
                         "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
                         "Model Seed": int(model_seed),
                     }
-                    split_rows, preds = _fit_one_split(
-                        train, validation, test, cfg, device, context,
-                        latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
-                                           if cfg["evaluation"].get("save_latent_recovery", True) else None),
-                        validation_indices=validation_idx, test_indices=test_idx,
-                    )
-                    rows.extend(split_rows)
+                    joint_evaluation = None
+                    if (
+                        cfg["evaluation"].get("compute_oracle_joint_survival_ise", False)
+                        and hasattr(dgp.event_margin, "baseline_times")
+                        and hasattr(dgp.censor_margin, "baseline_times")
+                    ):
+                        count = min(int(cfg["evaluation"]["joint_n_subjects"]), len(test.X))
+                        chosen = np.random.default_rng(int(split_seed) + 70_000).choice(len(test.X), size=count, replace=False)
+                        event_grid = np.linspace(0.0, np.quantile(train.true_event_time, cfg["evaluation"]["joint_grid_max_quantile"]), int(cfg["evaluation"]["joint_n_time_points"]))
+                        censor_grid = np.linspace(0.0, np.quantile(train.true_censor_time, cfg["evaluation"]["joint_grid_max_quantile"]), int(cfg["evaluation"]["joint_n_time_points"]))
+                        joint_evaluation = JointSurvivalEvaluation(
+                            test.X[chosen], event_grid, censor_grid,
+                            semi_synthetic_joint_survival(dgp, generated, test.X[chosen], event_grid, censor_grid),
+                        )
+                    base_cfg = deepcopy(cfg)
+                    base_cfg["models"] = deepcopy(cfg["models"])
+                    base_cfg["models"]["enabled"] = [name for name in cfg["models"]["enabled"] if str(name).lower() != "dvfm"]
+                    if base_cfg["models"]["enabled"]:
+                        split_rows, preds = _fit_one_split(train, validation, test, base_cfg, device, context)
+                        rows.extend(split_rows)
+                    latent_dims = cfg["models"]["dvfm"].get("latent_dims", [cfg["models"]["dvfm"]["latent_dim"]])
+                    for latent_dim in latent_dims:
+                        dvfm_cfg = deepcopy(cfg)
+                        dvfm_cfg["models"] = deepcopy(cfg["models"])
+                        dvfm_cfg["models"]["enabled"] = ["dvfm"]
+                        dvfm_cfg["models"]["dvfm"]["latent_dim"] = int(latent_dim)
+                        try:
+                            split_rows, preds = _fit_one_split(
+                                train, validation, test, dvfm_cfg, device, context,
+                                latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                                   if int(latent_dim) == 1 and cfg["evaluation"].get("save_latent_recovery", True) else None),
+                                validation_indices=validation_idx, test_indices=test_idx,
+                                joint_evaluation=joint_evaluation,
+                            )
+                            rows.extend(split_rows)
+                        except Exception as exc:
+                            rows.append({
+                                **context, "Model": "DVFM", "latent_dim": int(latent_dim),
+                                "numerical_failure": True, "error": repr(exc),
+                                "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
+                                "oracle_joint_survival_ise": np.nan,
+                            })
                     diagnostics.append({
                         **context, "Censor Time Scale": generated.censor_time_scale,
                         "Source Samples": dgp.source_n_samples,

@@ -423,18 +423,25 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"evaluation.{key} must be at least 2")
     elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
         semisynthetic_datasets(data)
-        if str(_require(data, "copula", "data")).lower() != "clayton":
-            raise ValueError("SUPPORT semi-synthetic generation currently requires copula: clayton")
+        copulas = data.get("copulas", [data.get("copula", "clayton")])
+        copulas = [str(copula).lower() for copula in copulas]
+        supported_copulas = {"gaussian", "clayton", "frank"}
+        if not copulas or set(copulas) - supported_copulas:
+            raise ValueError(f"data.copulas must contain only {sorted(supported_copulas)}")
         tau_values = _require(data, "kendall_tau", "data")
         tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
         if not tau_values or any(not 0.0 <= float(tau) < 1.0 for tau in tau_values):
-            raise ValueError("data.kendall_tau must contain values in [0, 1) for Clayton")
+            raise ValueError("data.kendall_tau must contain values in [0, 1)")
         rates = _require(data, "censoring_rates", "data")
         if not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
             raise ValueError("data.censoring_rates must contain values in (0, 1)")
         expand_seed_streams(_require(cfg, "seeds", "config"))
         if str(cfg["split"].get("stratify", "")).lower() != "time_event":
             raise ValueError("SUPPORT semi-synthetic splits require split.stratify: time_event")
+        if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+            dims = cfg["models"]["dvfm"].get("latent_dims", [cfg["models"]["dvfm"].get("latent_dim")])
+            if not dims or any(int(dim) < 0 for dim in dims):
+                raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
     elif source in {"real_file", "semi_synthetic_file"}:
         study_seeds = _require(study, "seeds", "study")
         if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):
