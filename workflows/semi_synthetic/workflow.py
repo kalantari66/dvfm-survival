@@ -1,10 +1,4 @@
-"""Single-job GWF workflow for the SUPPORT semi-synthetic pilot.
-
-From the repository root:
-
-    gwf -f workflows/semi_synthetic/workflow.py status
-    gwf -f workflows/semi_synthetic/workflow.py run
-"""
+"""One GWF target per semi-synthetic dataset plus a cross-dataset aggregator."""
 
 from __future__ import annotations
 
@@ -16,91 +10,96 @@ from gwf import AnonymousTarget, Workflow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "semi_synthetic.yaml"
+RUNNER = PROJECT_ROOT / "scripts" / "run_semi_synthetic_dataset.py"
+AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_results.py"
+RESULT_FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
 
 
-def run_semi_synthetic_experiment(
-    experiment_config: Path, result_dir: Path, cores: int, memory: str,
-    walltime: str, partition: str, account: str,
-) -> AnonymousTarget:
-    """Generate and fit all configured datasets in one SLURM allocation."""
-    with experiment_config.open(encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)["data"]
-    datasets = data.get("datasets", [data])
-    dataset_paths = [Path(spec["path"]) for spec in datasets]
-    inputs = [
-        str(experiment_config),
-        *(str(path if path.is_absolute() else PROJECT_ROOT / path) for path in dataset_paths),
-        str(PROJECT_ROOT / "environment.yml"),
-        str(PROJECT_ROOT / "pyproject.toml"),
-        *sorted(
-            str(path)
-            for package in ("dvfm", "experiments", "sota", "utility")
-            for path in (PROJECT_ROOT / "src" / package).glob("*.py")
-        ),
-    ]
-    outputs = [
-        str(result_dir / "results_raw.csv"),
-        str(result_dir / "results_mean.csv"),
-        str(result_dir / "results_std.csv"),
-        str(result_dir / "dgp_diagnostics.csv"),
-        str(result_dir / "resolved_config.json"),
-        str(result_dir / "_SUCCESS"),
-    ]
-    options = dict(
-        cores=str(cores), memory=memory, walltime=walltime, account=account,
-        gres=f"gpu:1 -p {partition}",
-    )
+def _options(resources: dict) -> dict[str, str]:
+    return {
+        "cores": str(resources["cores"]), "memory": str(resources["memory"]),
+        "walltime": str(resources["walltime"]), "account": str(resources["account"]),
+        "gres": f"gpu:1 -p {resources['partition']}",
+    }
+
+
+def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousTarget:
+    """Run exactly one configured dataset with the YAML's resource allocation."""
+    name = str(dataset["name"])
+    result_dir = result_root / name
+    source_path = Path(dataset["path"])
+    if not source_path.is_absolute():
+        source_path = PROJECT_ROOT / source_path
+    outputs = [result_dir / filename for filename in RESULT_FILES]
+    outputs.extend([result_dir / "resolved_config.json", result_dir / "_SUCCESS"])
+    checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
     spec = f"""
     set -euo pipefail
-
     cd "{PROJECT_ROOT}"
     mkdir -p "{result_dir}"
     rm -f "{result_dir / '_SUCCESS'}"
-
-    echo "[GWF] $(date) starting SUPPORT semi-synthetic pilot"
-    echo "[GWF] experiment_config={experiment_config}"
-    echo "[GWF] result_dir={result_dir}"
-    echo "[GWF] resources={cores} cores, {memory}, {walltime}, {partition}, {account}"
-    echo "[GWF] host=$(hostname)"
-    echo "[GWF] CUDA_VISIBLE_DEVICES=${{CUDA_VISIBLE_DEVICES:-unset}}"
-
+    echo "[GWF] $(date) starting semi-synthetic dataset: {name}"
     export PYTHONUNBUFFERED=1
-    export OMP_NUM_THREADS="{cores}"
-    export MKL_NUM_THREADS="{cores}"
-    export OPENBLAS_NUM_THREADS="{cores}"
-    export NUMEXPR_NUM_THREADS="{cores}"
-
+    export OMP_NUM_THREADS="{resources['cores']}"
+    export MKL_NUM_THREADS="{resources['cores']}"
+    export OPENBLAS_NUM_THREADS="{resources['cores']}"
+    export NUMEXPR_NUM_THREADS="{resources['cores']}"
     source "$HOME/miniconda3/etc/profile.d/conda.sh"
     conda activate dvfm
-    python -m experiments.cli --config "{experiment_config}" --validate-only
-    python -m experiments.cli --config "{experiment_config}"
-
-    test -s "{result_dir / 'results_raw.csv'}"
-    test -s "{result_dir / 'results_mean.csv'}"
-    test -s "{result_dir / 'results_std.csv'}"
-    test -s "{result_dir / 'dgp_diagnostics.csv'}"
-    test -s "{result_dir / 'resolved_config.json'}"
+    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --output-dir "{result_dir}" --validate-only
+    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --output-dir "{result_dir}"
+    {checks}
     touch "{result_dir / '_SUCCESS'}"
-    echo "[GWF] $(date) completed SUPPORT semi-synthetic pilot"
+    echo "[GWF] $(date) completed semi-synthetic dataset: {name}"
     """
+    inputs = [
+        EXPERIMENT_CONFIG, RUNNER, source_path, PROJECT_ROOT / "environment.yml",
+        PROJECT_ROOT / "pyproject.toml",
+        *sorted(path for package in ("dvfm", "experiments", "sota", "utility")
+                for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
+    ]
+    return AnonymousTarget(inputs=inputs, outputs=outputs, options=_options(resources), spec=spec)
+
+
+def aggregate(result_root: Path, datasets: list[dict], resources: dict) -> AnonymousTarget:
+    """Merge cross-dataset files after every dataset target has completed."""
+    names = [str(dataset["name"]) for dataset in datasets]
+    inputs = [AGGREGATOR, EXPERIMENT_CONFIG, *(
+        result_root / name / filename for name in names for filename in RESULT_FILES
+    )]
+    outputs = [result_root / filename for filename in RESULT_FILES]
+    outputs.extend([result_root / "resolved_config.json", result_root / "_SUCCESS"])
+    checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
+    spec = f"""
+    set -euo pipefail
+    cd "{PROJECT_ROOT}"
+    rm -f "{result_root / '_SUCCESS'}"
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate dvfm
+    python "{AGGREGATOR}" --config "{EXPERIMENT_CONFIG}" --result-root "{result_root}"
+    {checks}
+    touch "{result_root / '_SUCCESS'}"
+    """
+    options = _options(resources)
+    options.pop("gres")
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 
 
 with EXPERIMENT_CONFIG.open(encoding="utf-8") as handle:
     config = yaml.safe_load(handle)
 
-resources = config["resources"]
-result_dir = Path(config["study"]["output_dir"])
-if not result_dir.is_absolute():
-    result_dir = PROJECT_ROOT / result_dir
+result_root = Path(config["study"]["output_dir"])
+if not result_root.is_absolute():
+    result_root = PROJECT_ROOT / result_root
+datasets = config["data"]["datasets"]
 
 gwf = Workflow()
+for dataset in datasets:
+    gwf.target_from_template(
+        f"{config['workflow']['target_name']}_{dataset['name']}",
+        run_dataset(dataset, result_root, config["resources"]),
+    )
 gwf.target_from_template(
-    name=str(config["workflow"]["target_name"]),
-    template=run_semi_synthetic_experiment(
-        experiment_config=EXPERIMENT_CONFIG, result_dir=result_dir,
-        cores=int(resources["cores"]), memory=str(resources["memory"]),
-        walltime=str(resources["walltime"]), partition=str(resources["partition"]),
-        account=str(resources["account"]),
-    ),
+    f"{config['workflow']['target_name']}_aggregate",
+    aggregate(result_root, datasets, config["resources"]),
 )

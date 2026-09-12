@@ -4,7 +4,9 @@ resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-l40s, ac
 study:
   name: semi-synthetic-support
   stage: pilot
-  output_dir: results/semi-synthetic-support
+  # Per-dataset jobs write to results/semi-synthetic/<dataset>; root-level
+  # files are the cross-dataset aggregates assembled by the GWF workflow.
+  output_dir: results/semi-synthetic
 # Repeat i independently initializes generation, splitting, and model fitting
 # with seed i. Every model sees the same cohort and split within a repeat.
 seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
