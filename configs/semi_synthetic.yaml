@@ -54,7 +54,10 @@ data:
       time_column: time
       event_column: event
       numeric_features: [age, creatinine, kappa, lambda, sample.yr]
-      categorical_features: [chapter, flc.grp, mgus, sex]
+      # ``chapter`` has several sparse levels that quasi-separate mortality;
+      # omit it from the Cox-margin DGP rather than selectively removing dummies.
+      categorical_features: [flc.grp, mgus, sex]
+      numeric_imputation: median
     - name: support
       path: data/support.feather
       time_column: duration

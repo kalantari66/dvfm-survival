@@ -182,6 +182,17 @@ def semisynthetic_datasets(data: dict) -> list[dict]:
                 raise ValueError("dataset.subsample.target_size must be positive")
             if int(subsample.get("time_bins", 10)) < 2:
                 raise ValueError("dataset.subsample.time_bins must be at least 2")
+        dropped = spec.get("drop_encoded_features", [])
+        if not isinstance(dropped, list) or any(
+            not isinstance(feature, str) or not feature for feature in dropped
+        ):
+            raise ValueError("dataset.drop_encoded_features must be a list of names")
+        if str(spec.get("numeric_imputation", "mean")) not in {
+            "mean", "median", "most_frequent"
+        }:
+            raise ValueError(
+                "dataset.numeric_imputation must be mean, median, or most_frequent"
+            )
     return datasets
 
 

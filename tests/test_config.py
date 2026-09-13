@@ -124,6 +124,10 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     ]
     assert cfg["data"]["copula"] == "clayton"
     assert cfg["data"]["copulas"] == ["gaussian", "clayton", "frank", "gumbel"]
+    flchain = next(item for item in cfg["data"]["datasets"] if item["name"] == "flchain")
+    assert "chapter" not in flchain["categorical_features"]
+    assert "drop_encoded_features" not in flchain
+    assert flchain["numeric_imputation"] == "median"
     subsampled = {
         item["name"]: item["subsample"] for item in cfg["data"]["datasets"]
         if "subsample" in item

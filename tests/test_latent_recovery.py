@@ -31,6 +31,25 @@ def test_generic_cohort_loader_fits_custom_columns(tmp_path):
     assert len(generated.data.true_z) == 150
 
 
+def test_semisynthetic_dgp_drops_configured_encoded_feature(tmp_path):
+    from utility.semisynthetic import fit_semisynthetic_dgp
+    rng = np.random.default_rng(10)
+    frame = pd.DataFrame({
+        "age": rng.normal(size=150), "chapter": ["A", "B", "C"] * 50,
+        "time": rng.exponential(size=150) + 0.01,
+        "event": rng.integers(0, 2, size=150),
+    })
+    path = tmp_path / "cohort.csv"
+    frame.to_csv(path, index=False)
+    dgp = fit_semisynthetic_dgp({
+        "path": str(path), "time_column": "time", "event_column": "event",
+        "numeric_features": ["age"], "categorical_features": ["chapter"],
+        "drop_encoded_features": ["chapter_B"],
+    })
+    assert "chapter_B" not in dgp.feature_names
+    assert dgp.X.shape[1] == 2
+
+
 class KnownEncoder(torch.nn.Module):
     def encoder(self, x, time, event):
         return x[:, :1], torch.zeros_like(x[:, :1])

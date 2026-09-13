@@ -1,5 +1,9 @@
 ## What the new generator does
 
+## Dataset-specific preprocessing
+
+\textbf{FLCHAIN:} The Serum Free Light Chain (FLCHAIN) dataset is a stratified random sample comprising half of the participants from a study investigating the association between serum free light chain (FLC) levels and mortality~\citep{dispenzieri2012use}. It is available in R’s \texttt{survival} package~\citep{therneau2024survival}. After downloading, we perform several preprocessing steps: we remove three subjects with events occurring at time zero, impute missing values in the \texttt{creatinine} feature using its median, and exclude the \texttt{chapter} feature—which encodes the cause of death according to ICD chapter headings—since it is only defined for deceased (uncensored) subjects and would therefore leak the event indicator to the model.
+
 It:
 
 1. Loads a real survival dataset such as GBSG.

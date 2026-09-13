@@ -91,7 +91,9 @@ class SemiSyntheticSample:
     copula: str = "clayton"
 
 
-def _semisynthetic_preprocessor(numeric_features=None, categorical_features=None) -> ColumnTransformer:
+def _semisynthetic_preprocessor(
+    numeric_features=None, categorical_features=None, numeric_imputation="mean",
+) -> ColumnTransformer:
     """Impute, z-score numeric covariates, and one-hot encode categoricals.
 
     The historical name of this helper referred to SUPPORT, but this is the
@@ -100,7 +102,7 @@ def _semisynthetic_preprocessor(numeric_features=None, categorical_features=None
     numeric_features = SUPPORT_NUMERIC_FEATURES if numeric_features is None else numeric_features
     categorical_features = SUPPORT_CATEGORICAL_FEATURES if categorical_features is None else categorical_features
     numeric = Pipeline([
-        ("imputer", SimpleImputer(strategy="mean")),
+        ("imputer", SimpleImputer(strategy=str(numeric_imputation))),
         ("scaler", StandardScaler()),
     ])
     categorical = Pipeline([
@@ -266,9 +268,22 @@ def fit_semisynthetic_dgp(spec, *, cox_penalizer=0.01):
             random_seed=int(subsample.get("random_seed", 42)),
         )
     event = (pd.to_numeric(frame[event_column], errors="coerce").fillna(0) > 0).astype(int).to_numpy()
-    preprocessor = _semisynthetic_preprocessor(spec["numeric_features"], spec["categorical_features"])
+    preprocessor = _semisynthetic_preprocessor(
+        spec["numeric_features"], spec["categorical_features"],
+        numeric_imputation=spec.get("numeric_imputation", "mean"),
+    )
     X = np.asarray(preprocessor.fit_transform(frame), dtype=np.float64)
     feature_names = list(preprocessor.get_feature_names_out())
+    dropped = list(spec.get("drop_encoded_features", []))
+    if dropped:
+        missing = sorted(set(dropped) - set(feature_names))
+        if missing:
+            raise ValueError(
+                f"Configured encoded features were not produced: {missing}"
+            )
+        keep = np.array([name not in dropped for name in feature_names], dtype=bool)
+        X = X[:, keep]
+        feature_names = [name for name, include in zip(feature_names, keep) if include]
     duration = frame[time_column].to_numpy(dtype=float)
     event_margin = _fit_cox_margin(X, feature_names, duration, event, cox_penalizer)
     censor_margin = _fit_cox_margin(X, feature_names, duration, 1 - event, cox_penalizer)
