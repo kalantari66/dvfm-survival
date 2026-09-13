@@ -148,8 +148,11 @@ models:
     free_bits: 0.0
     mc_samples: 100
 evaluation:
+  # One training-only grid is used to query every model. The upper bound is
+  # robust to isolated long censored observations; MTLR keeps its own bins.
   n_time_points: 100
-  max_time_factor: 1.2
+  time_grid: uniform_train_event_quantile
+  grid_max_quantile: 0.95
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   save_predictions: false
   # Per-scenario source-versus-generated event/censoring distribution checks.

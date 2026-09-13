@@ -52,6 +52,27 @@ def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
     return subset_survival_data(data, idx)
 
 
+def evaluation_time_grid(train: SurvivalData, evaluation: dict) -> np.ndarray:
+    """Build the shared, training-only survival-curve evaluation grid.
+
+    ``uniform_train_event_quantile`` prevents isolated long censoring times
+    from stretching the grid.  It is a query grid only: discrete-time models
+    retain their own training-bin construction.
+    """
+    strategy = str(evaluation.get("time_grid", "uniform_train_observed_max"))
+    if strategy == "uniform_train_event_quantile":
+        event_times = np.asarray(train.time)[np.asarray(train.event, dtype=bool)]
+        # A degenerate split should not prevent an otherwise useful experiment
+        # from running; use observed training durations as a documented fallback.
+        support = event_times if len(event_times) else np.asarray(train.time)
+        upper = float(np.quantile(support, float(evaluation["grid_max_quantile"])))
+    elif strategy == "uniform_train_observed_max":
+        upper = float(np.max(train.time) * float(evaluation["max_time_factor"]))
+    else:  # guarded by config validation; retained for direct API callers.
+        raise ValueError(f"Unsupported evaluation.time_grid: {strategy}")
+    return np.linspace(0.0, max(upper, 1e-8), int(evaluation["n_time_points"]))
+
+
 def _fit_one_split(
     train: SurvivalData,
     validation: SurvivalData,
@@ -69,8 +90,7 @@ def _fit_one_split(
     model_cfg = cfg["models"]
     enabled = {str(x).lower() for x in model_cfg["enabled"]}
 
-    max_time = max(float(np.max(train.time) * float(eval_cfg["max_time_factor"])), 1e-8)
-    time_points = np.linspace(0.0, max_time, int(eval_cfg["n_time_points"]))
+    time_points = evaluation_time_grid(train, eval_cfg)
     predictions: dict[str, dict] = {}
 
     if "coxph" in enabled:

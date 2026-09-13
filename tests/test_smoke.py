@@ -33,6 +33,7 @@ from utility.splitting import (
     time_event_stratified_train_validation_indices,
 )
 from utility.data import SurvivalData
+from experiments.runner import evaluation_time_grid
 
 
 def test_generator_shapes():
@@ -81,6 +82,20 @@ def test_time_event_train_validation_split_uses_no_test_partition():
     np.testing.assert_array_equal(validation, repeat_validation)
     for indices in (train, validation):
         assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
+
+
+def test_shared_grid_uses_training_event_support_not_long_censoring_tail():
+    data = SurvivalData(
+        X=np.zeros((5, 1)), time=np.array([1.0, 2.0, 3.0, 1_000.0, 2_000.0]),
+        event=np.array([1, 1, 1, 0, 0]), feature_names=["x0"],
+    )
+    grid = evaluation_time_grid(data, {
+        "n_time_points": 100, "time_grid": "uniform_train_event_quantile",
+        "grid_max_quantile": 0.95,
+    })
+    assert len(grid) == 100
+    assert grid[0] == 0.0
+    assert grid[-1] == np.quantile(data.time[data.event == 1], 0.95)
 
 
 def test_dvfm_forward_prediction_and_metrics():

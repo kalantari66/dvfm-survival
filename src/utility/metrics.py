@@ -83,8 +83,11 @@ def compute_ipcw_brier_ibs(
         survival_curves, time_points, observed_time, event,
         train_time, train_event,
     )
-    horizon = float(np.quantile(observed_time, 0.8) if tau is None else tau)
     grid = np.asarray(time_points, dtype=float)
+    # The caller's grid is constructed from training-side data.  Its endpoint
+    # is therefore a leakage-free default IBS horizon; held-out outcomes must
+    # not determine it.
+    horizon = float(grid[-1] if tau is None else tau)
     evaluation_grid = grid[grid <= horizon]
     if len(evaluation_grid) < 2:
         evaluation_grid = grid[:2]

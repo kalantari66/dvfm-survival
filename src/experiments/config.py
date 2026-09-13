@@ -60,7 +60,11 @@ DEFAULTS: dict[str, Any] = {
             "dtype": "float64",
         },
     },
-    "evaluation": {"n_time_points": 200, "max_time_factor": 1.2, "save_predictions": False, "primary_metrics": ["ibs_oracle", "mae_oracle"]},
+    "evaluation": {
+        "n_time_points": 200, "max_time_factor": 1.2,
+        "time_grid": "uniform_train_observed_max", "grid_max_quantile": 0.95,
+        "save_predictions": False, "primary_metrics": ["ibs_oracle", "mae_oracle"],
+    },
 }
 
 
@@ -523,3 +527,12 @@ def validate_config(cfg: dict) -> None:
         ))
         if not 0.0 < quantile <= 1.0:
             raise ValueError("evaluation.joint_grid_max_quantile must be in (0, 1]")
+    time_grid = str(cfg["evaluation"].get("time_grid", "uniform_train_observed_max"))
+    if time_grid not in {"uniform_train_observed_max", "uniform_train_event_quantile"}:
+        raise ValueError("evaluation.time_grid is unsupported")
+    if time_grid == "uniform_train_event_quantile":
+        quantile = float(_require(
+            cfg["evaluation"], "grid_max_quantile", "evaluation"
+        ))
+        if not 0.0 < quantile <= 1.0:
+            raise ValueError("evaluation.grid_max_quantile must be in (0, 1]")
