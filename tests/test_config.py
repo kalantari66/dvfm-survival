@@ -1,8 +1,10 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from experiments.config import expand_scenarios, expand_seed_streams, load_config, semisynthetic_datasets
+from experiments.runner import _models_for_dataset
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,6 +260,25 @@ def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     assert len(cfg["seeds"]["sampling"]) == 1
     assert cfg["models"]["hacsurv_2d"]["checkpoint_min_epoch"] > cfg["models"]["hacsurv_2d"]["copula_start_epoch"]
     assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
+
+
+def test_semi_synthetic_oracle_tuning_is_not_contaminated_by_legacy_ipcw_winners():
+    cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
+    expected_datasets = {
+        item["name"] for item in semisynthetic_datasets(cfg["data"])
+    }
+    assert set(cfg["models"]["legacy_ipcw_tuning_not_for_final_runs"]) == expected_datasets
+    assert "tuned_by_dataset" not in cfg["models"]
+    assert cfg["evaluation"]["primary_metrics"] == ["oracle_ibs"]
+    assert cfg["evaluation"]["secondary_sensitivity_metrics"] == ["ibs_ipcw"]
+
+    churn = _models_for_dataset(cfg, "churn")
+    assert churn["dvfm"]["encoder_hidden"] == [64, 32]
+    assert churn["hacsurv_2d"]["learning_rate"] == 0.0001
+
+    with (ROOT / "configs" / "semi_synthetic_tuning.yaml").open(encoding="utf-8") as handle:
+        tuning = yaml.safe_load(handle)
+    assert tuning["tuning"]["selection_metric"] == "IBS Oracle"
 
 
 def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():

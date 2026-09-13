@@ -11,6 +11,7 @@ import yaml
 
 
 FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
+ACCURACY_REPORT_FILE = "accuracy_primary_and_sensitivity.csv"
 
 
 def main() -> None:
@@ -27,6 +28,22 @@ def main() -> None:
     for filename in FILES:
         frames = [pd.read_csv(root / name / filename) for name in names]
         pd.concat(frames, ignore_index=True).to_csv(root / filename, index=False)
+    means = pd.read_csv(root / "results_mean.csv")
+    report_columns = [
+        column for column in (
+            "Dataset", "Scenario", "Copula", "Dependence", "Target Kendall Tau",
+            "Target Censoring Rate", "Model", "latent_dim",
+            "IBS Oracle", "IBS IPCW",
+        ) if column in means.columns
+    ]
+    accuracy = means.loc[:, report_columns].rename(columns={
+        "IBS Oracle": "Oracle IBS (primary; DGP ground truth)",
+        "IBS IPCW": (
+            "IPCW IBS (secondary sensitivity; assumes conditionally "
+            "independent censoring)"
+        ),
+    })
+    accuracy.to_csv(root / ACCURACY_REPORT_FILE, index=False)
     diagnostics = pd.read_csv(root / "dgp_diagnostics.csv")
     characteristics = (
         diagnostics.sort_values(["Dataset", "Repeat"])

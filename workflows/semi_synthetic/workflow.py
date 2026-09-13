@@ -13,7 +13,10 @@ EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "semi_synthetic.yaml"
 RUNNER = PROJECT_ROOT / "scripts" / "run_semi_synthetic_dataset.py"
 AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_results.py"
 RESULT_FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
-CROSS_DATASET_FILES = (*RESULT_FILES, "dataset_characteristics.csv")
+CROSS_DATASET_FILES = (
+    *RESULT_FILES, "dataset_characteristics.csv",
+    "accuracy_primary_and_sensitivity.csv",
+)
 
 
 def _options(resources: dict) -> dict[str, str]:

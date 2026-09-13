@@ -36,7 +36,8 @@ def main() -> None:
         winners.append({
             "dataset": dataset, "model": model, "trial": int(best["trial"]),
             "parameters": json.loads(best["parameters"]),
-            "validation_ibs_ipcw": float(best["validation_ibs_ipcw"]),
+            "validation_oracle_ibs": float(best["validation_oracle_ibs"]),
+            "validation_ibs_ipcw_secondary": float(best["validation_ibs_ipcw"]),
         })
     (args.result_root / "selected_hyperparameters.json").write_text(
         json.dumps(winners, indent=2) + "\n", encoding="utf-8"

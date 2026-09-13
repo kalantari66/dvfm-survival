@@ -152,13 +152,106 @@ models:
     logvar_max: 8.0
     free_bits: 0.0
     mc_samples: 100
+  # Legacy IBS-IPCW selections from the prior tuning run.  They are retained
+  # only for auditability and are deliberately ignored by the runner.  After
+  # the oracle-IBS tuning workflow completes, promote its winners to
+  # ``tuned_by_dataset`` for final experimental runs.
+  legacy_ipcw_tuning_not_for_final_runs:
+    churn:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 5.0, learning_rate: 0.03, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.1, hidden_dims: [32, 16], learning_rate: 0.001, weight_decay: 0.001}
+      dvfm: {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.00001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 32, learning_rate: 0.0003, copula_learning_rate: 0.00009, scale_regularization: 1.0, weight_decay: 0.00001}
+      mtlr: {bins: 200, dropout: 0.25, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.001}
+    employee:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.1, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.0}
+      dvfm: {dropout: 0.0, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      hacsurv_2d: {hidden_size: 64, hidden_survival: 64, learning_rate: 0.00003, copula_learning_rate: 0.000009, scale_regularization: 0.1, weight_decay: 0.0}
+      mtlr: {bins: 50, dropout: 0.1, hidden_dims: [16], learning_rate: 0.01, weight_decay: 0.0001}
+    flchain:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 2.5, learning_rate: 0.01, n_intervals: 5}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.0, hidden_dims: [16], learning_rate: 0.0003, weight_decay: 0.0001}
+      dvfm: {dropout: 0.0, learning_rate: 0.001, weight_decay: 0.001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 32, hidden_survival: 16, learning_rate: 0.0001, copula_learning_rate: 0.00003, scale_regularization: 1.0, weight_decay: 0.00001}
+      mtlr: {bins: 100, dropout: 0.0, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.001}
+    gbsg:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.001}
+      dvfm: {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 1.0, weight_decay: 0.001}
+      mtlr: {bins: 50, dropout: 0.25, hidden_dims: [64], learning_rate: 0.0003, weight_decay: 0.001}
+    metabric:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 2.5, learning_rate: 0.1, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.1, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.001}
+      dvfm: {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0003, scale_regularization: 10.0, weight_decay: 0.0001}
+      mtlr: {bins: 100, dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.00001}
+    mimic_iv:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 5.0, learning_rate: 0.03, n_intervals: 20}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.1, hidden_dims: [32, 16], learning_rate: 0.0001, weight_decay: 0.0001}
+      dvfm: {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 32, learning_rate: 0.00003, copula_learning_rate: 0.00003, scale_regularization: 1.0, weight_decay: 0.00001}
+      mtlr: {bins: 100, dropout: 0.1, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.00001}
+    nacd:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 2.5, learning_rate: 0.1, n_intervals: 20}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.001}
+      dvfm: {dropout: 0.1, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 32, learning_rate: 0.0001, copula_learning_rate: 0.0001, scale_regularization: 10.0, weight_decay: 0.001}
+      mtlr: {bins: 50, dropout: 0.1, hidden_dims: [64], learning_rate: 0.0003, weight_decay: 0.0}
+    seer_brain:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.1, n_intervals: 20}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.0, hidden_dims: [16], learning_rate: 0.001, weight_decay: 0.0001}
+      dvfm: {dropout: 0.1, learning_rate: 0.003, weight_decay: 0.0001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 32, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 10.0, weight_decay: 0.00001}
+      mtlr: {bins: 200, dropout: 0.1, hidden_dims: [16], learning_rate: 0.01, weight_decay: 0.00001}
+    seer_liver:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 2.5, learning_rate: 0.1, n_intervals: 5}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.1, hidden_dims: [64, 64, 16], learning_rate: 0.0003, weight_decay: 0.0}
+      dvfm: {dropout: 0.25, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0003, scale_regularization: 10.0, weight_decay: 0.0}
+      mtlr: {bins: 200, dropout: 0.25, hidden_dims: [64, 32], learning_rate: 0.003, weight_decay: 0.001}
+    seer_stomach:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.03, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.001}
+      dvfm: {dropout: 0.1, learning_rate: 0.0003, weight_decay: 0.0001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      hacsurv_2d: {hidden_size: 32, hidden_survival: 64, learning_rate: 0.00003, copula_learning_rate: 0.000009, scale_regularization: 1.0, weight_decay: 0.001}
+      mtlr: {bins: 200, dropout: 0.25, hidden_dims: [64], learning_rate: 0.003, weight_decay: 0.0}
+    support:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.1, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [64, 64, 16], learning_rate: 0.001, weight_decay: 0.00001}
+      dvfm: {dropout: 0.1, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      hacsurv_2d: {hidden_size: 64, hidden_survival: 32, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 1.0, weight_decay: 0.001}
+      mtlr: {bins: 50, dropout: 0.25, hidden_dims: [64], learning_rate: 0.003, weight_decay: 0.001}
+    whas:
+      bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
+      clayton_aft: {learning_rate: 0.01}
+      deepsurv: {dropout: 0.25, hidden_dims: [16], learning_rate: 0.001, weight_decay: 0.001}
+      dvfm: {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      hacsurv_2d: {hidden_size: 16, hidden_survival: 16, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 10.0, weight_decay: 0.001}
+      mtlr: {bins: 200, dropout: 0.1, hidden_dims: [64, 32], learning_rate: 0.0003, weight_decay: 0.0001}
 evaluation:
   # One training-only grid is used to query every model. The upper bound is
   # robust to isolated long censored observations; MTLR keeps its own bins.
   n_time_points: 100
   time_grid: uniform_train_event_quantile
   grid_max_quantile: 0.95
-  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
+  # Primary semi-synthetic accuracy: evaluated against DGP event-time truth.
+  primary_metrics: [oracle_ibs]
+  # Observed-data-style sensitivity only; it assumes conditionally independent
+  # censoring and is not used for selection or primary conclusions.
+  secondary_sensitivity_metrics: [ibs_ipcw]
   save_predictions: false
   # Per-scenario source-versus-generated event/censoring distribution checks.
   save_event_distribution_plots: true

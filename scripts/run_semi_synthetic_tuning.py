@@ -43,8 +43,8 @@ def _read_tuning_config(path: Path) -> dict:
         raise ValueError("schema_version must be 1")
     if int(config["tuning"].get("trials", 0)) < 1:
         raise ValueError("tuning.trials must be positive")
-    if str(config["tuning"].get("selection_metric", "")) != "IBS IPCW":
-        raise ValueError("tuning.selection_metric must be 'IBS IPCW'")
+    if str(config["tuning"].get("selection_metric", "")) != "IBS Oracle":
+        raise ValueError("tuning.selection_metric must be 'IBS Oracle'")
     if not 0 < float(config["development"].get("validation_fraction", 0)) < 1:
         raise ValueError("development.validation_fraction must be between 0 and 1")
     return config
@@ -116,10 +116,13 @@ def _tune_dataset(base: dict, tuning: dict, dataset: dict, out_dir: Path, device
                     train, validation, validation, trial_config, device, context,
                 )
                 selected = next(item for item in metrics if item["Model"] == MODEL_LABELS[model])
+                row["validation_oracle_ibs"] = float(selected["IBS Oracle"])
+                # Retain the observed-data estimate as a sensitivity result;
+                # it is explicitly not the hyperparameter selection score.
                 row["validation_ibs_ipcw"] = float(selected["IBS IPCW"])
                 row["validation_ci_ipcw"] = float(selected["CI IPCW"])
                 row["validation_mae_margin"] = float(selected["MAE Margin"])
-                row["selection_score"] = row["validation_ibs_ipcw"]
+                row["selection_score"] = row["validation_oracle_ibs"]
             except Exception as exc:  # preserve failed trials for auditability
                 row.update(status="failed", error=f"{type(exc).__name__}: {exc}", selection_score=np.inf)
             trial_rows.append(row)
@@ -169,7 +172,8 @@ def main() -> None:
         best = group.loc[group["selection_score"].idxmin()]
         winners.append({"dataset": dataset, "model": model, "trial": int(best["trial"]),
                         "parameters": json.loads(best["parameters"]),
-                        "validation_ibs_ipcw": float(best["validation_ibs_ipcw"])})
+                        "validation_oracle_ibs": float(best["validation_oracle_ibs"]),
+                        "validation_ibs_ipcw_secondary": float(best["validation_ibs_ipcw"])})
     (out_root / "selected_hyperparameters.json").write_text(
         json.dumps(winners, indent=2) + "\n", encoding="utf-8"
     )

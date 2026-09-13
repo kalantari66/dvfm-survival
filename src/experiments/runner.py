@@ -40,6 +40,29 @@ from utility.splitting import (
 from dvfm.training import train_dvfm
 
 
+def _deep_update(base: dict, update: dict) -> dict:
+    """Recursively apply a dataset's selected model hyperparameters."""
+    resolved = deepcopy(base)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(resolved.get(key), dict):
+            resolved[key] = _deep_update(resolved[key], value)
+        else:
+            resolved[key] = deepcopy(value)
+    return resolved
+
+
+def _models_for_dataset(cfg: dict, dataset: str | None) -> dict:
+    """Resolve YAML model defaults with the selected per-dataset override."""
+    models = cfg["models"]
+    overrides = models.get("tuned_by_dataset", {})
+    selected = overrides.get(str(dataset), {}) if dataset is not None else {}
+    # ``tuned_by_dataset`` is configuration metadata, never a model itself.
+    return _deep_update(
+        {key: value for key, value in models.items() if key != "tuned_by_dataset"},
+        selected,
+    )
+
+
 def _splits(data: SurvivalData, split_cfg: dict, seed: int):
     yield from iter_split_indices(data, split_cfg, seed)
 
@@ -87,7 +110,7 @@ def _fit_one_split(
     joint_evaluation: JointSurvivalEvaluation | None = None,
 ) -> tuple[list[dict], dict]:
     eval_cfg = cfg["evaluation"]
-    model_cfg = cfg["models"]
+    model_cfg = _models_for_dataset(cfg, context.get("Dataset"))
     enabled = {str(x).lower() for x in model_cfg["enabled"]}
 
     time_points = evaluation_time_grid(train, eval_cfg)

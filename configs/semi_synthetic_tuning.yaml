@@ -15,7 +15,9 @@ development:
   time_bins: 20
 tuning:
   trials: 10
-  selection_metric: IBS IPCW
+  # The generated DGP provides true event times, so select directly against
+  # ground-truth event survival rather than an observed-data censoring proxy.
+  selection_metric: IBS Oracle
   # Each discrete choice is sampled independently for every random trial.
   # DVFM-z1 is tuned; those settings are later shared with DVFM-z0.
   search_spaces:

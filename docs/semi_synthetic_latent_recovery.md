@@ -28,6 +28,17 @@ Result tables include `Dataset`; latent directories and prediction filenames
 include the dataset name to keep runs distinct. The workflow tracks every
 configured input file. The older single-SUPPORT source remains supported.
 
+## Accuracy reporting and tuning
+
+Hyperparameters are selected by validation **oracle IBS**, using the known
+semi-synthetic DGP event-time survival distribution. This is the primary
+semi-synthetic accuracy estimand. The final workflow writes
+`accuracy_primary_and_sensitivity.csv`, which labels oracle IBS as primary and
+IPCW IBS as a secondary observed-data-style sensitivity result. IPCW IBS is
+not used for selection or primary conclusions because it relies on a
+conditionally independent-censoring assumption that the dependent-copula
+conditions need not satisfy. IBS-Dep is not computed or reported.
+
 `preprocessing.zscore_x: true` applies to every dataset. After each split,
 numeric features are standardized using the training mean and standard deviation;
 validation/test use that same scaler. One-hot categorical columns are unchanged.
