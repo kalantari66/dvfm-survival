@@ -367,7 +367,7 @@ evaluation:
   save_event_distribution_plots: true
   # Subject-level validation/test latents and validation-calibrated recovery metrics.
   save_latent_recovery: true
-  dependence_samples: 2000
+  dependence_samples: 10000
   compute_oracle_joint_survival_ise: true
   joint_n_time_points: 15
   joint_grid_max_quantile: 0.95
