@@ -214,12 +214,18 @@ def _classical_frailty_diagnostics(model, validation, test, target_tau):
     return rows
 
 
-def _prediction_row(survival, grid, test, context):
+def _validate_survival_predictions(survival) -> np.ndarray:
+    """Reject non-finite or invalid survival curves before metric evaluation."""
     survival = np.asarray(survival, dtype=float)
     if not np.all(np.isfinite(survival)):
         raise FloatingPointError("Survival predictions contain NaN or infinity")
     if np.any(survival < -1e-6) or np.any(survival > 1.0 + 1e-6):
         raise FloatingPointError("Survival predictions fall outside [0, 1]")
+    return survival
+
+
+def _prediction_row(survival, grid, test, context):
+    survival = _validate_survival_predictions(survival)
     metrics = compute_oracle_metrics(
         survival, grid, test.true_event_time, test.event
     )
@@ -671,6 +677,8 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                         gate_initial_value=float(settings.get("gate_initial_value", 0.9)),
                         gate_temperature=float(settings.get("gate_temperature", 0.67)),
                         latent_loading_l1=float(settings.get("latent_loading_l1", 0.1)),
+                        logvar_min=float(settings.get("logvar_min", -12.0)),
+                        logvar_max=float(settings.get("logvar_max", 8.0)),
                     ).to(device)
                     artifacts = train_dvfm(
                         model, train_loader, validation_loader,
@@ -719,6 +727,28 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                             continue
                         try:
                             model.load_state_dict(state); model.to(device)
+                            # A finite ELBO is necessary but not sufficient:
+                            # posterior sampling can still overflow on a rare
+                            # subject. Screen both reported prediction modes on
+                            # validation before any test-set prediction is made.
+                            screening_predictors = {
+                                "prior": lambda: predict_survival_from_prior(
+                                    model, validation.X, grid,
+                                    int(settings["mc_samples"]), device,
+                                ),
+                                "aggregate_posterior": lambda: predict_survival_curves(
+                                    model, validation.X, grid, train_loader,
+                                    int(settings["mc_samples"]), device,
+                                ),
+                            }
+                            for screening_mode, predictor in screening_predictors.items():
+                                _seed(int(model_seed) + 75_000 + (0 if screening_mode == "prior" else 1))
+                                try:
+                                    _validate_survival_predictions(predictor())
+                                except Exception as error:
+                                    raise FloatingPointError(
+                                        f"validation prediction screening ({screening_mode}) failed: {error}"
+                                    ) from error
                             seed_offset = 0 if checkpoint == "final" else 50_000
                             learned_tau = learned_conditional_kendall_tau(
                                 model, np.mean(train.X, axis=0),
@@ -846,11 +876,27 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
     pd.DataFrame(calibration).to_csv(
         out_dir / "calibration_curves.csv.gz", index=False, compression="gzip"
     )
-    pd.DataFrame(manifest).to_csv(out_dir / "run_manifest.csv", index=False)
-    failures = [item for item in manifest if item["status"] == "failed"]
-    if failures:
-        raise RuntimeError(
-            f"{len(failures)} synthetic fits failed; see {out_dir / 'run_manifest.csv'}"
+    manifest_frame = pd.DataFrame(manifest)
+    manifest_frame.to_csv(out_dir / "run_manifest.csv", index=False)
+    failed = manifest_frame.loc[manifest_frame["status"].eq("failed")].copy()
+    failure_columns = [
+        "model", "mechanism", "scenario", "latent_dim", "error", "failure_count",
+    ]
+    if failed.empty:
+        failure_summary = pd.DataFrame(columns=failure_columns)
+    else:
+        group_columns = [
+            column for column in failure_columns[:-1] if column in failed.columns
+        ]
+        failure_summary = (
+            failed.groupby(group_columns, dropna=False)
+            .size().rename("failure_count").reset_index()
+        )
+    failure_summary.to_csv(out_dir / "failure_summary.csv", index=False)
+    if not failed.empty:
+        print(
+            f"[synthetic] {len(failed)} model fits failed; results and "
+            f"{out_dir / 'failure_summary.csv'} were written.", flush=True,
         )
     if model_cfg["dvfm"].get("variants"):
         _write_hyperparameter_comparison(

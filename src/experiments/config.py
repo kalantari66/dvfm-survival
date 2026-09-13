@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "preprocessing": {"zscore_x": False},
     "models": {
         "enabled": ["dvfm"],
-        "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1},
+        "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1, "logvar_min": -12.0, "logvar_max": 8.0},
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
         "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
@@ -520,6 +520,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("models.dvfm.latent_group_lasso cannot be negative")
         if float(dvfm.get("gate_l1", 0.0)) < 0.0:
             raise ValueError("models.dvfm.gate_l1 cannot be negative")
+        if float(dvfm.get("logvar_min", -12.0)) >= float(dvfm.get("logvar_max", 8.0)):
+            raise ValueError("models.dvfm.logvar_min must be smaller than logvar_max")
         if str(dvfm.get("latent_gate", "none")) not in {
             "none", "hard_concrete", "sigmoid"
         }:

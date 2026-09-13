@@ -7,7 +7,8 @@ import torch.nn as nn
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_dims=(64, 32), dropout=0.0):
+    def __init__(self, input_dim, latent_dim, hidden_dims=(64, 32), dropout=0.0,
+                 logvar_min=-12.0, logvar_max=8.0):
         super().__init__()
         layers = []
         previous = input_dim + 2
@@ -19,10 +20,18 @@ class Encoder(nn.Module):
         self.network = nn.Sequential(*layers)
         self.fc_mu = nn.Linear(previous, latent_dim)
         self.fc_logvar = nn.Linear(previous, latent_dim)
+        if float(logvar_min) >= float(logvar_max):
+            raise ValueError("logvar_min must be smaller than logvar_max")
+        self.logvar_min = float(logvar_min)
+        self.logvar_max = float(logvar_max)
 
     def forward(self, x, time, event):
         hidden = self.network(torch.cat((x, time[:, None], event[:, None]), dim=1))
-        return self.fc_mu(hidden), self.fc_logvar(hidden)
+        # Posterior sampling uses exp(0.5 * logvar). Bound it here so an
+        # extreme held-out subject cannot overflow only during MC prediction.
+        return self.fc_mu(hidden), self.fc_logvar(hidden).clamp(
+            min=self.logvar_min, max=self.logvar_max
+        )
 
 
 class Decoder(nn.Module):
@@ -169,7 +178,7 @@ class DVFM(nn.Module):
                  scale_link="softplus", latent_path="nonlinear",
                  shape_mode="conditional", latent_gate="none",
                  gate_initial_value=0.9, gate_temperature=0.67,
-                 latent_loading_l1=0.1):
+                 latent_loading_l1=0.1, logvar_min=-12.0, logvar_max=8.0):
         super().__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
@@ -178,7 +187,8 @@ class DVFM(nn.Module):
         encoder_dropout = dropout if encoder_dropout is None else encoder_dropout
         decoder_dropout = dropout if decoder_dropout is None else decoder_dropout
         self.encoder = None if latent_dim == 0 else Encoder(
-            input_dim, latent_dim, encoder_hidden, encoder_dropout
+            input_dim, latent_dim, encoder_hidden, encoder_dropout,
+            logvar_min=logvar_min, logvar_max=logvar_max,
         )
         self.decoder = Decoder(
             input_dim, latent_dim, decoder_hidden, decoder_dropout,

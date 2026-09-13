@@ -190,6 +190,23 @@ def test_dvfm_supports_dropout_and_adam_weight_decay():
     assert artifacts["best_validation_elbo_epoch"] in {1, 2}
 
 
+def test_dvfm_bounds_posterior_log_variance_before_sampling():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        logvar_min=-12.0, logvar_max=8.0,
+    )
+    model.eval()
+    with torch.no_grad():
+        model.encoder.fc_logvar.weight.zero_()
+        model.encoder.fc_logvar.bias.fill_(100.0)
+    _, logvar = model.encoder(
+        torch.zeros(4, 3), torch.ones(4), torch.zeros(4)
+    )
+    assert torch.all(logvar == 8.0)
+    samples = model.reparameterize(torch.zeros_like(logvar), logvar)
+    assert torch.isfinite(samples).all()
+
+
 def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
     torch.manual_seed(27)
     model = DVFM(

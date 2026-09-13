@@ -47,6 +47,7 @@ def run_synthetic_experiment(
         str(result_dir / "dvfm_diagnostics.csv"),
         str(result_dir / "calibration_curves.csv.gz"),
         str(result_dir / "run_manifest.csv"),
+        str(result_dir / "failure_summary.csv"),
         str(result_dir / "resolved_config.json"),
         str(result_dir / "_SUCCESS"),
     ]
@@ -92,6 +93,7 @@ def run_synthetic_experiment(
     test -s "{result_dir / 'dvfm_diagnostics.csv'}"
     test -s "{result_dir / 'calibration_curves.csv.gz'}"
     test -s "{result_dir / 'run_manifest.csv'}"
+    test -s "{result_dir / 'failure_summary.csv'}"
     test -s "{result_dir / 'resolved_config.json'}"
 
     touch "{result_dir / '_SUCCESS'}"

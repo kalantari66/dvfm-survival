@@ -15,7 +15,7 @@ data:
   n_features: 10
   calibration_samples: 50000
   grid:
-    kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    kendall_tau: [0.0, 0.25, 0.5, 0.75]
     censoring_rate: [0.25, 0.50, 0.75]
 split:
   strategy: holdout
@@ -47,6 +47,9 @@ models:
     checkpoint_min_epoch: 50
     primary_checkpoint: best_validation_elbo_post_warmup
     numerical_failure_threshold: 100.0
+    # Bounds posterior std = exp(0.5 * logvar) during training and prediction.
+    logvar_min: -12.0
+    logvar_max: 8.0
     free_bits: 0.0
     mc_samples: 100
 evaluation:

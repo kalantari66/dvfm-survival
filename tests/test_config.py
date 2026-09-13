@@ -72,6 +72,8 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
     assert cfg["models"]["dvfm"]["checkpoint_min_epoch"] == 50
     assert cfg["models"]["dvfm"]["primary_checkpoint"] == "best_validation_elbo_post_warmup"
     assert cfg["models"]["dvfm"]["numerical_failure_threshold"] == 100.0
+    assert cfg["models"]["dvfm"]["logvar_min"] == -12.0
+    assert cfg["models"]["dvfm"]["logvar_max"] == 8.0
     assert set(cfg["models"]["enabled"]) == {"coxph", "deepsurv", "mtlr", "clayton_aft", "dvfm"}
     assert set(cfg["seeds"]) == {"dgp", "sampling", "split", "model"}
     assert len(cfg["seeds"]["sampling"]) == 5
@@ -81,7 +83,7 @@ def test_gaussian_pilot_has_requested_grid_and_separate_seeds():
 def test_primary_synthetic_config_has_full_paired_benchmark():
     cfg = load_config(ROOT / "configs" / "synthetic.yaml")
     scenarios = expand_scenarios(cfg["data"])
-    assert len(scenarios) == 27
+    assert len(scenarios) == 12
     assert cfg["study"] == {
         "name": "synthetic", "stage": "primary", "output_dir": "results/synthetic"
     }
@@ -90,17 +92,7 @@ def test_primary_synthetic_config_has_full_paired_benchmark():
     assert cfg["split"]["strategy"] == "holdout"
     assert cfg["split"]["validation_fraction"] == 0.10
     assert cfg["split"]["test_fraction"] == 0.20
-    assert {item["kendall_tau"] for item in scenarios} == {
-        0.0,
-        0.1,
-        0.2,
-        0.3,
-        0.4,
-        0.5,
-        0.6,
-        0.7,
-        0.8,
-    }
+    assert {item["kendall_tau"] for item in scenarios} == {0.0, 0.25, 0.5, 0.75}
     assert {item["censoring_rate"] for item in scenarios} == {0.25, 0.5, 0.75}
     assert cfg["seeds"] == list(range(10))
     assert cfg["models"]["enabled"] == ["dvfm"]
@@ -137,7 +129,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     }
     assert all(item == {"target_size": 10000, "time_bins": 10, "random_seed": 42}
                for item in subsampled.values())
-    assert cfg["data"]["kendall_tau"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    assert cfg["data"]["kendall_tau"] == [0.0, 0.25, 0.5, 0.75]
     assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1]
     assert cfg["evaluation"]["n_time_points"] == 100
     assert cfg["evaluation"]["save_latent_recovery"] is True

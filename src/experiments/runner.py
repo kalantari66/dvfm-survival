@@ -227,6 +227,8 @@ def _fit_one_split(
             gate_initial_value=float(c.get("gate_initial_value", 0.9)),
             gate_temperature=float(c.get("gate_temperature", 0.67)),
             latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
+            logvar_min=float(c.get("logvar_min", -12.0)),
+            logvar_max=float(c.get("logvar_max", 8.0)),
         ).to(device)
         artifacts = train_dvfm(
             model,

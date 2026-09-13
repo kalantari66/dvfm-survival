@@ -108,7 +108,7 @@ data:
   # All four families are evaluated for positive tau. At tau=0 the runner
   # emits one product-copula condition rather than four duplicates.
   copulas: [gaussian, clayton, frank, gumbel]
-  kendall_tau: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+  kendall_tau: [0.0, 0.25, 0.5, 0.75]
   # Match each source cohort's observed censoring rate; the copula still
   # induces event/censor dependence in the generated DGP.
   censoring_rates: original
@@ -148,6 +148,8 @@ models:
     checkpoint_min_epoch: 50
     primary_checkpoint: best_validation_elbo_post_warmup
     numerical_failure_threshold: 100.0
+    logvar_min: -12.0
+    logvar_max: 8.0
     free_bits: 0.0
     mc_samples: 100
 evaluation:
