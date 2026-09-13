@@ -28,7 +28,10 @@ from utility.synthetic import (
     generate_gaussian_shared_frailty,
 )
 from utility.semisynthetic import sample_clayton_uniforms
-from utility.splitting import time_event_stratified_split_indices
+from utility.splitting import (
+    time_event_stratified_split_indices,
+    time_event_stratified_train_validation_indices,
+)
 from utility.data import SurvivalData
 
 
@@ -58,6 +61,25 @@ def test_semisynthetic_clayton_sampler_and_time_event_split():
     )
     assert (len(train), len(validation), len(test)) == (700, 100, 200)
     for indices in (train, validation, test):
+        assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
+
+
+def test_time_event_train_validation_split_uses_no_test_partition():
+    rng = np.random.default_rng(74)
+    event = rng.binomial(1, 0.4, size=1_000)
+    time = rng.lognormal(mean=1.0 + event, sigma=0.8, size=1_000)
+    data = SurvivalData(rng.normal(size=(1_000, 2)), time, event, ["x0", "x1"])
+    config = {"validation_fraction": 0.30, "time_bins": 20}
+    train, validation = time_event_stratified_train_validation_indices(data, config, seed=75)
+    repeat_train, repeat_validation = time_event_stratified_train_validation_indices(
+        data, config, seed=75
+    )
+    assert (len(train), len(validation)) == (700, 300)
+    assert not np.intersect1d(train, validation).size
+    assert set(train) | set(validation) == set(range(len(data.time)))
+    np.testing.assert_array_equal(train, repeat_train)
+    np.testing.assert_array_equal(validation, repeat_validation)
+    for indices in (train, validation):
         assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
 
 

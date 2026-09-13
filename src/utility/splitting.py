@@ -38,17 +38,12 @@ def three_way_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
     return train, validation, test
 
 
-def time_event_stratified_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
-    """70/10/20-style split stratified jointly by time bands and event status.
-
-    The referenced semi-synthetic implementation uses 20 time bands plus the
-    event indicator. Quantile bands retain that intent while avoiding nearly
-    empty tail bands on heavily right-skewed survival times.
-    """
-    indices = np.arange(len(data.time))
-    n_bins = min(int(split_cfg.get("time_bins", 20)), max(2, len(indices) // 20))
+def _time_event_strata(data: SurvivalData, time_bins: int) -> np.ndarray:
+    """Return joint event-status and within-status observed-time strata."""
+    n_samples = len(data.time)
+    n_bins = min(int(time_bins), max(2, n_samples // 20))
     event = np.asarray(data.event, dtype=int)
-    time_band = np.zeros(len(indices), dtype=int)
+    time_band = np.zeros(n_samples, dtype=int)
     # Form bands within event status. Thus every stratum has support and the
     # observed-time distribution is preserved conditionally on event status.
     for status in np.unique(event):
@@ -57,7 +52,18 @@ def time_event_stratified_split_indices(data: SurvivalData, split_cfg: dict, see
         time_band[mask] = pd.qcut(
             ranked, q=min(n_bins, int(mask.sum())), labels=False, duplicates="drop"
         ).to_numpy(dtype=int)
-    strata = event * n_bins + time_band
+    return event * n_bins + time_band
+
+
+def time_event_stratified_split_indices(data: SurvivalData, split_cfg: dict, seed: int):
+    """70/10/20-style split stratified jointly by time bands and event status.
+
+    The referenced semi-synthetic implementation uses 20 time bands plus the
+    event indicator. Quantile bands retain that intent while avoiding nearly
+    empty tail bands on heavily right-skewed survival times.
+    """
+    indices = np.arange(len(data.time))
+    strata = _time_event_strata(data, int(split_cfg.get("time_bins", 20)))
     test_fraction = float(split_cfg["test_fraction"])
     validation_fraction = float(split_cfg["validation_fraction"])
     train_validation, test = train_test_split(
@@ -69,6 +75,30 @@ def time_event_stratified_split_indices(data: SurvivalData, split_cfg: dict, see
         stratify=strata[train_validation],
     )
     return train, validation, test
+
+
+def time_event_stratified_train_validation_indices(
+    data: SurvivalData, split_cfg: dict, seed: int,
+):
+    """Return a two-way train/validation split stratified by time and event.
+
+    This is intended for development-only hyperparameter tuning.  It consumes
+    no held-out test set, unlike :func:`time_event_stratified_split_indices`.
+    ``split_cfg`` requires only ``validation_fraction`` and may optionally set
+    ``time_bins``; it deliberately does not accept or inspect ``test_fraction``.
+    """
+    validation_fraction = float(split_cfg["validation_fraction"])
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between 0 and 1")
+    indices = np.arange(len(data.time))
+    strata = _time_event_strata(data, int(split_cfg.get("time_bins", 20)))
+    train, validation = train_test_split(
+        indices,
+        test_size=validation_fraction,
+        random_state=seed,
+        stratify=strata,
+    )
+    return train, validation
 
 
 def split_survival_data(data: SurvivalData, split_cfg: dict, seed: int):
@@ -118,5 +148,6 @@ __all__ = [
     "split_survival_data",
     "subset_survival_data",
     "three_way_split_indices",
+    "time_event_stratified_train_validation_indices",
     "time_event_stratified_split_indices",
 ]
