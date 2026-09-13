@@ -262,20 +262,24 @@ def test_hacsurv_feasibility_pilot_runs_only_hacsurv():
     assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
 
 
-def test_semi_synthetic_oracle_tuning_is_not_contaminated_by_legacy_ipcw_winners():
+def test_semi_synthetic_oracle_tuning_winners_are_promoted():
     cfg = load_config(ROOT / "configs" / "semi_synthetic.yaml")
     expected_datasets = {
         item["name"] for item in semisynthetic_datasets(cfg["data"])
     }
     assert set(cfg["models"]["legacy_ipcw_tuning_not_for_final_runs"]) == expected_datasets
-    assert "tuned_by_dataset" not in cfg["models"]
+    assert set(cfg["models"]["tuned_by_dataset"]) == expected_datasets
     assert cfg["evaluation"]["primary_metrics"] == ["oracle_ibs"]
     assert cfg["evaluation"]["secondary_sensitivity_metrics"] == ["ibs_ipcw"]
     assert {"rsf", "gbsa"} <= set(cfg["models"]["enabled"])
 
     churn = _models_for_dataset(cfg, "churn")
     assert churn["dvfm"]["encoder_hidden"] == [64, 32]
-    assert churn["hacsurv_2d"]["learning_rate"] == 0.0001
+    assert churn["dvfm"]["decoder_hidden"] == [32, 64]
+    assert churn["hacsurv_2d"]["learning_rate"] == 0.0003
+    assert churn["hacsurv_2d"]["copula_learning_rate"] == 0.0003
+    assert churn["rsf"]["n_estimators"] == 300
+    assert churn["gbsa"]["n_estimators"] == 500
 
     with (ROOT / "configs" / "semi_synthetic_tuning.yaml").open(encoding="utf-8") as handle:
         tuning = yaml.safe_load(handle)
