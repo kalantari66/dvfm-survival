@@ -126,7 +126,7 @@ preprocessing:
 models:
   # One representative independent learner per class plus dependent-censoring
   # comparators. Tree, Weibull-AFT, and DeepHit sensitivity runs are appendix-only.
-  enabled: [coxph, deepsurv, mtlr, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
+  enabled: [coxph, deepsurv, mtlr, rsf, gbsa, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
   dvfm:
     # z=0 is the matched no-frailty control; z=1 matches the scalar DGP.
     latent_dims: [0, 1]

@@ -22,16 +22,22 @@ the data available to both fitting and selection without providing an unbiased
 reported estimate.  The final experiment's held-out test splits, across its
 10 seeds, remain untouched.
 
-Tune using validation-set performance only.  Do not select configurations with
-oracle metrics, even though the semi-synthetic DGP makes them available.  Use
-the model's ordinary observed-data validation objective (or validation IBS if
-that is the established model-selection objective) and record it alongside all
-candidate settings.
+Tune using validation-set **oracle IBS** (`IBS Oracle`) only.  The
+semi-synthetic DGP supplies the true event-time survival distribution, so
+oracle IBS directly measures the primary estimand without needing a censoring
+model.  Lower oracle IBS wins.
+
+Record validation IPCW IBS (`IBS IPCW`) alongside every candidate, but use it
+only as an observed-data-style sensitivity metric.  It assumes conditionally
+independent censoring, which need not hold under the dependent-copula
+conditions.  Do not use IPCW IBS to select hyperparameters or draw primary
+semi-synthetic conclusions.  IBS-Dep is not computed or reported.
 
 ## Trials and outputs
 
 Run 10 randomly sampled configurations for each tunable model family and each
-dataset.  Each model family is a separate GWF job.  Save:
+dataset.  GWF creates one tuning job per dataset; each job evaluates every
+model family.  Save:
 
 - every sampled configuration, random-trial seed, validation objective, fit
   status, elapsed time, and stopping epoch;
@@ -55,6 +61,8 @@ compact: ten trials cannot reliably explore a large Cartesian grid.
 | --- | --- |
 | DeepSurv | learning rate `{1e-4, 3e-4, 1e-3, 3e-3}`; weight decay `{0, 1e-5, 1e-4, 1e-3}`; hidden layers `{[16], [32,16], [64], [64,32], [64,64,16]}`; dropout `{0.0, 0.1, 0.25}` |
 | MTLR | learning rate `{3e-4, 1e-3, 3e-3, 1e-2}`; weight decay `{0, 1e-5, 1e-4, 1e-3}`; hidden layers `{[16], [32,16], [64], [64,32]}`; dropout `{0.0, 0.1, 0.25}`; time bins `{50, 100, 200}` |
+| Random survival forest (RSF) | trees `{100, 300, 500}`; maximum depth `{3, 5, 8}`; minimum split samples `{2, 10, 25}`; minimum leaf samples `{1, 5, 10}`; maximum features `{sqrt, log2, 0.5}` |
+| Gradient boosting survival analysis (GBSA) | estimators `{100, 300, 500}`; learning rate `{0.01, 0.05, 0.1}`; maximum depth `{1, 2, 3}`; minimum split samples `{2, 10, 25}`; minimum leaf samples `{1, 5, 10}`; maximum features `{sqrt, log2, 0.5}`; subsample `{0.6, 0.8, 1.0}` |
 | Clayton AFT | learning rate `{1e-4, 5e-4, 1e-3, 5e-3, 1e-2}` |
 | HACSurv | marginal learning rate `{3e-5, 1e-4, 3e-4}`; copula/marginal learning-rate multiplier `{0.3, 1, 3}`; hidden width `{16, 32, 64}`; scale regularization `{0.1, 1, 10}`; AdamW weight decay `{0, 1e-5, 1e-4, 1e-3}` |
 | Cox--Gamma Frailty | learning rate `{0.003, 0.01, 0.03, 0.1}`; baseline intervals `{5, 10, 20}`; baseline smoothness `{0.1, 1, 10}`; coefficient-prior standard deviation `{1, 2.5, 5}` |
@@ -83,6 +91,17 @@ After selecting one configuration per model family and dataset, freeze those
 settings before launching the full semi-synthetic suite.  The final suite then
 uses all configured copulas, tau conditions, and 10 evaluation seeds; it does
 not re-tune per copula, tau, or evaluation seed.
+
+Promote the resulting per-dataset winners to `models.tuned_by_dataset` in
+`configs/semi_synthetic.yaml`.  The runner resolves that mapping at fit time,
+so the GWF dataset job and its `--dataset` CLI invocation use the matching
+settings.  The prior IPCW-selected mapping is retained as explicitly ignored
+legacy audit data and must not be promoted.
+
+The final aggregate writes `accuracy_primary_and_sensitivity.csv`.  Its
+`Oracle IBS (primary; DGP ground truth)` column is the primary accuracy report;
+its IPCW IBS column is labeled as the secondary sensitivity result and its
+conditional-independent-censoring assumption.
 
 This favors a controlled comparison over condition-specific optimum chasing.
 If a model fails repeatedly for a selected setting, report the failures and

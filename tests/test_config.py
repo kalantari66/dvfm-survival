@@ -146,7 +146,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["dvfm"]["scale_link"] == "exp"
     assert set(cfg["models"]["enabled"]) == {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d",
-        "bayesian_cox_gamma_frailty", "dvfm",
+        "bayesian_cox_gamma_frailty", "dvfm", "rsf", "gbsa",
     }
 
 
@@ -271,6 +271,7 @@ def test_semi_synthetic_oracle_tuning_is_not_contaminated_by_legacy_ipcw_winners
     assert "tuned_by_dataset" not in cfg["models"]
     assert cfg["evaluation"]["primary_metrics"] == ["oracle_ibs"]
     assert cfg["evaluation"]["secondary_sensitivity_metrics"] == ["ibs_ipcw"]
+    assert {"rsf", "gbsa"} <= set(cfg["models"]["enabled"])
 
     churn = _models_for_dataset(cfg, "churn")
     assert churn["dvfm"]["encoder_hidden"] == [64, 32]
@@ -279,6 +280,14 @@ def test_semi_synthetic_oracle_tuning_is_not_contaminated_by_legacy_ipcw_winners
     with (ROOT / "configs" / "semi_synthetic_tuning.yaml").open(encoding="utf-8") as handle:
         tuning = yaml.safe_load(handle)
     assert tuning["tuning"]["selection_metric"] == "IBS Oracle"
+    assert set(tuning["tuning"]["search_spaces"]["rsf"]) == {
+        "n_estimators", "max_depth", "min_samples_split",
+        "min_samples_leaf", "max_features",
+    }
+    assert set(tuning["tuning"]["search_spaces"]["gbsa"]) == {
+        "n_estimators", "learning_rate", "max_depth", "min_samples_split",
+        "min_samples_leaf", "max_features", "subsample",
+    }
 
 
 def test_frailty_diagnostic_encodes_prespecified_four_way_comparison():

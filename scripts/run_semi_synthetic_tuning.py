@@ -25,6 +25,8 @@ from utility.splitting import (
 MODEL_LABELS = {
     "deepsurv": "DeepSurv",
     "mtlr": "MTLR",
+    "rsf": "RSF",
+    "gbsa": "GBSA",
     "clayton_aft": "ClaytonAFT",
     "hacsurv_2d": "HACSurv",
     "bayesian_cox_gamma_frailty": "BayesianCoxGammaFrailty",
