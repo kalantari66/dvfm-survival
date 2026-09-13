@@ -1,0 +1,51 @@
+schema_version: 1
+workflow: {target_name: semI_synthetic_tuning}
+resources: {cores: 4, memory: 25g, walltime: "24:00:00", partition: gpu-l40s, account: c2i-colon}
+experiment_config: configs/semi_synthetic.yaml
+study:
+  name: semi-synthetic-tuning
+  output_dir: results/semi-synthetic-tuning
+development:
+  # One development-only cohort per source dataset. Its validation partition is
+  # never used by the final ten-seed reporting suite.
+  seed: 99
+  copula: gaussian
+  kendall_tau: 0.50
+  validation_fraction: 0.30
+  time_bins: 20
+tuning:
+  trials: 10
+  selection_metric: IBS IPCW
+  # Each discrete choice is sampled independently for every random trial.
+  # DVFM-z1 is tuned; those settings are later shared with DVFM-z0.
+  search_spaces:
+    deepsurv:
+      learning_rate: [0.0001, 0.0003, 0.001, 0.003]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      hidden_dims: [[16], [32, 16], [64], [64, 32], [64, 64, 16]]
+      dropout: [0.0, 0.1, 0.25]
+    mtlr:
+      learning_rate: [0.0003, 0.001, 0.003, 0.01]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      hidden_dims: [[16], [32, 16], [64], [64, 32]]
+      dropout: [0.0, 0.1, 0.25]
+      bins: [50, 100, 200]
+    clayton_aft:
+      learning_rate: [0.0001, 0.0005, 0.001, 0.005, 0.01]
+    hacsurv_2d:
+      learning_rate: [0.00003, 0.0001, 0.0003]
+      copula_lr_multiplier: [0.3, 1.0, 3.0]
+      hidden_size: [16, 32, 64]
+      hidden_survival: [16, 32, 64]
+      scale_regularization: [0.1, 1.0, 10.0]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+    bayesian_cox_gamma_frailty:
+      learning_rate: [0.003, 0.01, 0.03, 0.1]
+      n_intervals: [5, 10, 20]
+      baseline_smoothness: [0.1, 1.0, 10.0]
+      beta_prior_sd: [1.0, 2.5, 5.0]
+    dvfm:
+      learning_rate: [0.0003, 0.001, 0.003]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      architecture: [[[32, 16], [16, 32]], [[64, 32], [32, 64]], [[64, 64, 16], [16, 64, 64]]]
+      dropout: [0.0, 0.1, 0.25]

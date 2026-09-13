@@ -142,9 +142,24 @@ def preprocess_covariates(train, validation, test, cfg):
     return train, validation, test
 
 
+def preprocess_train_validation(train, validation, cfg):
+    """Fit optional covariate preprocessing on train and apply it to validation."""
+    if bool(cfg.get("zscore_x", False)):
+        numeric_features = cfg.get("numeric_features")
+        columns = (list(range(train.X.shape[1])) if numeric_features is None else
+                   [train.feature_names.index(name) for name in numeric_features])
+        if columns:
+            scaler = StandardScaler().fit(train.X[:, columns])
+            for part in (train, validation):
+                part.X = np.asarray(part.X, dtype=float).copy()
+                part.X[:, columns] = scaler.transform(part.X[:, columns])
+    return train, validation
+
+
 __all__ = [
     "iter_split_indices",
     "preprocess_covariates",
+    "preprocess_train_validation",
     "split_survival_data",
     "subset_survival_data",
     "three_way_split_indices",

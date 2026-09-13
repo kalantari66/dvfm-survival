@@ -13,6 +13,7 @@ import torch
 from torch.utils.data import DataLoader
 from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
 from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
+from sota.hacsurv import fit_hacsurv_2d
 
 from sota.baselines import (
     _fit_cox_and_predict_survival,
@@ -95,6 +96,9 @@ def _fit_one_split(
             lr=float(c["learning_rate"]),
             device=device,
             eval_time_points=time_points,
+            hidden_dims=c.get("hidden_dims"),
+            dropout=float(c.get("dropout", 0.3)),
+            weight_decay=float(c.get("weight_decay", 0.0)),
         )
         predictions["DeepSurv"] = {"median": median, "survival": survival}
 
@@ -110,6 +114,9 @@ def _fit_one_split(
             lr=float(c["learning_rate"]),
             device=device,
             eval_time_points=time_points,
+            hidden_dims=c.get("hidden_dims"),
+            dropout=float(c.get("dropout", 0.0)),
+            weight_decay=float(c.get("weight_decay", 0.0)),
         )
         predictions["MTLR"] = {"median": median, "survival": survival}
 
@@ -126,6 +133,19 @@ def _fit_one_split(
             device=device,
         )
         predictions["ClaytonAFT"] = {"median": median, "survival": survival}
+
+    if "hacsurv_2d" in enabled:
+        c = model_cfg["hacsurv_2d"]
+        survival, info, _, _ = fit_hacsurv_2d(
+            train.X, train.time, train.event,
+            validation.X, validation.time, validation.event,
+            test.X, time_points, device=device,
+            seed=int(context.get("Model Seed", 0)), **c,
+        )
+        predictions["HACSurv"] = {
+            "median": get_median_survival_time(survival, time_points),
+            "survival": survival, **info,
+        }
 
     if "deephit" in enabled:
         median, survival = fit_deephit(

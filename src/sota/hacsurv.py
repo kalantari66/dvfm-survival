@@ -281,6 +281,7 @@ def fit_hacsurv_2d(
     hidden_size=32, hidden_survival=32, inverse_iterations=200,
     inverse_tolerance=1e-8, scale_regularization=1.0,
     numerical_failure_threshold=100.0, dtype="float64", seed=0, device="cpu",
+    weight_decay=0.01,
 ):
     """Fit HACSurv-2D and return marginal event survival plus diagnostics."""
     torch_dtype = torch.float64 if str(dtype) == "float64" else torch.float32
@@ -297,10 +298,11 @@ def fit_hacsurv_2d(
     ).to(device=device, dtype=torch_dtype)
     margin_optimizer = torch.optim.AdamW(
         list(model.event_margin.parameters()) + list(model.censor_margin.parameters()),
-        lr=float(learning_rate),
+        lr=float(learning_rate), weight_decay=float(weight_decay),
     )
     copula_optimizer = torch.optim.AdamW(
-        model.generator.parameters(), lr=float(copula_learning_rate)
+        model.generator.parameters(), lr=float(copula_learning_rate),
+        weight_decay=float(weight_decay),
     )
     best_loss, best_epoch, best_state = float("inf"), None, None
     no_improvement, history = 0, []

@@ -12,19 +12,20 @@ from utility.data import SurvivalDataset
 
 def train_deepsurv(X_train, time_train, event_train, X_test,
                    n_epochs=200, batch_size=64, lr=1e-3, device='cpu',
-                   eval_time_points=None):
+                   eval_time_points=None, hidden_dims=None, dropout=0.3,
+                   weight_decay=0.0):
     """
     Simple DeepSurv implementation (Cox proportional hazards with neural network)
     """
     class DeepSurv(nn.Module):
-        def __init__(self, input_dim, hidden_dims=[64, 32]):
+        def __init__(self, input_dim, hidden_dims, dropout):
             super(DeepSurv, self).__init__()
             layers = []
             prev_dim = input_dim
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
                 layers.append(nn.ReLU())
-                layers.append(nn.Dropout(0.3))
+                layers.append(nn.Dropout(float(dropout)))
                 prev_dim = hidden_dim
             layers.append(nn.Linear(prev_dim, 1))
             self.network = nn.Sequential(*layers)
@@ -60,8 +61,8 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
     train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=False)
     
     input_dim = X_train.shape[1]
-    model = DeepSurv(input_dim).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    model = DeepSurv(input_dim, [64, 32] if hidden_dims is None else hidden_dims, dropout).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
     
     # Training Loop
     model.train()
@@ -142,7 +143,8 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
 
 
 def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
-               n_epochs=200, lr=0.005, device='cpu', eval_time_points=None):
+               n_epochs=200, lr=0.005, device='cpu', eval_time_points=None,
+               hidden_dims=None, dropout=0.0, weight_decay=0.0):
     """Neural MTLR with an explicit tail category and censored likelihood."""
     # 1. Discretize Time
     # Use quantiles of observed events to define bins
@@ -170,16 +172,16 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
     
     # 3. Model
     class N_MTLR(nn.Module):
-        def __init__(self, input_dim, num_bins):
+        def __init__(self, input_dim, num_bins, hidden_dims, dropout):
             super(N_MTLR, self).__init__()
-            self.net = nn.Sequential(
-                nn.Linear(input_dim, 64),
-                nn.ReLU(),
-                nn.BatchNorm1d(64),
-                nn.Linear(64, 32),
-                nn.ReLU(),
-                nn.Linear(32, num_bins)
-            )
+            layers, previous = [], input_dim
+            for width in hidden_dims:
+                layers.extend([nn.Linear(previous, width), nn.ReLU()])
+                if dropout:
+                    layers.append(nn.Dropout(float(dropout)))
+                previous = width
+            layers.append(nn.Linear(previous, num_bins))
+            self.net = nn.Sequential(*layers)
         def forward(self, x):
             # MTLR converts interval scores to density logits by reverse
             # cumulative summation and appends an explicit beyond-grid tail.
@@ -191,8 +193,11 @@ def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
                 [interval_logits, torch.zeros((len(x), 1), device=x.device)], dim=1
             )
     
-    model = N_MTLR(X_train.shape[1], actual_num_bins).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    model = N_MTLR(
+        X_train.shape[1], actual_num_bins,
+        [64, 32] if hidden_dims is None else hidden_dims, dropout,
+    ).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
     
     X_train_t = torch.FloatTensor(X_train).to(device)
     y_train_t = y_train_bins.to(device)
