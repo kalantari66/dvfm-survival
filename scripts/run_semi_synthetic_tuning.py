@@ -158,7 +158,10 @@ def main() -> None:
     rows = []
     for dataset in datasets:
         print(f"[tuning] {dataset['name']}", flush=True)
-        rows.extend(_tune_dataset(base, tuning, dataset, out_root / dataset["name"], device))
+        # A GWF per-dataset target passes an already dataset-specific output
+        # directory. Direct all-dataset CLI use retains the nested layout.
+        dataset_out = out_root if args.dataset else out_root / dataset["name"]
+        rows.extend(_tune_dataset(base, tuning, dataset, dataset_out, device))
     trials = pd.DataFrame(rows)
     trials.to_csv(out_root / "tuning_trials.csv", index=False)
     winners = []
