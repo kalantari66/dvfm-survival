@@ -42,3 +42,15 @@
 - Default DVFM settings for the next synthetic/semi-synthetic experiments: 200 epochs, learning rate `0.001`, batch size 64, `beta_max = 1`, warmup 50, no dropout, encoder `[64, 32]`, decoder `[32, 64]`, `weight_decay = 1e-4`, latent-loading L1 `alpha = 0.1`, and best validation ELBO after warmup.
 - Keep latent dimension 1 for interpretable frailty recovery; treat larger latent dimensions as an ablation rather than a default.
 - Continue requiring validation IBS improvement, frailty Spearman within 0.03 of the reference, and no material worsening of Kendall's tau error before accepting later changes.
+
+## Synthetic plots
+
+Panel A — individual frailty recovery: recovery improves strongly with the target Kendall’s \(\tau\): roughly \(0.4\!-\!0.6\) at \(\tau=.25\), \(0.75\!-\!0.82\) at \(\tau=.5\), and about \(0.94\) at \(\tau=.75\). More censoring consistently reduces recovery, particularly at weaker dependence. This is expected: censoring removes information about subject-specific frailty.
+
+Panel B — joint-survival benefit: values are \(z=0\) minus \(z=1\) joint-survival ISE, so positive values favor the latent model. At \(\tau=0\), the latent model slightly hurts performance. By \(\tau=.5\) and \(.75\), it improves joint-survival estimation, with gains around \(5\!-\!9\times10^{-3}\). The benefit is generally largest with 75% censoring, where modeling dependence matters most.
+
+Panel C — dependence calibration: the learned dependence is qualitatively correct—it increases as the target increases—but is substantially shrunk toward zero. The model underestimates strong dependence, especially with 75% censoring. At low target dependence, some estimates are negative or spuriously positive, indicating that dependence is difficult to identify when the true signal is weak. The dashed diagonal represents perfect calibration.
+
+Panel D — event-prediction benefit: the same \(z=0\) minus \(z=1\) comparison for Oracle IBS. The latent model provides little benefit at low \(\tau\), but increasingly large benefits at higher \(\tau\). The strongest result is for 75% censoring and \(\tau=.75\): roughly \(0.19\) absolute IBS improvement, i.e. \(19\times10^{-2}\).
+
+
