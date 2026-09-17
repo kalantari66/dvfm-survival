@@ -26,7 +26,7 @@ from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
 from utility.metrics import (
     JointSurvivalEvaluation, censoring_rate, collect_metrics,
     learned_conditional_kendall_tau, oracle_joint_survival_ise,
-    predict_dvfm_joint_survival,
+    predict_dvfm_joint_survival, predict_hacsurv_joint_survival,
 )
 from dvfm.model import DVFM
 from utility.data import SurvivalDataset
@@ -228,12 +228,22 @@ def _fit_one_split(
 
     if "hacsurv_2d" in enabled:
         c = model_cfg["hacsurv_2d"]
-        survival, info, _, _ = fit_hacsurv_2d(
+        survival, info, _, fitted_model = fit_hacsurv_2d(
             model_train.X, model_train.time, model_train.event,
             model_validation.X, model_validation.time, model_validation.event,
             model_test.X, model_time_points, device=device,
             seed=int(context.get("Model Seed", 0)), **c,
         )
+        if model_joint_evaluation is not None:
+            joint_prediction = predict_hacsurv_joint_survival(
+                fitted_model, model_joint_evaluation,
+                generator_samples=int(eval_cfg["joint_model_samples"]),
+                batch_size=int(eval_cfg["joint_model_batch_size"]),
+                device=device,
+            )
+            info["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+                joint_prediction, joint_evaluation
+            )
         predictions["HACSurv"] = {
             "median": get_median_survival_time(
                 survival, model_time_points
@@ -616,8 +626,13 @@ def run(cfg: dict) -> pd.DataFrame:
                             ),
                         )
                     joint_evaluation = None
+                    joint_models = {"dvfm", "hacsurv_2d"}
+                    enabled_models = {
+                        str(name).lower() for name in cfg["models"]["enabled"]
+                    }
                     if (
                         cfg["evaluation"].get("compute_oracle_joint_survival_ise", False)
+                        and bool(enabled_models & joint_models)
                         and hasattr(dgp.event_margin, "baseline_times")
                         and hasattr(dgp.censor_margin, "baseline_times")
                     ):
@@ -633,11 +648,11 @@ def run(cfg: dict) -> pd.DataFrame:
                     base_cfg["models"] = deepcopy(cfg["models"])
                     base_cfg["models"]["enabled"] = [name for name in cfg["models"]["enabled"] if str(name).lower() != "dvfm"]
                     if base_cfg["models"]["enabled"]:
-                        split_rows, preds = _fit_one_split(train, validation, test, base_cfg, device, context)
+                        split_rows, preds = _fit_one_split(
+                            train, validation, test, base_cfg, device, context,
+                            joint_evaluation=joint_evaluation,
+                        )
                         rows.extend(split_rows)
-                    enabled_models = {
-                        str(name).lower() for name in cfg["models"]["enabled"]
-                    }
                     if "dvfm" in enabled_models:
                         latent_dims = cfg["models"]["dvfm"].get(
                             "latent_dims", [cfg["models"]["dvfm"]["latent_dim"]]

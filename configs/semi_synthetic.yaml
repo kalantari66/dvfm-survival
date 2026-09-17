@@ -108,7 +108,7 @@ data:
   # All four families are evaluated for positive tau. At tau=0 the runner
   # emits one product-copula condition rather than four duplicates.
   copulas: [gaussian, clayton, frank, gumbel]
-  kendall_tau: [0.0, 0.25, 0.5, 0.75]
+  kendall_tau: [0.0, 0.5]
   # Match each source cohort's observed censoring rate; the copula still
   # induces event/censor dependence in the generated DGP.
   censoring_rates: original
@@ -126,15 +126,16 @@ preprocessing:
 models:
   # One representative independent learner per class plus dependent-censoring
   # comparators. Tree, Weibull-AFT, and DeepHit sensitivity runs are appendix-only.
-  enabled: [coxph, deepsurv, mtlr, rsf, gbsa, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
+  enabled: [coxph, deepsurv, mtlr, rsf, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
   coxph:
     alpha: 0.0001
     ties: breslow
     n_iter: 100
     tol: 0.000000001
   dvfm:
-    # z=0 is the matched no-frailty control; z=1 matches the scalar DGP.
-    latent_dims: [0, 1]
+    # The earlier synthetic study supplies the z=0 ablation; semi-synthetic
+    # evaluates the final scalar-frailty model only.
+    latent_dims: [1]
     encoder_hidden: [64, 32]
     decoder_hidden: [32, 64]
     # Enabled from the dependence-calibration ablation, while remaining an
@@ -367,11 +368,14 @@ evaluation:
   # censoring and is not used for selection or primary conclusions.
   secondary_sensitivity_metrics: [ibs_ipcw]
   save_predictions: false
-  # Per-scenario source-versus-generated event/censoring distribution checks.
-  save_event_distribution_plots: true
-  # Subject-level validation/test latents and validation-calibrated recovery metrics.
+  # Distribution plots are generated directly by the results notebook.
+  save_event_distribution_plots: false
+  # Export while DVFM is fitted: the notebook cannot reconstruct posterior
+  # subject latents from aggregate result tables alone.
   save_latent_recovery: true
   dependence_samples: 10000
+  # Evaluated only for models exposing a joint event/censor survival surface
+  # (DVFM and HACSurv), not for marginal-survival comparators.
   compute_oracle_joint_survival_ise: true
   joint_n_time_points: 15
   joint_grid_max_quantile: 0.95

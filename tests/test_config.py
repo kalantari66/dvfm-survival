@@ -131,13 +131,15 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     }
     assert all(item == {"target_size": 10000, "time_bins": 10, "random_seed": 42}
                for item in subsampled.values())
-    assert cfg["data"]["kendall_tau"] == [0.0, 0.25, 0.5, 0.75]
+    assert cfg["data"]["kendall_tau"] == [0.0, 0.5]
     assert cfg["models"]["coxph"] == {
         "alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9,
     }
-    assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1]
+    assert cfg["models"]["dvfm"]["latent_dims"] == [1]
     assert cfg["evaluation"]["n_time_points"] == 100
     assert cfg["evaluation"]["save_latent_recovery"] is True
+    assert cfg["evaluation"]["save_event_distribution_plots"] is False
+    assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
     assert cfg["data"]["censoring_rates"] == "original"
     assert cfg["split"]["stratify"] == "time_event"
     assert cfg["split"]["validation_fraction"] == 0.10
@@ -149,7 +151,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["dvfm"]["scale_link"] == "exp"
     assert set(cfg["models"]["enabled"]) == {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d",
-        "bayesian_cox_gamma_frailty", "dvfm", "rsf", "gbsa",
+        "bayesian_cox_gamma_frailty", "dvfm", "rsf",
     }
 
 
@@ -274,7 +276,8 @@ def test_semi_synthetic_oracle_tuning_winners_are_promoted():
     assert set(cfg["models"]["tuned_by_dataset"]) == expected_datasets
     assert cfg["evaluation"]["primary_metrics"] == ["oracle_ibs"]
     assert cfg["evaluation"]["secondary_sensitivity_metrics"] == ["ibs_ipcw"]
-    assert {"rsf", "gbsa"} <= set(cfg["models"]["enabled"])
+    assert "rsf" in cfg["models"]["enabled"]
+    assert "gbsa" not in cfg["models"]["enabled"]
 
     churn = _models_for_dataset(cfg, "churn")
     assert churn["dvfm"]["encoder_hidden"] == [64, 32]

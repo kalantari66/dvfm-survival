@@ -159,6 +159,59 @@ def test_all_models_receive_normalized_time_and_predictions_return_natural_scale
     np.testing.assert_array_equal(scaled.true_event_time, test.true_event_time)
 
 
+def test_hacsurv_joint_ise_uses_scaled_model_grid_and_original_metric_grid(
+    monkeypatch,
+):
+    train = SurvivalData(
+        X=np.zeros((4, 2)), time=np.array([10.0, 20.0, 30.0, 40.0]),
+        event=np.array([1, 1, 0, 1]), feature_names=["x0", "x1"],
+        true_event_time=np.array([11.0, 22.0, 33.0, 44.0]),
+    )
+    validation = SurvivalData(
+        X=np.zeros((2, 2)), time=np.array([15.0, 35.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([16.0, 36.0]),
+    )
+    test = SurvivalData(
+        X=np.zeros((2, 2)), time=np.array([25.0, 50.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([26.0, 52.0]),
+    )
+    event_grid = np.array([0.0, 25.0, 50.0])
+    censor_grid = np.array([0.0, 20.0, 40.0])
+    truth = np.ones((2, 3, 3))
+    joint = JointSurvivalEvaluation(test.X, event_grid, censor_grid, truth)
+
+    def fake_fit(*args, **kwargs):
+        model_grid = np.asarray(args[7])
+        return np.ones((len(test.X), len(model_grid))), {}, [], object()
+
+    def fake_joint(model, evaluation, **kwargs):
+        np.testing.assert_allclose(evaluation.event_grid, event_grid / 25.0)
+        np.testing.assert_allclose(evaluation.censor_grid, censor_grid / 25.0)
+        return truth.copy()
+
+    monkeypatch.setattr(runner_module, "fit_hacsurv_2d", fake_fit)
+    monkeypatch.setattr(runner_module, "predict_hacsurv_joint_survival", fake_joint)
+    cfg = {
+        "models": {"enabled": ["hacsurv_2d"], "hacsurv_2d": {}},
+        "evaluation": {
+            "n_time_points": 5,
+            "time_grid": "uniform_train_observed_max",
+            "max_time_factor": 1.0,
+            "joint_model_samples": 2,
+            "joint_model_batch_size": 2,
+        },
+    }
+    rows, _ = _fit_one_split(
+        train, validation, test, cfg, torch.device("cpu"),
+        {"Dataset": "unit", "Dataset Type": "semi-synthetic"},
+        joint_evaluation=joint,
+    )
+
+    assert rows[0]["oracle_joint_survival_ise"] == 0.0
+
+
 def test_dvfm_forward_prediction_and_metrics():
     X, time, event, true_t, _ = generate_copula_data(
         n_samples=128, n_features=5, copula_type="clayton", theta=1.0, seed=8
