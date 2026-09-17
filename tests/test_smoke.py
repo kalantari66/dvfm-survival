@@ -33,7 +33,13 @@ from utility.splitting import (
     time_event_stratified_train_validation_indices,
 )
 from utility.data import SurvivalData
-from experiments.runner import evaluation_time_grid
+import experiments.runner as runner_module
+from experiments.runner import (
+    _fit_one_split,
+    evaluation_time_grid,
+    scale_observed_time,
+    training_time_scale,
+)
 
 
 def test_generator_shapes():
@@ -96,6 +102,61 @@ def test_shared_grid_uses_training_event_support_not_long_censoring_tail():
     assert len(grid) == 100
     assert grid[0] == 0.0
     assert grid[-1] == np.quantile(data.time[data.event == 1], 0.95)
+
+
+def test_all_models_receive_normalized_time_and_predictions_return_natural_scale(
+    monkeypatch,
+):
+    train = SurvivalData(
+        X=np.arange(8, dtype=float).reshape(4, 2),
+        time=np.array([10.0, 20.0, 30.0, 40.0]),
+        event=np.array([1, 1, 0, 1]), feature_names=["x0", "x1"],
+        true_event_time=np.array([11.0, 22.0, 33.0, 44.0]),
+    )
+    validation = SurvivalData(
+        X=np.ones((2, 2)), time=np.array([15.0, 35.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([16.0, 36.0]),
+    )
+    test = SurvivalData(
+        X=np.ones((2, 2)), time=np.array([25.0, 50.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([26.0, 52.0]),
+    )
+    captured = {}
+
+    def fake_cox(X_train, t_train, e_train, X_test, time_points, config):
+        captured["train_time"] = np.asarray(t_train)
+        captured["grid"] = np.asarray(time_points)
+        survival = np.ones((len(X_test), len(time_points)))
+        survival[:, -1] = 0.4
+        return np.full(len(X_test), 1.5), survival
+
+    monkeypatch.setattr(runner_module, "_fit_cox_and_predict_survival", fake_cox)
+    cfg = {
+        "models": {
+            "enabled": ["coxph"],
+            "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
+        },
+        "evaluation": {
+            "n_time_points": 5,
+            "time_grid": "uniform_train_observed_max",
+            "max_time_factor": 1.0,
+        },
+    }
+    rows, output = _fit_one_split(
+        train, validation, test, cfg, torch.device("cpu"),
+        {"Dataset": "unit", "Dataset Type": "semi-synthetic"},
+    )
+
+    assert training_time_scale(train) == 25.0
+    np.testing.assert_allclose(captured["train_time"], train.time / 25.0)
+    np.testing.assert_allclose(captured["grid"], output["time_points"] / 25.0)
+    np.testing.assert_allclose(output["CoxPH"]["median"], [37.5, 37.5])
+    assert rows[0]["Training Time Scale"] == 25.0
+    scaled = scale_observed_time(test, 25.0)
+    np.testing.assert_allclose(scaled.time, test.time / 25.0)
+    np.testing.assert_array_equal(scaled.true_event_time, test.true_event_time)
 
 
 def test_dvfm_forward_prediction_and_metrics():

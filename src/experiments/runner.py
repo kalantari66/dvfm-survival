@@ -96,6 +96,31 @@ def evaluation_time_grid(train: SurvivalData, evaluation: dict) -> np.ndarray:
     return np.linspace(0.0, max(upper, 1e-8), int(evaluation["n_time_points"]))
 
 
+def training_time_scale(train: SurvivalData) -> float:
+    """Return a positive, training-only duration scale for model fitting."""
+    durations = np.asarray(train.time, dtype=float)
+    usable = durations[np.isfinite(durations) & (durations > 0.0)]
+    if not len(usable):
+        raise ValueError("Training durations contain no finite positive values")
+    scale = float(np.median(usable))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Training median duration must be finite and positive")
+    return scale
+
+
+def scale_observed_time(data: SurvivalData, scale: float) -> SurvivalData:
+    """Scale observed model inputs while preserving truth in natural units."""
+    return SurvivalData(
+        X=data.X,
+        time=np.asarray(data.time, dtype=float) / float(scale),
+        event=data.event,
+        feature_names=data.feature_names,
+        true_event_time=data.true_event_time,
+        true_censor_time=data.true_censor_time,
+        true_z=data.true_z,
+    )
+
+
 def _fit_one_split(
     train: SurvivalData,
     validation: SurvivalData,
@@ -114,6 +139,19 @@ def _fit_one_split(
     enabled = {str(x).lower() for x in model_cfg["enabled"]}
 
     time_points = evaluation_time_grid(train, eval_cfg)
+    time_scale = training_time_scale(train)
+    model_time_points = time_points / time_scale
+    model_train = scale_observed_time(train, time_scale)
+    model_validation = scale_observed_time(validation, time_scale)
+    model_test = scale_observed_time(test, time_scale)
+    model_joint_evaluation = None
+    if joint_evaluation is not None:
+        model_joint_evaluation = JointSurvivalEvaluation(
+            X=joint_evaluation.X,
+            event_grid=np.asarray(joint_evaluation.event_grid) / time_scale,
+            censor_grid=np.asarray(joint_evaluation.censor_grid) / time_scale,
+            truth=joint_evaluation.truth,
+        )
     predictions: dict[str, dict] = {}
     prediction_failures: dict[str, str] = {}
 
@@ -121,108 +159,128 @@ def _fit_one_split(
         try:
             c = model_cfg["coxph"]
             median, survival = _fit_cox_and_predict_survival(
-                train.X, train.time, train.event, test.X, time_points, config=c
+                model_train.X, model_train.time, model_train.event,
+                model_test.X, model_time_points, config=c,
             )
         except Exception as exc:
             print(f"CoxPH failed on this split: {exc}")
             prediction_failures["CoxPH"] = repr(exc)
         else:
-            predictions["CoxPH"] = {"median": median, "survival": survival}
+            predictions["CoxPH"] = {
+                "median": median * time_scale, "survival": survival,
+            }
 
     if "deepsurv" in enabled:
         c = model_cfg["deepsurv"]
         _, median, survival = train_deepsurv(
-            train.X,
-            train.time,
-            train.event,
-            test.X,
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
             n_epochs=int(c["epochs"]),
             batch_size=int(c["batch_size"]),
             lr=float(c["learning_rate"]),
             device=device,
-            eval_time_points=time_points,
+            eval_time_points=model_time_points,
             hidden_dims=c.get("hidden_dims"),
             dropout=float(c.get("dropout", 0.3)),
             weight_decay=float(c.get("weight_decay", 0.0)),
         )
-        predictions["DeepSurv"] = {"median": median, "survival": survival}
+        predictions["DeepSurv"] = {
+            "median": median * time_scale, "survival": survival,
+        }
 
     if "mtlr" in enabled:
         c = model_cfg["mtlr"]
         _, median, survival = train_mtlr(
-            train.X,
-            train.time,
-            train.event,
-            test.X,
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
             num_bins=int(c["bins"]),
             n_epochs=int(c["epochs"]),
             lr=float(c["learning_rate"]),
             device=device,
-            eval_time_points=time_points,
+            eval_time_points=model_time_points,
             hidden_dims=c.get("hidden_dims"),
             dropout=float(c.get("dropout", 0.0)),
             weight_decay=float(c.get("weight_decay", 0.0)),
         )
-        predictions["MTLR"] = {"median": median, "survival": survival}
+        predictions["MTLR"] = {
+            "median": median * time_scale, "survival": survival,
+        }
 
     if "clayton_aft" in enabled:
         c = model_cfg["clayton_aft"]
         median, survival = fit_clayton_weibull_aft(
-            train.X,
-            train.time,
-            train.event,
-            test.X,
-            time_points,
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
+            model_time_points,
             epochs=int(c["epochs"]),
             lr=float(c["learning_rate"]),
             device=device,
         )
-        predictions["ClaytonAFT"] = {"median": median, "survival": survival}
+        predictions["ClaytonAFT"] = {
+            "median": median * time_scale, "survival": survival,
+        }
 
     if "hacsurv_2d" in enabled:
         c = model_cfg["hacsurv_2d"]
         survival, info, _, _ = fit_hacsurv_2d(
-            train.X, train.time, train.event,
-            validation.X, validation.time, validation.event,
-            test.X, time_points, device=device,
+            model_train.X, model_train.time, model_train.event,
+            model_validation.X, model_validation.time, model_validation.event,
+            model_test.X, model_time_points, device=device,
             seed=int(context.get("Model Seed", 0)), **c,
         )
         predictions["HACSurv"] = {
-            "median": get_median_survival_time(survival, time_points),
+            "median": get_median_survival_time(
+                survival, model_time_points
+            ) * time_scale,
             "survival": survival, **info,
         }
 
     if "deephit" in enabled:
         median, survival = fit_deephit(
-            train.X, train.time, train.event,
-            validation.X, validation.time, validation.event,
-            test.X, time_points, model_cfg["deephit"], device,
+            model_train.X, model_train.time, model_train.event,
+            model_validation.X, model_validation.time, model_validation.event,
+            model_test.X, model_time_points, model_cfg["deephit"], device,
         )
-        predictions["DeepHit"] = {"median": median, "survival": survival}
+        predictions["DeepHit"] = {
+            "median": median * time_scale, "survival": survival,
+        }
 
     for ensemble_name, display_name in (("gbsa", "GBSA"), ("rsf", "RSF")):
         if ensemble_name in enabled:
             median, survival = fit_sksurv_ensemble(
-                ensemble_name, train.X, train.time, train.event,
-                test.X, time_points, model_cfg[ensemble_name],
+                ensemble_name, model_train.X, model_train.time, model_train.event,
+                model_test.X, model_time_points, model_cfg[ensemble_name],
             )
-            predictions[display_name] = {"median": median, "survival": survival}
+            predictions[display_name] = {
+                "median": median * time_scale, "survival": survival,
+            }
 
     if "weibull_aft" in enabled:
         median, survival = fit_weibull_aft(
-            train.X, train.time, train.event, test.X, time_points,
+            model_train.X, model_train.time, model_train.event,
+            model_test.X, model_time_points,
             model_cfg["weibull_aft"],
         )
-        predictions["WeibullAFT"] = {"median": median, "survival": survival}
+        predictions["WeibullAFT"] = {
+            "median": median * time_scale, "survival": survival,
+        }
 
     if "bayesian_cox_gamma_frailty" in enabled:
         survival, _, _, _ = fit_bayesian_cox_gamma_frailty(
-            train.X, train.time, train.event,
-            validation.X, validation.time, validation.event,
-            test.X, time_points,
+            model_train.X, model_train.time, model_train.event,
+            model_validation.X, model_validation.time, model_validation.event,
+            model_test.X, model_time_points,
             model_cfg["bayesian_cox_gamma_frailty"], device,
         )
-        median = get_median_survival_time(survival, time_points)
+        median = get_median_survival_time(
+            survival, model_time_points
+        ) * time_scale
         predictions["BayesianCoxGammaFrailty"] = {
             "median": median, "survival": survival,
         }
@@ -230,12 +288,14 @@ def _fit_one_split(
     if "dvfm" in enabled:
         c = model_cfg["dvfm"]
         train_loader = DataLoader(
-            SurvivalDataset(train.X, train.time, train.event),
+            SurvivalDataset(model_train.X, model_train.time, model_train.event),
             batch_size=int(c["batch_size"]),
             shuffle=True,
         )
         val_loader = DataLoader(
-            SurvivalDataset(validation.X, validation.time, validation.event),
+            SurvivalDataset(
+                model_validation.X, model_validation.time, model_validation.event
+            ),
             batch_size=int(c["batch_size"]),
             shuffle=False,
         )
@@ -284,7 +344,8 @@ def _fit_one_split(
             # Diagnostic DataLoader iteration must not alter prediction MC draws.
             with torch.random.fork_rng(devices=[]):
                 latent_metrics = export_latent_recovery(
-                    model, validation, test, validation_indices, test_indices,
+                    model, model_validation, model_test,
+                    validation_indices, test_indices,
                     latent_output_dir, {**context, "Model": "DVFM", "Checkpoint": checkpoint},
                     int(c["batch_size"]), device,
                 )
@@ -304,13 +365,15 @@ def _fit_one_split(
                     }
         survival = predict_survival_curves(
             model=model,
-            X=test.X,
-            time_points=time_points,
+            X=model_test.X,
+            time_points=model_time_points,
             train_loader=train_loader,
             n_samples=int(c["mc_samples"]),
             device=device,
         )
-        median = get_median_survival_time(survival, time_points)
+        median = get_median_survival_time(
+            survival, model_time_points
+        ) * time_scale
         predictions["DVFM"] = {
             "median": median,
             "survival": survival,
@@ -340,9 +403,9 @@ def _fit_one_split(
                 "conditional_kendall_tau_error": learned_tau - float(target_tau),
                 "absolute_conditional_kendall_tau_error": abs(learned_tau - float(target_tau)),
             })
-        if joint_evaluation is not None:
+        if model_joint_evaluation is not None:
             joint_prediction = predict_dvfm_joint_survival(
-                model, joint_evaluation,
+                model, model_joint_evaluation,
                 mc_samples=int(eval_cfg.get("joint_model_samples", c["mc_samples"])),
                 batch_size=int(eval_cfg.get("joint_model_batch_size", c["batch_size"])),
                 seed=0, device=device,
@@ -365,6 +428,7 @@ def _fit_one_split(
             "Censoring Rate Train": censoring_rate(train.event),
             "Censoring Rate Validation": censoring_rate(validation.event),
             "Censoring Rate Test": censoring_rate(test.event),
+            "Training Time Scale": time_scale,
         }
     )
 
@@ -589,6 +653,7 @@ def run(cfg: dict) -> pd.DataFrame:
                         except Exception as exc:
                             rows.append({
                                 **context, "Model": "DVFM", "latent_dim": int(latent_dim),
+                                "Training Time Scale": training_time_scale(train),
                                 "numerical_failure": True, "error": repr(exc),
                                 "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
                                 "oracle_joint_survival_ise": np.nan,
