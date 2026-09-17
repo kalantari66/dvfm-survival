@@ -1,4 +1,4 @@
-# Semi-synthetic frailty recovery outputs
+# Semi-synthetic shared-latent recovery outputs
 
 ## Configuring multiple datasets
 
@@ -47,15 +47,15 @@ The generator separately imputes/encodes the source cohort and standardizes its
 numeric features to fit the Cox margins defining the semi-synthetic DGP. That
 cohort-level DGP preparation is distinct from the training-split model scaler.
 
-The semi-synthetic SUPPORT runner exports latent recovery by default
+The semi-synthetic DVFM jobs export latent recovery by default
 (`evaluation.save_latent_recovery: true`), independently of `save_predictions`.
 Each selected DVFM checkpoint produces a directory under
-`results/semi-synthetic-support/latent_recovery/<scenario>_repeat_<repeat>/`.
+`results/semi-synthetic/<dataset>/dvfm/latent_recovery/<scenario>_repeat_<repeat>/`.
 
-For positive Clayton tau, this contains:
+For positive Gaussian, Clayton, Frank, and Gumbel tau, this contains:
 
 - `latent_recovery_validation.csv` and `latent_recovery_test.csv`: original
-  cohort row indices, observed event indicators, true standardized log-frailty,
+  cohort row indices, observed event indicators, the true standardized shared latent,
   raw and sign-aligned posterior means, posterior standard deviations,
   calibrated means/stds, and diagnostic 95% intervals and coverage indicators.
 - `latent_calibration_metrics.csv`: Pearson, Spearman, R² and RMSE for aligned
@@ -70,10 +70,11 @@ The notebook can then recreate the scatter panels, central-98% view, decile
 means/error bars and subgroup statistics. Calibrate each repeat separately;
 do not pool validation/test records across fitted models before calibration.
 
-The target is log sampled Gamma frailty, centered and scaled using the generated
-cohort (the same convention as the existing synthetic frailty diagnostic).
-This is a definition of the simulation target; sign alignment and the fitted
-affine mapping use validation subjects only. Test truth never fits that mapping.
+The target is the centered/scaled common normal factor for Gaussian and the
+centered/scaled log mixing variable for Clayton, positive Frank, and Gumbel.
+The Frank target is discrete and can produce tied ranks. These are definitions
+of the simulation targets; sign alignment and the fitted affine mapping use
+validation subjects only. Test truth never fits that mapping.
 Posterior inference uses covariates and observed time/event only. Interval
 coverage is a diagnostic, not a guarantee of calibrated Bayesian uncertainty.
 

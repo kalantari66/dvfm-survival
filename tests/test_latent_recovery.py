@@ -5,12 +5,19 @@ import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
+from scipy.special import ndtri
+from scipy.stats import kendalltau
 
 from experiments.latent_recovery import export_latent_recovery
 from experiments.config import load_config
 from experiments.runner import run
 from utility.data import SurvivalData
-from utility.semisynthetic import generate_support_semisynthetic, sample_clayton_uniforms
+from utility.semisynthetic import (
+    generate_semisynthetic,
+    generate_support_semisynthetic,
+    sample_clayton_uniforms,
+    sample_semisynthetic_uniforms,
+)
 
 
 def test_generic_cohort_loader_fits_custom_columns(tmp_path):
@@ -96,6 +103,47 @@ def test_generator_preserves_sampled_truth_and_independence_has_no_target(tmp_pa
     metadata = json.loads((tmp_path / "latent_recovery_metadata.json").read_text())
     assert metadata["status"] == "unavailable_no_true_frailty"
     assert not (tmp_path / "latent_recovery_test.csv").exists()
+
+
+def test_gaussian_and_frank_samplers_expose_generating_shared_latents():
+    gaussian, rho, gaussian_z = sample_semisynthetic_uniforms(
+        30_000, "gaussian", 0.5, 81
+    )
+    np.testing.assert_allclose(gaussian.mean(axis=0), 0.5, atol=0.01)
+    assert abs(float(kendalltau(gaussian[:, 0], gaussian[:, 1]).statistic) - 0.5) < 0.02
+    expected_loading = np.sqrt(rho)
+    assert abs(float(np.corrcoef(gaussian_z, ndtri(gaussian[:, 0]))[0, 1])
+               - expected_loading) < 0.02
+    assert abs(float(np.corrcoef(gaussian_z, ndtri(gaussian[:, 1]))[0, 1])
+               - expected_loading) < 0.02
+
+    frank, theta, frank_shared = sample_semisynthetic_uniforms(
+        30_000, "frank", 0.5, 82
+    )
+    assert theta > 0.0
+    np.testing.assert_allclose(frank.mean(axis=0), 0.5, atol=0.01)
+    assert abs(float(kendalltau(frank[:, 0], frank[:, 1]).statistic) - 0.5) < 0.02
+    assert np.issubdtype(frank_shared.dtype, np.integer)
+    assert np.all(frank_shared >= 1)
+
+
+def test_gaussian_and_frank_semisynthetic_samples_store_standardized_true_z():
+    class Margin:
+        def inverse_survival(self, u, x):
+            return -np.log(u)
+
+    dgp = SimpleNamespace(
+        X=np.zeros((2_000, 1)), feature_names=["x"],
+        event_margin=Margin(), censor_margin=Margin(),
+    )
+    for family in ("gaussian", "frank"):
+        generated = generate_semisynthetic(
+            dgp, kendall_tau=0.5, censoring_rate=0.5,
+            sampling_seed=83, copula=family,
+        )
+        assert generated.data.true_z is not None
+        assert abs(float(generated.data.true_z.mean())) < 1e-12
+        assert abs(float(generated.data.true_z.std()) - 1.0) < 1e-12
 
 
 def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch):

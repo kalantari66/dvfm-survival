@@ -1,4 +1,4 @@
-"""Dataset-independent subject-level exports for frailty recovery figures."""
+"""Dataset-independent subject-level exports for shared-latent recovery figures."""
 
 import json
 from pathlib import Path

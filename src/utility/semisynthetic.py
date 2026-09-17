@@ -334,7 +334,12 @@ def frank_theta_from_tau(kendall_tau: float) -> float:
 
 
 def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: float, seed: int):
-    """Sample event/censor survival uniforms for the supported semi-synthetic copulas."""
+    """Sample survival uniforms and the copula's generating shared variable.
+
+    The third return value is the explicit common normal factor for Gaussian
+    and the positive Marshall--Olkin mixing variable for Clayton, Frank and
+    Gumbel. Independence has no recovery target and returns ``None``.
+    """
     name = str(copula).lower()
     tau = float(kendall_tau)
     if not 0.0 <= tau < 1.0:
@@ -349,17 +354,36 @@ def sample_semisynthetic_uniforms(n_samples: int, copula: str, kendall_tau: floa
         return uniforms, theta, frailty
     if name == "gaussian":
         rho = np.sin(np.pi * tau / 2.0)
-        normals = rng.multivariate_normal([0.0, 0.0], [[1.0, rho], [rho, 1.0]], size=int(n_samples))
-        return np.clip(ndtr(normals), 1e-12, 1.0 - 1e-12), float(rho), None
+        if tau == 0.0:
+            return rng.uniform(size=(int(n_samples), 2)), float(rho), None
+        shared = rng.normal(size=int(n_samples))
+        noise = rng.normal(size=(int(n_samples), 2))
+        normals = (
+            np.sqrt(rho) * shared[:, None]
+            + np.sqrt(1.0 - rho) * noise
+        )
+        return (
+            np.clip(ndtr(normals), 1e-12, 1.0 - 1e-12),
+            float(rho),
+            shared,
+        )
     if name == "frank":
         theta = frank_theta_from_tau(tau)
         if theta == 0.0:
             return rng.uniform(size=(int(n_samples), 2)), theta, None
-        u, w = rng.uniform(size=(2, int(n_samples)))
-        a = np.exp(-theta * u)
-        b = np.exp(-theta)
-        v = -np.log1p(w * (b - 1.0) / (a - w * (a - 1.0))) / theta
-        return np.column_stack([u, np.clip(v, 1e-12, 1.0 - 1e-12)]), theta, None
+        # For positive Frank dependence, the completely monotone generator is
+        # the Laplace transform of a logarithmic-series mixing variable.
+        probability = -np.expm1(-theta)
+        shared = rng.logseries(probability, size=int(n_samples))
+        noise = rng.exponential(size=(int(n_samples), 2))
+        uniforms = -np.log1p(
+            -probability * np.exp(-noise / shared[:, None])
+        ) / theta
+        return (
+            np.clip(uniforms, 1e-12, 1.0 - 1e-12),
+            theta,
+            shared,
+        )
     if name == "gumbel":
         # Gumbel's Archimedean parameter is theta=1/(1-tau).  Its
         # Marshall--Olkin representation uses a positive alpha-stable shared
@@ -392,15 +416,20 @@ def generate_semisynthetic(
     target_censoring = float(censoring_rate)
     if not 0.0 < target_censoring < 1.0:
         raise ValueError("censoring_rate must be between 0 and 1")
-    uniforms, theta, frailty = sample_semisynthetic_uniforms(
+    uniforms, theta, shared = sample_semisynthetic_uniforms(
         len(dgp.X), copula, kendall_tau, sampling_seed
     )
-    # Match the diagnostic workflow's cohort-standardized log-frailty target.
-    # Independence has no shared random frailty to recover.
+    # Use a cohort-standardized recovery target. Gaussian exposes its common
+    # normal factor directly; positive Archimedean families expose their
+    # positive mixing variable on the log scale.
     true_z = None
-    if frailty is not None:
-        log_frailty = np.log(np.clip(frailty, 1e-12, None))
-        true_z = (log_frailty - log_frailty.mean()) / max(log_frailty.std(), 1e-12)
+    if shared is not None:
+        latent = (
+            np.asarray(shared, dtype=float)
+            if str(copula).lower() == "gaussian"
+            else np.log(np.clip(shared, 1e-12, None))
+        )
+        true_z = (latent - latent.mean()) / max(latent.std(), 1e-12)
     event_time = dgp.event_margin.inverse_survival(uniforms[:, 0], dgp.X)
     censor_base = dgp.censor_margin.inverse_survival(uniforms[:, 1], dgp.X)
 
