@@ -1,4 +1,4 @@
-"""One GWF target per semi-synthetic dataset plus a cross-dataset aggregator."""
+"""One GWF target per semi-synthetic dataset/model plus aggregation targets."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from gwf import AnonymousTarget, Workflow
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENT_CONFIG = PROJECT_ROOT / "configs" / "semi_synthetic.yaml"
 RUNNER = PROJECT_ROOT / "scripts" / "run_semi_synthetic_dataset.py"
+MODEL_AGGREGATOR = (
+    PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_dataset_models.py"
+)
 AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_results.py"
 RESULT_FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
 CROSS_DATASET_FILES = (
@@ -27,10 +30,13 @@ def _options(resources: dict) -> dict[str, str]:
     }
 
 
-def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousTarget:
-    """Run exactly one configured dataset with the YAML's resource allocation."""
+def run_dataset_model(
+    dataset: dict, model: str, result_root: Path, resources: dict
+) -> AnonymousTarget:
+    """Run exactly one configured dataset/model combination."""
     name = str(dataset["name"])
-    result_dir = result_root / name
+    model = str(model).lower()
+    result_dir = result_root / name / model
     source_path = None
     if dataset.get("path"):
         source_path = Path(dataset["path"])
@@ -44,7 +50,7 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
     cd "{PROJECT_ROOT}"
     mkdir -p "{result_dir}"
     rm -f "{result_dir / '_SUCCESS'}"
-    echo "[GWF] $(date) starting semi-synthetic dataset: {name}"
+    echo "[GWF] $(date) starting semi-synthetic dataset/model: {name}/{model}"
     export PYTHONUNBUFFERED=1
     export OMP_NUM_THREADS="{resources['cores']}"
     export MKL_NUM_THREADS="{resources['cores']}"
@@ -52,11 +58,11 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
     export NUMEXPR_NUM_THREADS="{resources['cores']}"
     source "$HOME/miniconda3/etc/profile.d/conda.sh"
     conda activate dvfm
-    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --output-dir "{result_dir}" --validate-only
-    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --output-dir "{result_dir}"
+    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --model "{model}" --output-dir "{result_dir}" --validate-only
+    python "{RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --model "{model}" --output-dir "{result_dir}"
     {checks}
     touch "{result_dir / '_SUCCESS'}"
-    echo "[GWF] $(date) completed semi-synthetic dataset: {name}"
+    echo "[GWF] $(date) completed semi-synthetic dataset/model: {name}/{model}"
     """
     inputs = [
         EXPERIMENT_CONFIG, RUNNER, PROJECT_ROOT / "environment.yml",
@@ -70,6 +76,40 @@ def run_dataset(dataset: dict, result_root: Path, resources: dict) -> AnonymousT
         inputs=[str(path) for path in inputs],
         outputs=[str(path) for path in outputs],
         options=_options(resources), spec=spec,
+    )
+
+
+def aggregate_models(
+    dataset: dict, models: list[str], result_root: Path, resources: dict
+) -> AnonymousTarget:
+    """Merge every model job for one dataset before cross-dataset aggregation."""
+    name = str(dataset["name"])
+    result_dir = result_root / name
+    inputs = [MODEL_AGGREGATOR, EXPERIMENT_CONFIG, *(
+        result_dir / str(model).lower() / filename
+        for model in models for filename in RESULT_FILES
+    )]
+    outputs = [result_dir / filename for filename in RESULT_FILES]
+    outputs.extend([result_dir / "resolved_config.json", result_dir / "_SUCCESS"])
+    checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
+    spec = f"""
+    set -euo pipefail
+    cd "{PROJECT_ROOT}"
+    mkdir -p "{result_dir}"
+    rm -f "{result_dir / '_SUCCESS'}"
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate dvfm
+    python "{MODEL_AGGREGATOR}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --result-root "{result_root}"
+    {checks}
+    touch "{result_dir / '_SUCCESS'}"
+    """
+    options = _options(resources)
+    options.pop("gres")
+    return AnonymousTarget(
+        inputs=[str(path) for path in inputs],
+        outputs=[str(path) for path in outputs],
+        options=options,
+        spec=spec,
     )
 
 
@@ -107,12 +147,20 @@ result_root = Path(config["study"]["output_dir"])
 if not result_root.is_absolute():
     result_root = PROJECT_ROOT / result_root
 datasets = config["data"]["datasets"]
+models = [str(model).lower() for model in config["models"]["enabled"]]
 
 gwf = Workflow()
 for dataset in datasets:
+    for model in models:
+        gwf.target_from_template(
+            f"{config['workflow']['target_name']}_{dataset['name']}_{model}",
+            run_dataset_model(
+                dataset, model, result_root, config["resources"]
+            ),
+        )
     gwf.target_from_template(
-        f"{config['workflow']['target_name']}_{dataset['name']}",
-        run_dataset(dataset, result_root, config["resources"]),
+        f"{config['workflow']['target_name']}_{dataset['name']}_aggregate_models",
+        aggregate_models(dataset, models, result_root, config["resources"]),
     )
 gwf.target_from_template(
     f"{config['workflow']['target_name']}_aggregate",

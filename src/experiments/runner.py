@@ -635,29 +635,35 @@ def run(cfg: dict) -> pd.DataFrame:
                     if base_cfg["models"]["enabled"]:
                         split_rows, preds = _fit_one_split(train, validation, test, base_cfg, device, context)
                         rows.extend(split_rows)
-                    latent_dims = cfg["models"]["dvfm"].get("latent_dims", [cfg["models"]["dvfm"]["latent_dim"]])
-                    for latent_dim in latent_dims:
-                        dvfm_cfg = deepcopy(cfg)
-                        dvfm_cfg["models"] = deepcopy(cfg["models"])
-                        dvfm_cfg["models"]["enabled"] = ["dvfm"]
-                        dvfm_cfg["models"]["dvfm"]["latent_dim"] = int(latent_dim)
-                        try:
-                            split_rows, preds = _fit_one_split(
-                                train, validation, test, dvfm_cfg, device, context,
-                                latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
-                                                   if int(latent_dim) == 1 and cfg["evaluation"].get("save_latent_recovery", True) else None),
-                                validation_indices=validation_idx, test_indices=test_idx,
-                                joint_evaluation=joint_evaluation,
-                            )
-                            rows.extend(split_rows)
-                        except Exception as exc:
-                            rows.append({
-                                **context, "Model": "DVFM", "latent_dim": int(latent_dim),
-                                "Training Time Scale": training_time_scale(train),
-                                "numerical_failure": True, "error": repr(exc),
-                                "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
-                                "oracle_joint_survival_ise": np.nan,
-                            })
+                    enabled_models = {
+                        str(name).lower() for name in cfg["models"]["enabled"]
+                    }
+                    if "dvfm" in enabled_models:
+                        latent_dims = cfg["models"]["dvfm"].get(
+                            "latent_dims", [cfg["models"]["dvfm"]["latent_dim"]]
+                        )
+                        for latent_dim in latent_dims:
+                            dvfm_cfg = deepcopy(cfg)
+                            dvfm_cfg["models"] = deepcopy(cfg["models"])
+                            dvfm_cfg["models"]["enabled"] = ["dvfm"]
+                            dvfm_cfg["models"]["dvfm"]["latent_dim"] = int(latent_dim)
+                            try:
+                                split_rows, preds = _fit_one_split(
+                                    train, validation, test, dvfm_cfg, device, context,
+                                    latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                                       if int(latent_dim) == 1 and cfg["evaluation"].get("save_latent_recovery", True) else None),
+                                    validation_indices=validation_idx, test_indices=test_idx,
+                                    joint_evaluation=joint_evaluation,
+                                )
+                                rows.extend(split_rows)
+                            except Exception as exc:
+                                rows.append({
+                                    **context, "Model": "DVFM", "latent_dim": int(latent_dim),
+                                    "Training Time Scale": training_time_scale(train),
+                                    "numerical_failure": True, "error": repr(exc),
+                                    "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
+                                    "oracle_joint_survival_ise": np.nan,
+                                })
                     diagnostics.append({
                         **context, "Censor Time Scale": generated.censor_time_scale,
                         "Source Samples": dgp.source_n_samples,

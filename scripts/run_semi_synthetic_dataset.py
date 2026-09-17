@@ -1,4 +1,4 @@
-"""Run one configured semi-synthetic dataset into its own result directory."""
+"""Run one configured semi-synthetic dataset/model into a result directory."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--model")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
@@ -26,6 +27,17 @@ def main() -> None:
 
     config = deepcopy(config)
     config["data"]["datasets"] = selected
+    if args.model is not None:
+        enabled = [str(model) for model in config["models"]["enabled"]]
+        selected_models = [
+            model for model in enabled if model.lower() == args.model.lower()
+        ]
+        if len(selected_models) != 1:
+            raise ValueError(
+                f"Expected one enabled model named {args.model!r}; "
+                f"available models are {enabled}"
+            )
+        config["models"]["enabled"] = selected_models
     config["study"]["output_dir"] = str(args.output_dir)
     validate_config(config)
     validate_inputs(config)
