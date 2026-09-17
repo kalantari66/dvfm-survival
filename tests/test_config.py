@@ -132,7 +132,10 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert all(item == {"target_size": 10000, "time_bins": 10, "random_seed": 42}
                for item in subsampled.values())
     assert cfg["data"]["kendall_tau"] == [0.0, 0.25, 0.5, 0.75]
-    assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1, 5]
+    assert cfg["models"]["coxph"] == {
+        "alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9,
+    }
+    assert cfg["models"]["dvfm"]["latent_dims"] == [0, 1]
     assert cfg["evaluation"]["n_time_points"] == 100
     assert cfg["evaluation"]["save_latent_recovery"] is True
     assert cfg["data"]["censoring_rates"] == "original"

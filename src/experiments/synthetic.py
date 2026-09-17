@@ -425,7 +425,8 @@ def _fit_baseline(
     fit_info, history, fitted_model = {}, [], None
     if name == "coxph":
         _, survival = _fit_cox_and_predict_survival(
-            train.X, train.time, train.event, test.X, grid
+            train.X, train.time, train.event, test.X, grid,
+            config=cfg["models"]["coxph"],
         )
     elif name == "deepsurv":
         settings = cfg["models"]["deepsurv"]

@@ -18,6 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "preprocessing": {"zscore_x": False},
     "models": {
         "enabled": ["dvfm"],
+        "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
         "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1, "logvar_min": -12.0, "logvar_max": 8.0},
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
         "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
@@ -509,6 +510,16 @@ def validate_config(cfg: dict) -> None:
     unknown = set(cfg["models"]["enabled"]) - supported
     if unknown:
         raise ValueError(f"Unsupported models: {sorted(unknown)}")
+    if "coxph" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        coxph = cfg["models"]["coxph"]
+        if float(coxph["alpha"]) < 0.0:
+            raise ValueError("models.coxph.alpha cannot be negative")
+        if str(coxph["ties"]) not in {"breslow", "efron"}:
+            raise ValueError("models.coxph.ties must be breslow or efron")
+        if int(coxph["n_iter"]) < 1:
+            raise ValueError("models.coxph.n_iter must be positive")
+        if float(coxph["tol"]) <= 0.0:
+            raise ValueError("models.coxph.tol must be positive")
     if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
         dvfm = cfg["models"]["dvfm"]
         scale_link = str(dvfm.get("scale_link", "softplus"))

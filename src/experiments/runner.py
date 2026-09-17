@@ -115,17 +115,19 @@ def _fit_one_split(
 
     time_points = evaluation_time_grid(train, eval_cfg)
     predictions: dict[str, dict] = {}
+    prediction_failures: dict[str, str] = {}
 
     if "coxph" in enabled:
         try:
+            c = model_cfg["coxph"]
             median, survival = _fit_cox_and_predict_survival(
-                train.X, train.time, train.event, test.X, time_points
+                train.X, train.time, train.event, test.X, time_points, config=c
             )
         except Exception as exc:
             print(f"CoxPH failed on this split: {exc}")
-            median = np.full(len(test.time), float(np.max(train.time)), dtype=float)
-            survival = np.ones((len(test.time), len(time_points)), dtype=float)
-        predictions["CoxPH"] = {"median": median, "survival": survival}
+            prediction_failures["CoxPH"] = repr(exc)
+        else:
+            predictions["CoxPH"] = {"median": median, "survival": survival}
 
     if "deepsurv" in enabled:
         c = model_cfg["deepsurv"]
@@ -367,6 +369,17 @@ def _fit_one_split(
     )
 
     rows: list[dict] = []
+    for name, error in prediction_failures.items():
+        rows.append({
+            **metadata,
+            "Model": name,
+            "numerical_failure": True,
+            "error": error,
+            "oracle_ibs": np.nan,
+            "oracle_ci": np.nan,
+            "oracle_mae": np.nan,
+            "oracle_joint_survival_ise": np.nan,
+        })
     tau = None
     for name, pred in predictions.items():
         is_synthetic = "synthetic" in str(context.get("Dataset Type", "")).lower()
