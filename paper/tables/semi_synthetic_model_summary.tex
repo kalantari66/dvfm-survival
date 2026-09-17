@@ -1,19 +1,19 @@
 \begin{table}
-\caption{Scenario-balanced semi-synthetic performance. Lower mean rank is better. Wins, ties, and losses use oracle IBS and are reported from each comparator's perspective.}
+\caption{Scenario-balanced semi-synthetic performance. Lower mean seed-level rank is better; failed seeds rank one below the worst successful method in their paired cell. Wins, ties, and losses use valid paired oracle-IBS seeds and are reported from each comparator's perspective.}
 \label{tab:semi_synthetic_models}
 \begin{tabular}{lrrrrr}
 \toprule
 Model & IBS rank & CI rank & MAE rank & Failures & W/T/L vs DVFM \\
 \midrule
-DVFM & 1.00 & 1.04 & 1.03 & 0 & -- \\
-HACSurv & 2.01 & 2.26 & 2.26 & 0 & 0/0/156 \\
-ClaytonAFT & 2.99 & 2.99 & 2.96 & 0 & 0/0/156 \\
-BayesianCoxGammaFrailty & 4.01 & 4.49 & 4.40 & 0 & 0/0/156 \\
-GBSA & 5.27 & 5.99 & 5.90 & 0 & 0/0/156 \\
-MTLR & 6.08 & 6.40 & 6.07 & 0 & 0/0/156 \\
-DeepSurv & 6.76 & 6.67 & 6.77 & 0 & 0/0/156 \\
-RSF & 7.94 & 7.26 & 7.47 & 0 & 0/0/156 \\
-CoxPH & 8.96 & 7.90 & 8.14 & 0 & 0/0/156 \\
+BayesianCoxGammaFrailty & 2.67 & 2.67 & 2.92 & 0 & 1086/34/424 \\
+HACSurv & 3.29 & 3.13 & 3.32 & 0 & 1023/43/478 \\
+GBSA & 3.69 & 4.58 & 4.18 & 0 & 813/43/688 \\
+CoxPH & 4.02 & 4.57 & 4.17 & 0 & 888/27/629 \\
+DVFM & 4.24 & 3.63 & 3.85 & 16 & -- \\
+MTLR & 5.61 & 4.66 & 5.17 & 0 & 405/36/1103 \\
+RSF & 5.66 & 5.81 & 5.70 & 0 & 425/32/1087 \\
+DeepSurv & 7.39 & 7.79 & 7.42 & 0 & 145/8/1391 \\
+ClaytonAFT & 8.44 & 8.15 & 8.26 & 0 & 32/4/1508 \\
 \bottomrule
 \end{tabular}
 \end{table}

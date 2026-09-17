@@ -364,7 +364,7 @@ Use the same train/validation/test subjects for every method within a scenario. 
 - Harrell C-index, IPCW IBS, and dependence-aware estimators. These are not primary evidence under dependent censoring because their estimators can themselves be biased or model-dependent.
 
 ## Statistical reporting
-Report every scenario, not only an aggregate across mechanisms. Use paired seed-level differences against each comparator with 95% bootstrap confidence intervals. Report medians and interquartile ranges in addition to means when failures or heavy tails occur. Failed runs remain in the run manifest and are not silently discarded. Multiple-comparison-adjusted p-values are optional; effect sizes and uncertainty are mandatory.
+Report every scenario, not only an aggregate across mechanisms. Use paired seed-level differences against each comparator with 95% bootstrap confidence intervals. Report medians and interquartile ranges in addition to means when failures or heavy tails occur. Failed runs remain in the run manifest and are not silently discarded; seed-level rank penalties and effect-size handling follow [`FAILURES.md`](FAILURES.md). Multiple-comparison-adjusted p-values are optional; effect sizes and uncertainty are mandatory.
 
 ## Decision rules for paper claims
 - Claim robust event recovery only if DVFM improves the primary oracle metric over the strongest independence baseline in a clear majority of dependent-censoring cells and across most semi-synthetic datasets.
