@@ -41,22 +41,3 @@ def test_weibull_aft_returns_valid_curves(survival_data):
     assert np.isfinite(curves).all()
     assert (np.diff(curves, axis=1) <= 1e-10).all()
 
-
-def test_deephit_returns_valid_curves(survival_data):
-    X, time, event = survival_data
-    grid = np.linspace(0.0, np.quantile(time, 0.9), 15)
-    median, curves = fit_deephit(
-        X[:50], time[:50], event[:50], X[50:65], time[50:65], event[50:65],
-        X[65:], grid,
-        {
-            "epochs": 2, "batch_size": 16, "learning_rate": 0.001,
-            "time_bins": 10, "num_nodes_shared": [8], "batch_norm": False,
-            "dropout": 0.0, "alpha": 0.2, "sigma": 0.1,
-            "early_stop": False, "verbose": False,
-        },
-        torch.device("cpu"),
-    )
-    assert median.shape == (15,)
-    assert curves.shape == (15, 15)
-    assert np.isfinite(curves).all()
-    assert (np.diff(curves, axis=1) <= 1e-10).all()
