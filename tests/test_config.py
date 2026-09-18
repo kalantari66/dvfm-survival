@@ -143,7 +143,8 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["data"]["censoring_rates"] == "original"
     assert cfg["resources"] == {
         "cores": 4, "memory": "25g", "walltime": "06:00:00",
-        "partition": "gpu-l40s", "account": "c2i-colon",
+        "gpu_walltime": "02:00:00", "partition": "gpu-short",
+        "account": "c2i-colon",
     }
     assert cfg["compute"] == {"device": "cuda", "torch_num_threads": 4}
     assert cfg["split"]["stratify"] == "time_event"

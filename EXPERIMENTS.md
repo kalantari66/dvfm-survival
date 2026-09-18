@@ -308,9 +308,11 @@ Use 5--8 datasets spanning sample size, feature dimension, and nonlinear signal.
 `configs/semi_synthetic.yaml` is the executable semi-synthetic specification.
 `workflows/semi_synthetic/workflow.py` expands it into one GWF target for every
 dataset/model/seed combination. Each atomic target requests one GPU from the
-`gpu-short` queue for two hours. Downstream CPU targets first combine seeds for
-each dataset/model and recompute across-seed summaries, then assemble dataset-
-and root-level results. Submit or inspect the graph with:
+`gpu-short` queue for two hours when running DVFM or HACSurv. Other model jobs
+and downstream aggregation targets remain CPU-only with a six-hour walltime;
+they first combine seeds for each dataset/model and recompute across-seed
+summaries, then assemble dataset- and root-level results. Submit or inspect the
+graph with:
 
 ```bash
 gwf -f workflows/semi_synthetic/workflow.py status

@@ -38,6 +38,7 @@ def _options(resources: dict, model: str | None = None) -> dict[str, str]:
     if model is not None:
         model = str(model).lower()
         if model in GPU_MODELS:
+            options["walltime"] = str(resources["gpu_walltime"])
             options["gres"] = f"gpu:1 -p {resources['partition']}"
         elif model not in CPU_MODELS:
             raise ValueError(f"No semi-synthetic resource policy for model {model!r}")
