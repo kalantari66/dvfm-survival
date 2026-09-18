@@ -180,7 +180,7 @@ def _fit_one_split(
             n_epochs=int(c["epochs"]),
             batch_size=int(c["batch_size"]),
             lr=float(c["learning_rate"]),
-            device=device,
+            device="cpu",
             eval_time_points=model_time_points,
             hidden_dims=c.get("hidden_dims"),
             dropout=float(c.get("dropout", 0.3)),
@@ -205,7 +205,7 @@ def _fit_one_split(
             batch_size=int(c.get("batch_size", 64)),
             early_stopping_patience=c.get("early_stopping_patience"),
             lr=float(c["learning_rate"]),
-            device=device,
+            device="cpu",
             eval_time_points=model_time_points,
             hidden_dims=c.get("hidden_dims"),
             dropout=float(c.get("dropout", 0.0)),
@@ -225,7 +225,7 @@ def _fit_one_split(
             model_time_points,
             epochs=int(c["epochs"]),
             lr=float(c["learning_rate"]),
-            device=device,
+            device="cpu",
         )
         predictions["ClaytonAFT"] = {
             "median": median * time_scale, "survival": survival,
@@ -291,7 +291,7 @@ def _fit_one_split(
             model_train.X, model_train.time, model_train.event,
             model_validation.X, model_validation.time, model_validation.event,
             model_test.X, model_time_points,
-            model_cfg["bayesian_cox_gamma_frailty"], device,
+            model_cfg["bayesian_cox_gamma_frailty"], device="cpu",
         )
         median = get_median_survival_time(
             survival, model_time_points
@@ -537,8 +537,7 @@ def run(cfg: dict) -> pd.DataFrame:
     out_dir = Path(study_cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     device = resolve_device(str(cfg["compute"].get("device", "auto")))
-    if device.type == "cpu":
-        torch.set_num_threads(max(1, int(cfg["compute"].get("torch_num_threads", 1))))
+    torch.set_num_threads(max(1, int(cfg["compute"].get("torch_num_threads", 1))))
     print(f"Using device: {device}")
     rows: list[dict] = []
 

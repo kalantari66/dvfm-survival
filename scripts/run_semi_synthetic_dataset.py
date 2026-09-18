@@ -10,6 +10,13 @@ from experiments.config import expand_seed_streams, load_config, validate_config
 from experiments.runner import run, validate_inputs
 
 
+CPU_MODELS = {
+    "coxph", "rsf", "mtlr", "deepsurv",
+    "bayesian_cox_gamma_frailty", "clayton_aft",
+}
+GPU_MODELS = {"hacsurv_2d", "dvfm"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=Path)
@@ -42,6 +49,13 @@ def main() -> None:
                 f"available models are {enabled}"
             )
         config["models"]["enabled"] = selected_models
+        selected_model = selected_models[0].lower()
+        if selected_model in CPU_MODELS:
+            config["compute"]["device"] = "cpu"
+        elif selected_model in GPU_MODELS:
+            config["compute"]["device"] = "cuda"
+        else:  # guarded by config validation; keep direct use explicit.
+            raise ValueError(f"No semi-synthetic device policy for {selected_model!r}")
     if args.seed_index is not None:
         seed_streams = expand_seed_streams(config["seeds"])
         if not 0 <= args.seed_index < len(seed_streams):

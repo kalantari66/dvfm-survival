@@ -141,6 +141,11 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["evaluation"]["save_event_distribution_plots"] is False
     assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
     assert cfg["data"]["censoring_rates"] == "original"
+    assert cfg["resources"] == {
+        "cores": 4, "memory": "25g", "walltime": "06:00:00",
+        "partition": "gpu-l40s", "account": "c2i-colon",
+    }
+    assert cfg["compute"] == {"device": "cuda", "torch_num_threads": 4}
     assert cfg["split"]["stratify"] == "time_event"
     assert cfg["split"]["validation_fraction"] == 0.10
     assert cfg["split"]["test_fraction"] == 0.20

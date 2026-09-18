@@ -1,4 +1,4 @@
-"""One GPU GWF target per semi-synthetic dataset/model/seed plus aggregation."""
+"""One resource-aware GWF target per dataset/model/seed plus aggregation."""
 
 from __future__ import annotations
 
@@ -23,14 +23,25 @@ CROSS_DATASET_FILES = (
     *RESULT_FILES, "dataset_characteristics.csv",
     "accuracy_primary_and_sensitivity.csv",
 )
+CPU_MODELS = {
+    "coxph", "rsf", "mtlr", "deepsurv",
+    "bayesian_cox_gamma_frailty", "clayton_aft",
+}
+GPU_MODELS = {"hacsurv_2d", "dvfm"}
 
 
-def _options(resources: dict) -> dict[str, str]:
-    return {
+def _options(resources: dict, model: str | None = None) -> dict[str, str]:
+    options = {
         "cores": str(resources["cores"]), "memory": str(resources["memory"]),
         "walltime": str(resources["walltime"]), "account": str(resources["account"]),
-        "gres": f"gpu:1 -p {resources['partition']}",
     }
+    if model is not None:
+        model = str(model).lower()
+        if model in GPU_MODELS:
+            options["gres"] = f"gpu:1 -p {resources['partition']}"
+        elif model not in CPU_MODELS:
+            raise ValueError(f"No semi-synthetic resource policy for model {model!r}")
+    return options
 
 
 def run_dataset_model_seed(
@@ -78,7 +89,7 @@ def run_dataset_model_seed(
     return AnonymousTarget(
         inputs=[str(path) for path in inputs],
         outputs=[str(path) for path in outputs],
-        options=_options(resources), spec=spec,
+        options=_options(resources, model), spec=spec,
     )
 
 
@@ -106,12 +117,10 @@ def aggregate_seeds(
     {checks}
     touch "{result_dir / '_SUCCESS'}"
     """
-    options = _options(resources)
-    options.pop("gres")
     return AnonymousTarget(
         inputs=[str(path) for path in inputs],
         outputs=[str(path) for path in outputs],
-        options=options,
+        options=_options(resources),
         spec=spec,
     )
 
@@ -140,12 +149,10 @@ def aggregate_models(
     {checks}
     touch "{result_dir / '_SUCCESS'}"
     """
-    options = _options(resources)
-    options.pop("gres")
     return AnonymousTarget(
         inputs=[str(path) for path in inputs],
         outputs=[str(path) for path in outputs],
-        options=options,
+        options=_options(resources),
         spec=spec,
     )
 
@@ -169,11 +176,10 @@ def aggregate(result_root: Path, datasets: list[dict], resources: dict) -> Anony
     {checks}
     touch "{result_root / '_SUCCESS'}"
     """
-    options = _options(resources)
-    options.pop("gres")
     return AnonymousTarget(
         inputs=[str(path) for path in inputs],
-        outputs=[str(path) for path in outputs], options=options, spec=spec,
+        outputs=[str(path) for path in outputs],
+        options=_options(resources), spec=spec,
     )
 
 
