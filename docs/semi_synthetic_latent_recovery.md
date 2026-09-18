@@ -50,7 +50,7 @@ cohort-level DGP preparation is distinct from the training-split model scaler.
 The semi-synthetic DVFM jobs export latent recovery by default
 (`evaluation.save_latent_recovery: true`), independently of `save_predictions`.
 Each selected DVFM checkpoint produces a directory under
-`results/semi-synthetic/<dataset>/dvfm/latent_recovery/<scenario>_repeat_<repeat>/`.
+`results/semi-synthetic/<dataset>/dvfm/seed_<repeat>/latent_recovery/<scenario>_repeat_<repeat>/`.
 
 For positive Gaussian, Clayton, Frank, and Gumbel tau, this contains:
 

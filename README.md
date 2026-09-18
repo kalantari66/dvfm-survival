@@ -66,7 +66,7 @@ dvfm-run --config configs/frailty_recovery_diagnostic.yaml
 # File-based semi-synthetic smoke example
 dvfm-run --config configs/semi_synthetic_example.yaml
 
-# SUPPORT Cox-margin/Clayton semi-synthetic pilot
+# Multi-dataset semi-synthetic benchmark
 dvfm-run --config configs/semi_synthetic.yaml --validate-only
 ```
 
@@ -113,7 +113,8 @@ The focused HACSurv feasibility run is also one GWF target:
 gwf -f workflows/hacsurv_synthetic/workflow.py run
 ```
 
-The SUPPORT semi-synthetic pilot is submitted as one target:
+The semi-synthetic benchmark submits one two-hour `gpu-short` target for each
+dataset/model/seed combination, followed by CPU aggregation targets:
 
 ```bash
 gwf -f workflows/semi_synthetic/workflow.py status

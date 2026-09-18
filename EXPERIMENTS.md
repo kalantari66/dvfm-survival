@@ -303,11 +303,21 @@ All neural comparisons use matched optimization budgets and comparable decoder c
 ## Stage 2: semi-synthetic benchmark (about 75% of paper evidence)
 Use 5--8 datasets spanning sample size, feature dimension, and nonlinear signal. Candidate survival or positive-regression sources include SUPPORT, METABRIC, GBSG, WHAS, FLCHAIN, STEEL, and AIRFOIL, subject to licensing and a documented preprocessing sheet.
 
-### Initial SUPPORT wiring pilot
+### Multi-dataset benchmark workflow
 
-`configs/semi_synthetic.yaml` is the first executable semi-synthetic
-specification. It currently wires SUPPORT only and runs as one GWF target via
-`workflows/semi_synthetic/workflow.py`. The generator:
+`configs/semi_synthetic.yaml` is the executable semi-synthetic specification.
+`workflows/semi_synthetic/workflow.py` expands it into one GWF target for every
+dataset/model/seed combination. Each atomic target requests one GPU from the
+`gpu-short` queue for two hours. Downstream CPU targets first combine seeds for
+each dataset/model and recompute across-seed summaries, then assemble dataset-
+and root-level results. Submit or inspect the graph with:
+
+```bash
+gwf -f workflows/semi_synthetic/workflow.py status
+gwf -f workflows/semi_synthetic/workflow.py run
+```
+
+The generator:
 
 1. removes nonpositive durations;
 2. treats `x0` and `x7`--`x13` as continuous (mean imputation and standard

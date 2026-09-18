@@ -557,7 +557,14 @@ def run(cfg: dict) -> pd.DataFrame:
                 dataset, cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
             )
             seed_streams = expand_seed_streams(cfg["seeds"])
-            for repeat, seeds in enumerate(seed_streams):
+            repeat_indices = study_cfg.get("repeat_indices")
+            if repeat_indices is None:
+                repeat_indices = list(range(len(seed_streams)))
+            if len(repeat_indices) != len(seed_streams):
+                raise ValueError(
+                    "study.repeat_indices must have one entry per configured seed"
+                )
+            for repeat, seeds in zip(repeat_indices, seed_streams):
                 dgp_seed = seeds["dgp"]
                 sampling_seed = seeds["sampling"]
                 split_seed = seeds["split"]

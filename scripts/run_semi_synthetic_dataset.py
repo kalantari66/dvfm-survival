@@ -1,4 +1,4 @@
-"""Run one configured semi-synthetic dataset/model into a result directory."""
+"""Run one configured semi-synthetic dataset/model/seed into a result directory."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 from copy import deepcopy
 from pathlib import Path
 
-from experiments.config import load_config, validate_config
+from experiments.config import expand_seed_streams, load_config, validate_config
 from experiments.runner import run, validate_inputs
 
 
@@ -15,6 +15,10 @@ def main() -> None:
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--model")
+    parser.add_argument(
+        "--seed-index", type=int,
+        help="Run only this zero-based entry from the configured seed streams.",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
@@ -38,6 +42,21 @@ def main() -> None:
                 f"available models are {enabled}"
             )
         config["models"]["enabled"] = selected_models
+    if args.seed_index is not None:
+        seed_streams = expand_seed_streams(config["seeds"])
+        if not 0 <= args.seed_index < len(seed_streams):
+            raise ValueError(
+                f"seed-index must be between 0 and {len(seed_streams) - 1}"
+            )
+        selected_seed = seed_streams[args.seed_index]
+        config["seeds"] = {
+            "dgp": selected_seed["dgp"],
+            "sampling": [selected_seed["sampling"]],
+            "split": [selected_seed["split"]],
+            "model": [selected_seed["model"]],
+        }
+        # Preserve the repeat identifier from the unsliced configuration.
+        config["study"]["repeat_indices"] = [args.seed_index]
     config["study"]["output_dir"] = str(args.output_dir)
     validate_config(config)
     validate_inputs(config)
