@@ -439,7 +439,11 @@ def _fit_baseline(
         settings = cfg["models"]["mtlr"]
         _, _, survival = train_mtlr(
             train.X, train.time, train.event, test.X,
+            X_val=validation.X, time_val=validation.time,
+            event_val=validation.event,
             num_bins=int(settings["bins"]), n_epochs=int(settings["epochs"]),
+            batch_size=int(settings.get("batch_size", 64)),
+            early_stopping_patience=settings.get("early_stopping_patience"),
             lr=float(settings["learning_rate"]), device=device, eval_time_points=grid,
         )
     elif name == "clayton_aft":

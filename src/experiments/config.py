@@ -21,7 +21,11 @@ DEFAULTS: dict[str, Any] = {
         "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
         "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1, "logvar_min": -12.0, "logvar_max": 8.0},
         "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
-        "mtlr": {"epochs": 200, "learning_rate": 5e-3, "bins": 200},
+        "mtlr": {
+            "epochs": 200, "learning_rate": 5e-3, "bins": 200,
+            "batch_size": 64, "early_stopping_patience": None,
+            "hidden_dims": [64, 32], "dropout": 0.0, "weight_decay": 0.0,
+        },
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
         "deephit": {
             "epochs": 200, "batch_size": 256, "learning_rate": 1e-3,
@@ -520,6 +524,40 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("models.coxph.n_iter must be positive")
         if float(coxph["tol"]) <= 0.0:
             raise ValueError("models.coxph.tol must be positive")
+    if "mtlr" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        base_mtlr = cfg["models"]["mtlr"]
+        mtlr_configs = [("models.mtlr", base_mtlr)]
+        for dataset, overrides in cfg["models"].get("tuned_by_dataset", {}).items():
+            if "mtlr" in overrides:
+                mtlr_configs.append((
+                    f"models.tuned_by_dataset.{dataset}.mtlr",
+                    _deep_update(base_mtlr, overrides["mtlr"]),
+                ))
+        for location, mtlr in mtlr_configs:
+            for key in (
+                "epochs", "batch_size", "learning_rate", "bins", "dropout",
+                "weight_decay", "hidden_dims", "early_stopping_patience",
+            ):
+                _require(mtlr, key, location)
+            if int(mtlr["epochs"]) < 1 or int(mtlr["batch_size"]) < 1:
+                raise ValueError(f"{location} epochs and batch_size must be positive")
+            if int(mtlr["bins"]) < 1 or float(mtlr["learning_rate"]) <= 0.0:
+                raise ValueError(f"{location} bins and learning_rate must be positive")
+            if not 0.0 <= float(mtlr["dropout"]) < 1.0:
+                raise ValueError(f"{location}.dropout must be in [0, 1)")
+            if float(mtlr["weight_decay"]) < 0.0:
+                raise ValueError(f"{location}.weight_decay cannot be negative")
+            if not isinstance(mtlr["hidden_dims"], list) or any(
+                int(width) < 1 for width in mtlr["hidden_dims"]
+            ):
+                raise ValueError(
+                    f"{location}.hidden_dims must be a list of positive widths"
+                )
+            patience = mtlr["early_stopping_patience"]
+            if patience is not None and int(patience) < 1:
+                raise ValueError(
+                    f"{location}.early_stopping_patience must be null or positive"
+                )
     if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
         dvfm = cfg["models"]["dvfm"]
         scale_link = str(dvfm.get("scale_link", "softplus"))

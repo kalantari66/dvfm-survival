@@ -8,6 +8,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from .coxph import _fit_cox_and_predict_survival
+from .mtlr import train_mtlr
 from utility.data import SurvivalDataset
 
 def train_deepsurv(X_train, time_train, event_train, X_test,
@@ -140,136 +141,6 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
         surv_curves_eval = np.exp(-np.exp(risk_scores_test)[:, None] * h0[None, :])
 
     return risk_scores_test, np.array(median_predictions), surv_curves_eval
-
-
-def train_mtlr(X_train, time_train, event_train, X_test, num_bins=45,
-               n_epochs=200, lr=0.005, device='cpu', eval_time_points=None,
-               hidden_dims=None, dropout=0.0, weight_decay=0.0):
-    """Neural MTLR with an explicit tail category and censored likelihood."""
-    # 1. Discretize Time
-    # Use quantiles of observed events to define bins
-    events_only = time_train[event_train == 1]
-    quantiles = np.linspace(0, 1, num_bins + 1)
-    bins = np.quantile(events_only, quantiles)
-    # Ensure unique bins and cover max range
-    bins = np.unique(bins)
-    bins[-1] = max(np.max(time_train), bins[-1]) + 1e-5
-    bins[0] = 0
-    actual_num_bins = len(bins) - 1
-    
-    # 2. Encode Targets
-    def encode_target(times, events):
-        y_class = np.zeros(len(times), dtype=int)
-        for i, (t, e) in enumerate(zip(times, events)):
-            # Find bin index
-            bin_idx = np.digitize(t, bins) - 1
-            bin_idx = min(max(0, bin_idx), actual_num_bins - 1)
-            
-            y_class[i] = bin_idx
-        return torch.LongTensor(y_class)
-
-    y_train_bins = encode_target(time_train, event_train)
-    
-    # 3. Model
-    class N_MTLR(nn.Module):
-        def __init__(self, input_dim, num_bins, hidden_dims, dropout):
-            super(N_MTLR, self).__init__()
-            layers, previous = [], input_dim
-            for width in hidden_dims:
-                layers.extend([nn.Linear(previous, width), nn.ReLU()])
-                if dropout:
-                    layers.append(nn.Dropout(float(dropout)))
-                previous = width
-            layers.append(nn.Linear(previous, num_bins))
-            self.net = nn.Sequential(*layers)
-        def forward(self, x):
-            # MTLR converts interval scores to density logits by reverse
-            # cumulative summation and appends an explicit beyond-grid tail.
-            scores = self.net(x)
-            interval_logits = torch.flip(
-                torch.cumsum(torch.flip(scores, dims=[1]), dim=1), dims=[1]
-            )
-            return torch.cat(
-                [interval_logits, torch.zeros((len(x), 1), device=x.device)], dim=1
-            )
-    
-    model = N_MTLR(
-        X_train.shape[1], actual_num_bins,
-        [64, 32] if hidden_dims is None else hidden_dims, dropout,
-    ).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
-    
-    X_train_t = torch.FloatTensor(X_train).to(device)
-    y_train_t = y_train_bins.to(device)
-    event_t = torch.FloatTensor(event_train).to(device)
-    
-    # 4. Observed-data MTLR likelihood.
-    model.train()
-    for epoch in range(n_epochs):
-        optimizer.zero_grad()
-        logits = model(X_train_t)
-        log_probs = torch.log_softmax(logits, dim=1)
-        event_log_likelihood = log_probs.gather(1, y_train_t[:, None]).squeeze(1)
-        # A censored subject contributes log P(T > c). With discretized
-        # intervals this is the log-sum of all later intervals and the tail.
-        category = torch.arange(actual_num_bins + 1, device=device)[None, :]
-        later = category > y_train_t[:, None]
-        censored_log_likelihood = torch.logsumexp(
-            log_probs.masked_fill(~later, float('-inf')), dim=1
-        )
-        log_likelihood = (
-            event_t * event_log_likelihood
-            + (1 - event_t) * censored_log_likelihood
-        )
-        loss = -log_likelihood.mean()
-        
-        loss.backward()
-        optimizer.step()
-        
-    # 5. Prediction
-    model.eval()
-    with torch.no_grad():
-        X_test_t = torch.FloatTensor(X_test).to(device)
-        logits = model(X_test_t)
-        # Softmax to get density
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
-        
-        # Survival Function S(t) = 1 - CDF(t)
-        cdf = np.cumsum(probs[:, :-1], axis=1)
-        survival_probs = 1.0 - cdf
-        
-        # Calculate Risk Score (Expected Time)
-        # Midpoints of bins
-        bin_mids = (bins[:-1] + bins[1:]) / 2
-        tail_time = bins[-1] + max(bins[-1] - bins[-2], 1e-5)
-        category_times = np.r_[bin_mids, tail_time]
-        predicted_means = np.sum(probs * category_times, axis=1)
-        
-        # Median Survival
-        predicted_medians = np.zeros(len(X_test))
-        for i in range(len(X_test)):
-            idx = np.where(survival_probs[i, :] <= 0.5)[0]
-            if len(idx) > 0:
-                predicted_medians[i] = bin_mids[idx[0]]
-            else:
-                predicted_medians[i] = bin_mids[-1]
-                
-    # MTLR risk score is roughly -predicted_time (higher time = lower risk)
-    surv_curves_eval = None
-    if eval_time_points is not None:
-        eval_time_points = np.asarray(eval_time_points, dtype=float)
-        bin_right_edges = bins[1:]
-        surv_curves_eval = np.zeros((len(X_test), len(eval_time_points)), dtype=float)
-        for i in range(len(X_test)):
-            surv_curves_eval[i] = np.interp(
-                eval_time_points,
-                bin_right_edges,
-                survival_probs[i],
-                left=1.0,
-                right=survival_probs[i, -1]
-            )
-
-    return -predicted_means, predicted_medians, surv_curves_eval
 
 
 class ClaytonWeibullAFT(nn.Module):

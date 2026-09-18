@@ -133,6 +133,17 @@ models:
     ties: breslow
     n_iter: 100
     tol: 0.000000001
+  mtlr:
+    # Shared training controls; architecture and optimization settings below
+    # are replaced by each dataset's tuned_by_dataset.mtlr selection.
+    epochs: 200
+    batch_size: 64
+    early_stopping_patience: null
+    bins: 200
+    hidden_dims: [64, 32]
+    dropout: 0.0
+    learning_rate: 0.005
+    weight_decay: 0.0
   dvfm:
     # The earlier synthetic study supplies the z=0 ablation; semi-synthetic
     # evaluates the final scalar-frailty model only.

@@ -286,6 +286,16 @@ def test_semi_synthetic_oracle_tuning_winners_are_promoted():
     assert churn["hacsurv_2d"]["copula_learning_rate"] == 0.0003
     assert churn["rsf"]["n_estimators"] == 300
     assert churn["gbsa"]["n_estimators"] == 500
+    assert churn["mtlr"] == {
+        "epochs": 200,
+        "batch_size": 64,
+        "early_stopping_patience": None,
+        "bins": 200,
+        "hidden_dims": [16],
+        "dropout": 0.25,
+        "learning_rate": 0.003,
+        "weight_decay": 0.001,
+    }
 
     with (ROOT / "configs" / "semi_synthetic_tuning.yaml").open(encoding="utf-8") as handle:
         tuning = yaml.safe_load(handle)
