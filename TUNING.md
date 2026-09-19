@@ -44,9 +44,9 @@ model family.  Save:
 - the selected configuration and its selection rule; and
 - the fixed settings applied by the final semi-synthetic suite.
 
-Tune DVFM with one latent dimension (`DVFM-z1`) and apply its selected shared
-optimization/architecture settings to both DVFM-z1 and DVFM-z0.  The latent
-dimension itself is an experimental condition, not a tuned parameter.
+Tune the final scalar-latent DVFM with one latent dimension (`DVFM-z1`). The
+latent dimension is fixed rather than treated as a tuned parameter; the
+semi-synthetic suite does not run the `DVFM-z0` ablation.
 
 CoxPH has no tuning job unless an explicit benchmark regularization sweep is
 introduced.  The `cox_penalizer` used to fit the semi-synthetic DGP is not a

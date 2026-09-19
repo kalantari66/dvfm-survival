@@ -19,7 +19,7 @@ tuning:
   # ground-truth event survival rather than an observed-data censoring proxy.
   selection_metric: IBS Oracle
   # Each discrete choice is sampled independently for every random trial.
-  # DVFM-z1 is tuned; those settings are later shared with DVFM-z0.
+  # The final scalar-latent DVFM is tuned with one latent dimension.
   search_spaces:
     deepsurv:
       learning_rate: [0.0001, 0.0003, 0.001, 0.003]

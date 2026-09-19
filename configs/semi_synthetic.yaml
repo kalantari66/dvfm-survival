@@ -169,9 +169,9 @@ models:
     logvar_max: 8.0
     free_bits: 0.0
     mc_samples: 100
-  # Development-seed-99 oracle-IBS winners. DVFM settings are shared by its
-  # z=0 and z=1 conditions; HACSurv multipliers are resolved to absolute
-  # copula learning rates so this mapping can be applied directly at fit time.
+  # Development-seed-99 oracle-IBS winners. HACSurv multipliers are resolved
+  # to absolute copula learning rates so this mapping can be applied directly
+  # at fit time.
   tuned_by_dataset:
     whas:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
