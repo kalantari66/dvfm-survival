@@ -395,7 +395,7 @@ evaluation:
   # Observed-data-style sensitivity only; it assumes conditionally independent
   # censoring and is not used for selection or primary conclusions.
   secondary_sensitivity_metrics: [ibs_ipcw]
-  save_predictions: false
+  save_predictions: true
   # Distribution plots are generated directly by the results notebook.
   save_event_distribution_plots: false
   # Export while DVFM is fitted: the notebook cannot reconstruct posterior
