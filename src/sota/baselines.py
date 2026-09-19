@@ -42,6 +42,16 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
         # # Cox Negative Log Likelihood loss.
         # Assumes inputs are NOT sorted.
         # """
+        # The network emits one column, so risk_scores arrives as (N, 1) while
+        # time and event are (N,). Flatten first: otherwise the event mask
+        # broadcasts into an (N, N) outer product whose sum factorizes as
+        # sum(event) * sum_i(r_i - logsumexp_i), and dividing by sum(event)
+        # cancels the indicator entirely -- training as if nothing were
+        # censored, which biases the risk scores toward min(T, C).
+        risk_scores = risk_scores.reshape(-1)
+        time = time.reshape(-1)
+        event = event.reshape(-1)
+
         # Sort by time descending
         idx = torch.argsort(time, descending=True)
         risk_scores = risk_scores[idx]
