@@ -15,6 +15,7 @@ from scipy.stats import kendalltau, pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error, r2_score
 from SurvivalEVAL import SurvivalEvaluator
 from SurvivalEVAL import concordance as survival_eval_concordance
+from SurvivalEVAL.Evaluations.util import predict_median_st
 
 
 def _as_arrays(survival_curves, time_points, event_times, event_indicators):
@@ -139,15 +140,24 @@ def _masked_mae(truth, prediction, mask):
 
 
 def median_survival_time(survival_curves, time_points):
-    """First grid crossing of S(t)<=0.5, with the last grid point as fallback."""
+    """SurvivalEVAL median survival time, i.e. the S(t)=0.5 crossing.
+
+    Delegates to ``predict_median_st`` so the point predictions behind
+    ``oracle_ci`` and ``oracle_mae`` come from the same package that supplies
+    the concordance and Brier implementations. Relative to a plain grid search
+    this interpolates linearly between the bracketing grid points to locate the
+    exact crossing, and where a curve never reaches 0.5 it extrapolates along
+    the line anchored at (0, 1) instead of returning a constant, so
+    non-crossing subjects keep distinct and correctly ordered predictions.
+
+    A curve that is identically 1 has no finite median and yields ``inf``; that
+    is SurvivalEVAL's behaviour and is left intact, since such a prediction is
+    degenerate and should surface rather than be silently clipped.
+    """
     curves = np.asarray(survival_curves, dtype=float)
     grid = np.asarray(time_points, dtype=float)
-    medians = np.full(len(curves), float(grid[-1]), dtype=float)
-    for index, curve in enumerate(curves):
-        crossing = np.flatnonzero(curve <= 0.5)
-        if crossing.size:
-            medians[index] = grid[crossing[0]]
-    return medians
+    medians = predict_median_st(curves, grid, "Linear")
+    return np.atleast_1d(medians).astype(float)
 
 
 def censoring_rate(event_indicators):

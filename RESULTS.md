@@ -183,30 +183,23 @@ shared evaluation grid where S(t) <= 0.5, **falling back to the last grid
 point** when the curve never crosses. The evaluation grid is 100 uniform points
 from 0 to the 95th percentile of training event times, shared by all models.
 
-**Deviation from SurvivalEVAL.** IBS comes from SurvivalEVAL and the
-concordance calculation is theirs, but the predicted times fed into it are ours,
-not the package's `predict_median_st`. SurvivalEVAL differs in two ways: it
-linearly interpolates between grid points to find the exact crossing, and where
-a curve never reaches 0.5 it extrapolates a line anchored at (0, 1) rather than
-returning a constant. Ours therefore quantises predictions to the grid (90-99
-distinct values instead of one per subject) and ties every non-crossing subject
-at the same value.
+**Median survival time.** `oracle_ci` and `oracle_mae` are not computed from
+risk scores; both go through a predicted median survival time, taken from
+SurvivalEVAL's `predict_median_st`. It locates the S(t) = 0.5 crossing by
+**linear interpolation** between the bracketing grid points, and where a curve
+never reaches 0.5 it **extrapolates** along the line anchored at (0, 1) rather
+than returning a constant, so non-crossing subjects keep distinct and correctly
+ordered predictions. The whole metric stack -- Brier/IBS, concordance and the
+point predictions feeding it -- therefore comes from the one cited package.
 
-Measured impact is small. Scoring Cox curves both ways on the semi-synthetic
-cohorts:
-
-| | fallback rate | `oracle_ci` ours -> SurvivalEVAL | `oracle_mae` ours -> SurvivalEVAL |
-|---|---|---|---|
-| nacd (37% censoring) | 33% | 0.6957 -> 0.7068 | 26.4 -> 27.5 |
-| mimic_iv (67% censoring) | 8% | 0.6413 -> 0.6413 | 731.2 -> 770.2 |
-
-Note the fallback rate tracks how far the grid extends relative to curve decay,
-not the censoring rate directly. The reported results retain our definition; the
-appendix should state it, since the package is cited. Not tested: whether
-per-model differences in fallback rate shift the relative ranking. On `mimic_iv`
-Cox curves cross for 91.8% of subjects and DeepSurv's for 78.3%, so the tie
-penalty is not identical across models, though the measured magnitude above
-makes a rank change unlikely.
+Two consequences worth knowing. Extrapolated medians can lie well outside the
+evaluation grid (on `mimic_iv`, up to 10,793 against a grid maximum of 2,450),
+which inflates `oracle_mae` for subjects whose curves stay high; this is
+SurvivalEVAL's behaviour and is left intact. And a curve that is identically 1
+has no finite median and yields `inf`, which propagates to a non-finite
+`oracle_mae` for that cell; the seed-level rank machinery treats non-finite
+values as failures and assigns them one rank below the worst successful model,
+so a degenerate prediction surfaces rather than scoring quietly.
 
 ### Figure 1 — Model ranks (`semi_synthetic_model_ranks.pdf`)
 
