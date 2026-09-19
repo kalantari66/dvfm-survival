@@ -178,13 +178,17 @@ def _fit_one_split(
             model_train.event,
             model_test.X,
             n_epochs=int(c["epochs"]),
-            batch_size=int(c["batch_size"]),
+            batch_size=c.get("batch_size"),
             lr=float(c["learning_rate"]),
             device="cpu",
             eval_time_points=model_time_points,
             hidden_dims=c.get("hidden_dims"),
             dropout=float(c.get("dropout", 0.3)),
             weight_decay=float(c.get("weight_decay", 0.0)),
+            X_val=model_validation.X,
+            time_val=model_validation.time,
+            event_val=model_validation.event,
+            early_stopping_patience=c.get("early_stopping_patience"),
         )
         predictions["DeepSurv"] = {
             "median": median * time_scale, "survival": survival,

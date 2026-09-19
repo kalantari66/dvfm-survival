@@ -20,7 +20,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": ["dvfm"],
         "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
         "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1, "logvar_min": -12.0, "logvar_max": 8.0},
-        "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": 64},
+        "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": None},
         "mtlr": {
             "epochs": 200, "learning_rate": 5e-3, "bins": 200,
             "batch_size": 64, "early_stopping_patience": None,

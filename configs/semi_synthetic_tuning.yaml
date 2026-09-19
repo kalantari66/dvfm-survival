@@ -22,7 +22,11 @@ tuning:
   # The final scalar-latent DVFM is tuned with one latent dimension.
   search_spaces:
     deepsurv:
-      learning_rate: [0.0001, 0.0003, 0.001, 0.003]
+      # Katzman et al. (2017) Table 3 tune Adam to 0.010-0.154 on the real
+      # datasets (WHAS 0.067, SUPPORT 0.047, METABRIC 0.010, GBSG 0.154), so
+      # the grid has to reach that range; full-batch training makes one epoch
+      # one gradient step, which a sub-0.001 rate cannot exploit.
+      learning_rate: [0.001, 0.003, 0.01, 0.03, 0.1]
       weight_decay: [0.0, 0.00001, 0.0001, 0.001]
       hidden_dims: [[16], [32, 16], [64], [64, 32], [64, 64, 16]]
       dropout: [0.0, 0.1, 0.25]

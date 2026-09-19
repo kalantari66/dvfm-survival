@@ -133,6 +133,20 @@ models:
     ties: breslow
     n_iter: 100
     tol: 0.000000001
+  deepsurv:
+    # Katzman et al. (2017) define the partial likelihood over the full risk
+    # set and list no batch size, so batch_size: null trains on the whole
+    # cohort and one epoch is one gradient step. Epoch budget and patience
+    # follow the MENSA reference implementation; architecture and optimization
+    # settings below are replaced by each dataset's tuned_by_dataset.deepsurv
+    # selection.
+    epochs: 1000
+    batch_size: null
+    early_stopping_patience: 10
+    hidden_dims: [64, 32]
+    dropout: 0.0
+    learning_rate: 0.001
+    weight_decay: 0.0
   mtlr:
     # Shared training controls; architecture and optimization settings below
     # are replaced by each dataset's tuned_by_dataset.mtlr selection.

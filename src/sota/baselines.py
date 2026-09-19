@@ -1,5 +1,7 @@
 """Paper baselines: CoxPH, DeepSurv, MTLR, and Clayton-Weibull AFT."""
 
+from copy import deepcopy
+
 import numpy as np
 import pandas as pd
 import torch
@@ -12,9 +14,10 @@ from .mtlr import train_mtlr
 from utility.data import SurvivalDataset
 
 def train_deepsurv(X_train, time_train, event_train, X_test,
-                   n_epochs=200, batch_size=64, lr=1e-3, device='cpu',
+                   n_epochs=200, batch_size=None, lr=1e-3, device='cpu',
                    eval_time_points=None, hidden_dims=None, dropout=0.3,
-                   weight_decay=0.0):
+                   weight_decay=0.0, X_val=None, time_val=None,
+                   event_val=None, early_stopping_patience=None):
     """
     Simple DeepSurv implementation (Cox proportional hazards with neural network)
     """
@@ -59,16 +62,53 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
     train_dataset = SurvivalDataset(X_train, time_train, event_train)
     # Cox risk sets must span the complete cohort. Minibatch-local risk sets
     # optimize a different objective and make the baseline batch-dependent.
-    train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=False)
+    # Katzman et al. (2017) list no batch size among DeepSurv's hyper-parameters
+    # (Appendix A.1, Table 3) because the partial likelihood of their Eq. (3) is
+    # defined over the full risk set, so the batch is the cohort and one epoch
+    # is one gradient step. ``batch_size=None`` requests exactly that.
+    cohort_size = len(train_dataset)
+    batch_size = cohort_size if batch_size is None else int(batch_size)
+    if batch_size < cohort_size:
+        raise ValueError(
+            f"DeepSurv batch_size={batch_size} is smaller than the training "
+            f"cohort ({cohort_size}). Minibatch-local risk sets optimize a "
+            f"different objective than the Cox partial likelihood; pass "
+            f"batch_size=None (YAML null) to train on the full cohort."
+        )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     
     input_dim = X_train.shape[1]
     model = DeepSurv(input_dim, [64, 32] if hidden_dims is None else hidden_dims, dropout).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=float(weight_decay))
     
+    use_early_stopping = (
+        early_stopping_patience is not None
+        and int(early_stopping_patience) > 0
+    )
+    if use_early_stopping:
+        if X_val is None or time_val is None or event_val is None:
+            raise ValueError("Early stopping requires X_val, time_val, and event_val")
+        X_val_tensor = torch.as_tensor(
+            np.asarray(X_val, dtype=np.float32), device=device
+        )
+        time_val_tensor = torch.as_tensor(
+            np.asarray(time_val, dtype=np.float32), device=device
+        )
+        event_val_tensor = torch.as_tensor(
+            np.asarray(event_val, dtype=np.float32), device=device
+        )
+        if float(event_val_tensor.sum()) <= 0.0:
+            raise ValueError(
+                "Early stopping requires at least one validation event; the "
+                "Cox partial likelihood is undefined on a fully censored split"
+            )
+        best_validation_nll = float("inf")
+        best_state = None
+        stale_epochs = 0
+
     # Training Loop
-    model.train()
     for epoch in range(n_epochs):
-        epoch_loss = 0
+        model.train()
         for x_b, t_b, e_b in train_loader:
             x_b, t_b, e_b = x_b.to(device), t_b.to(device), e_b.to(device)
             optimizer.zero_grad()
@@ -76,8 +116,27 @@ def train_deepsurv(X_train, time_train, event_train, X_test,
             loss = cox_loss(scores, t_b, e_b)
             loss.backward()
             optimizer.step()
-            epoch_loss += loss.item()
-            
+
+        if use_early_stopping:
+            model.eval()
+            with torch.no_grad():
+                # Weight decay belongs to optimization only. Checkpoint
+                # selection uses the unregularized partial-likelihood NLL.
+                validation_nll = float(
+                    cox_loss(model(X_val_tensor), time_val_tensor, event_val_tensor)
+                )
+            if validation_nll < best_validation_nll:
+                best_validation_nll = validation_nll
+                best_state = deepcopy(model.state_dict())
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
+                if stale_epochs >= int(early_stopping_patience):
+                    break
+
+    if use_early_stopping and best_state is not None:
+        model.load_state_dict(best_state)
+
     # --- Prediction Phase (Risk Scores) ---
     model.eval()
     with torch.no_grad():

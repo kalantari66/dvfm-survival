@@ -14,7 +14,7 @@ split: {strategy: holdout, validation_fraction: 0.15, test_fraction: 0.20}
 preprocessing: {zscore_x: false}
 models:
   enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
-  deepsurv: {epochs: 2, learning_rate: 0.001, batch_size: 64}
+  deepsurv: {epochs: 2, learning_rate: 0.001, batch_size: null}
   mtlr: {epochs: 2, learning_rate: 0.005, bins: 10}
   clayton_aft: {epochs: 2, learning_rate: 0.005}
   dvfm: {latent_dims: [0, 1], scale_link: exp, epochs: 2, learning_rate: 0.001, batch_size: 64, beta_max: 1.0, warmup_epochs: 1, checkpoint_min_epoch: 1, primary_checkpoint: best_validation_elbo_post_warmup, numerical_failure_threshold: 100.0, free_bits: 0.0, mc_samples: 2}

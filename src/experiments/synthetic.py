@@ -432,8 +432,14 @@ def _fit_baseline(
         settings = cfg["models"]["deepsurv"]
         _, _, survival = train_deepsurv(
             train.X, train.time, train.event, test.X,
-            n_epochs=int(settings["epochs"]), batch_size=int(settings["batch_size"]),
+            n_epochs=int(settings["epochs"]), batch_size=settings.get("batch_size"),
             lr=float(settings["learning_rate"]), device=device, eval_time_points=grid,
+            hidden_dims=settings.get("hidden_dims"),
+            dropout=float(settings.get("dropout", 0.3)),
+            weight_decay=float(settings.get("weight_decay", 0.0)),
+            X_val=validation.X, time_val=validation.time,
+            event_val=validation.event,
+            early_stopping_patience=settings.get("early_stopping_patience"),
         )
     elif name == "mtlr":
         settings = cfg["models"]["mtlr"]

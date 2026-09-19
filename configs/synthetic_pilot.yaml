@@ -26,7 +26,7 @@ split:
 preprocessing: {zscore_x: false}
 models:
   enabled: [coxph, deepsurv, mtlr, clayton_aft, dvfm]
-  deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: 64}
+  deepsurv: {epochs: 200, learning_rate: 0.001, batch_size: null}
   mtlr: {epochs: 200, learning_rate: 0.005, bins: 50}
   clayton_aft: {epochs: 100, learning_rate: 0.005}
   dvfm:
