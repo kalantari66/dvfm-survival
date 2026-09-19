@@ -177,11 +177,10 @@ what separates these numbers from ordinary IPCW-style estimates.
 | `absolute_conditional_kendall_tau_error` | \|learned tau - target tau\| |
 | `ibs_ipcw` | Observed-data sensitivity metric only; assumes conditionally independent censoring and is **not** used for any selection or conclusion |
 
-`oracle_ci` and `oracle_mae` are not computed from risk scores. Both go through
-a predicted **median survival time**, defined here as the first point on the
-shared evaluation grid where S(t) <= 0.5, **falling back to the last grid
-point** when the curve never crosses. The evaluation grid is 100 uniform points
-from 0 to the 95th percentile of training event times, shared by all models.
+The survival-curve evaluation grid is **100 uniform points** from 0 to the 95th
+percentile of the *observed* event times in the training split, shared by all
+models. Both studies now use 100 points; the synthetic study previously used
+200.
 
 **Median survival time.** `oracle_ci` and `oracle_mae` are not computed from
 risk scores; both go through a predicted median survival time, taken from

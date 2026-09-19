@@ -53,7 +53,8 @@ models:
     free_bits: 0.0
     mc_samples: 100
 evaluation:
-  n_time_points: 200
+  # Matches the semi-synthetic study so the two share one grid resolution.
+  n_time_points: 100
   grid_max_quantile: 0.95
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   prediction_modes: [prior, aggregate_posterior]
