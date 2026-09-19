@@ -177,12 +177,36 @@ what separates these numbers from ordinary IPCW-style estimates.
 | `absolute_conditional_kendall_tau_error` | \|learned tau - target tau\| |
 | `ibs_ipcw` | Observed-data sensitivity metric only; assumes conditionally independent censoring and is **not** used for any selection or conclusion |
 
-The median survival time is the first point on the shared evaluation grid where
-S(t) <= 0.5, **falling back to the last grid point** when the curve never
-crosses. Under heavy censoring that fallback creates ties, which compress
-`oracle_ci` and `oracle_mae` toward their uninformative values. The evaluation
-grid is 100 uniform points from 0 to the 95th percentile of training event
-times, shared by all models.
+`oracle_ci` and `oracle_mae` are not computed from risk scores. Both go through
+a predicted **median survival time**, defined here as the first point on the
+shared evaluation grid where S(t) <= 0.5, **falling back to the last grid
+point** when the curve never crosses. The evaluation grid is 100 uniform points
+from 0 to the 95th percentile of training event times, shared by all models.
+
+**Deviation from SurvivalEVAL.** IBS comes from SurvivalEVAL and the
+concordance calculation is theirs, but the predicted times fed into it are ours,
+not the package's `predict_median_st`. SurvivalEVAL differs in two ways: it
+linearly interpolates between grid points to find the exact crossing, and where
+a curve never reaches 0.5 it extrapolates a line anchored at (0, 1) rather than
+returning a constant. Ours therefore quantises predictions to the grid (90-99
+distinct values instead of one per subject) and ties every non-crossing subject
+at the same value.
+
+Measured impact is small. Scoring Cox curves both ways on the semi-synthetic
+cohorts:
+
+| | fallback rate | `oracle_ci` ours -> SurvivalEVAL | `oracle_mae` ours -> SurvivalEVAL |
+|---|---|---|---|
+| nacd (37% censoring) | 33% | 0.6957 -> 0.7068 | 26.4 -> 27.5 |
+| mimic_iv (67% censoring) | 8% | 0.6413 -> 0.6413 | 731.2 -> 770.2 |
+
+Note the fallback rate tracks how far the grid extends relative to curve decay,
+not the censoring rate directly. The reported results retain our definition; the
+appendix should state it, since the package is cited. Not tested: whether
+per-model differences in fallback rate shift the relative ranking. On `mimic_iv`
+Cox curves cross for 91.8% of subjects and DeepSurv's for 78.3%, so the tie
+penalty is not identical across models, though the measured magnitude above
+makes a rank change unlikely.
 
 ### Figure 1 — Model ranks (`semi_synthetic_model_ranks.pdf`)
 
@@ -194,9 +218,7 @@ Computation, in order:
 1. **Rank within a single seed.** Inside each
    (dataset, copula, tau, censoring, repeat) cell, the 8 models are ranked
    against each other. Models are therefore compared on identical cohorts and
-   splits. A seed flagged `numerical_failure` is not dropped — it is assigned
-   one rank worse than the worst successful model in its own cell, so failures
-   are penalised rather than silently excluded.
+   splits.
 2. **Average the 10 seeds** within each (dataset, copula, model).
 3. **Average the 4 copulas** within each (dataset, model), giving one mean rank
    per dataset per model.
@@ -330,13 +352,15 @@ holds across copula families.
 
 - **`semi_synthetic_datasets.tex`** — source dataset characteristics: N, raw and
   encoded feature counts, original censoring rate, split.
-- **`semi_synthetic_model_summary.tex`** — scenario-balanced mean seed-level
-  rank per model for IBS / CI / MAE, a failure count, and a W/T/L record against
-  DVFM. Wins, ties and losses use **only seeds where both methods produced a
-  valid oracle IBS**, with a 1e-4 tolerance for ties; the failure-aware ranks in
-  the same table do retain and penalise failed seeds, so the two columns use
-  deliberately different conventions. Note this table currently pools **both**
-  tau levels while Figure 1 is restricted to tau = 0.5.
+- **`semi_synthetic_model_summary_tau0.tex`** and
+  **`semi_synthetic_model_summary_tau0p5.tex`** — one table per dependence
+  level; tau levels are never pooled. Each entry is the **median across the 12
+  datasets of a model's mean seed-level rank**, i.e. exactly the quantity
+  Figure 1 plots, so a table number can be read straight off the corresponding
+  figure panel. The W/T/L column is a paired oracle-IBS record against DVFM,
+  computed within that tau level, with a 1e-4 tie tolerance and reported from
+  each comparator's perspective. Labels are
+  `tab:semi_synthetic_models_tau0` and `tab:semi_synthetic_models_tau0p5`.
 
 ---
 

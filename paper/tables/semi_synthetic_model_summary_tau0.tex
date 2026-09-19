@@ -1,0 +1,18 @@
+\begin{table}
+\caption{Semi-synthetic performance at Kendall's $\tau=0$. Each entry is the median across the 12 datasets of a model's mean seed-level rank, the same quantity plotted in the corresponding figure panel; lower is better. Wins, ties and losses compare paired oracle-IBS seeds against DVFM from each comparator's perspective.}
+\label{tab:semi_synthetic_models_tau0}
+\begin{tabular}{lrrrr}
+\toprule
+Model & IBS rank & CI rank & MAE rank & W/T/L vs DVFM \\
+\midrule
+CoxPH & 1.30 & 2.85 & 1.75 & 119/0/1 \\
+BayesianCoxGammaFrailty & 2.15 & 2.70 & 1.90 & 114/1/5 \\
+DeepSurv & 4.20 & 5.30 & 4.15 & 93/5/22 \\
+HACSurv & 4.30 & 3.70 & 3.90 & 75/2/43 \\
+RSF & 5.20 & 5.85 & 5.35 & 68/1/51 \\
+DVFM & 5.45 & 4.00 & 4.80 & -- \\
+MTLR & 6.80 & 5.55 & 6.50 & 41/2/77 \\
+ClaytonAFT & 7.20 & 5.80 & 6.90 & 22/2/96 \\
+\bottomrule
+\end{tabular}
+\end{table}
