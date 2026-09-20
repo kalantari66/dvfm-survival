@@ -25,7 +25,10 @@
 - Dropout did not give a balanced improvement. In particular, `dropout = 0.25` harmed IBS, frailty recovery, and dependence recovery despite a small CI gain.
 - Batch size 32 was slow and inconsistent; batch size 128 was about twice as fast but predictively worse. Keep batch size 64 for scientific runs and use 128 only for smoke tests if needed.
 - Training for 400 epochs doubled runtime for negligible predictive benefit. Keep 200 epochs.
-- Aggregate-posterior prediction was marginally worse than prior prediction overall. Use the prior for primary prospective prediction and retain the aggregate posterior only as a diagnostic.
+- Aggregate-posterior and prior prediction are practically equivalent. The earlier reading that the aggregate posterior was worse was an artifact of pooling `latent_dim = 0` cells, where the encoder is absent, `z` is zero-width, and the two modes are identical by construction; those ties made up half the comparison. On the 120 paired primary-checkpoint test cells with `latent_dim = 1`, aggregate posterior moves oracle IBS by `+0.00025` (`+0.22%`, prior better in 61% of cells), oracle CI by `+0.00155` (`+0.24%`, aggregate better in 72%), and oracle MAE by `+0.063` (`+0.11%`, aggregate better in 46%). The direction is mixed and the magnitude is negligible, so the choice is not empirical.
+- Use the aggregate posterior as the primary predictive distribution in both the synthetic and semi-synthetic studies, and retain the prior as a reported ablation. The aggregate posterior estimates the model's own marginal predictive directly, whereas prior sampling is valid only insofar as the aggregate posterior matches `N(0, I)`; with `mean_kl` around `0.65` nats and the latent active in every `latent_dim = 1` run, that match holds approximately but is an assumption the aggregate posterior does not need. The near-equivalence of the two modes is itself the evidence that the match is close.
+- When comparing prediction modes, ignore `oracle_joint_survival_ise`: it is duplicated across mode rows rather than recomputed per mode, so its exact agreement is not evidence.
+- The synthetic hyperparameter sweep still selects on `selection_prediction_mode: prior`. At a sub-`0.25%` separation between modes this cannot change the selected configuration, so the sweep was not rerun.
 
 ## Latent regularization
 

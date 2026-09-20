@@ -1,12 +1,12 @@
 # Results
 
-Reference for the two evaluation studies behind the paper: what each figure and
-table shows, and exactly how each number is computed. Written so the definitions
-and aggregation rules can be lifted into the paper's captions and methods text.
+Reference for the two evaluation studies: what each figure shows, how each
+number is computed, and which claims the numbers support. Kept short on purpose
+— ICLR gives 8 pages, so this is the source for captions and a paragraph or
+two, not a results section in itself.
 
 Both notebooks read completed artifacts from `results/` and write into
-`paper/figures/` and `paper/tables/`. Neither fits a model; rerunning a notebook
-regenerates figures from whatever is currently on disk.
+`paper/figures/` and `paper/tables/`. Neither fits a model.
 
 | | Synthetic | Semi-synthetic |
 |---|---|---|
@@ -16,41 +16,37 @@ regenerates figures from whatever is currently on disk.
 | Question | Does the shared latent do what it claims? | Does DVFM compete against baselines? |
 | Models | DVFM only (`latent_dim` 0 vs 1) | 8 models |
 
+**Model class.** DVFM does not assume proportional hazards: the decoder emits a
+per-subject Weibull shape *and* scale from `(x, z)`, so hazard ratios vary with
+time. Only the `shape_mode: global` ablation reduces to PH. The semi-synthetic
+DGP margins *are* CoxPH fits, so there the data satisfies PH while the model
+does not assume it.
+
 ---
 
 ## 1. Synthetic study
 
-### Design
+10,000 subjects, 10 covariates, Gaussian shared-frailty DGP, so true event
+times, true censoring times and the true latent `z` are all known. Grid:
+tau in {0, 0.25, 0.50, 0.75} x censoring in {0.25, 0.50, 0.75}, 10 repeats,
+`latent_dim` 0 vs 1 = **240 fits**. Only `is_primary_checkpoint == true` and
+`prediction_mode == aggregate_posterior` rows enter the figures; the primary
+checkpoint is `best_validation_elbo_post_warmup`.
 
-Fully simulated data from a Gaussian shared-frailty DGP (`data.source:
-gaussian_shared_frailty`), so the true event times, true censoring times and the
-true latent `z` are all known.
+Four standalone figures, one line per censoring rate, bands are **mean +/- 1 SD
+across the 10 repeats**:
 
-- 10,000 subjects, 10 covariates
-- Grid: Kendall's tau in {0, 0.25, 0.50, 0.75} x censoring rate in {0.25, 0.50, 0.75}
-- 10 repeats; each repeat independently reseeds generation, splitting and fitting
-- Two model variants per cell: `latent_dim = 0` (ablation, no shared latent) and
-  `latent_dim = 1` (the primary model)
-- 4 x 3 x 10 x 2 = **240 fits**; the notebook asserts this count and refuses to
-  plot if any fit failed or if the artifact sizes disagree
+| File | Content |
+|---|---|
+| `synthetic_frailty_recovery.pdf` | Spearman(recovered `z`, true `z`); tau = 0 omitted (latent unidentified, so recovery is undefined, not zero) |
+| `synthetic_joint_survival_gain.pdf` | Paired `ISE(z=0) - ISE(z=1)`, oracle joint survival |
+| `synthetic_dependence_calibration.pdf` | Learned conditional tau vs target; dashed diagonal is perfect calibration |
+| `synthetic_event_prediction_gain.pdf` | Paired `oracle_ibs(z=0) - oracle_ibs(z=1)` |
 
-Only rows with `is_primary_checkpoint == true` and `prediction_mode == prior`
-enter the figure. The primary checkpoint is
-`best_validation_elbo_post_warmup`, so the reported model is the one selected on
-validation ELBO after the KL warm-up, not the last epoch.
+Both gain figures are **paired within a repeat** before averaging, so the band
+is a paired SD, not a between-variant SD. Say this in the caption.
 
-### Figure: `paper/figures/synthetic_main.pdf`
-
-Four panels, each plotting a quantity against target Kendall's tau, with one
-line per censoring rate (25% / 50% / 75%). Shaded bands are **mean +/- 1 SD
-across the 10 repeats**.
-
-**Panel A — Individual frailty recovery.** Spearman correlation between DVFM's
-recovered per-subject latent and the true `z`, for `latent_dim = 1`, restricted
-to `subgroup == "all"`. **tau = 0 is omitted**: with no shared-frailty signal the
-latent is unidentified, so recovery is undefined rather than zero.
-
-Recovery strengthens monotonically with dependence, and degrades under heavy
+**Recovery** strengthens monotonically with dependence and degrades under heavy
 censoring only at weak dependence:
 
 | tau \ censoring | 25% | 50% | 75% |
@@ -59,320 +55,220 @@ censoring only at weak dependence:
 | 0.50 | 0.810 | 0.808 | 0.764 |
 | 0.75 | 0.947 | 0.944 | 0.935 |
 
-**Panel B — Joint-survival gain from the latent.** Paired difference
-`ISE(z=0) - ISE(z=1)` in oracle joint-survival ISE, computed *within each
-repeat* before averaging, so the two variants are compared on identical data.
-Positive favours the shared-latent model. The dashed line marks zero; the axis
-is scaled by 1e-3.
+**Calibration** at N = 10,000 is good in the middle and compressed at both ends:
+learned tau is −0.146 (SD 0.367) at target 0, 0.248 at 0.25, **0.440 at 0.50**,
+0.516 at 0.75. The target-0 estimate is unstable even here.
 
-The metric is identical to the semi-synthetic one (Figure 2b below), and the
-config values match: for each held-out subject the model predicts the bivariate
-surface S(t, c | x) = P(T > t, C > c | x) on a 15 x 15 grid of time pairs
-against truth from 2,000 DGP draws, for 128 subjects. Squared error is
-integrated over both axes and **divided by the grid area**, then averaged over
-subjects, so it is a mean squared error in probability units and `sqrt(ISE)`
-reads as an RMS error in the joint survival probability.
+**The tau = 0 penalty is real and should be stated, not hidden.** With no shared
+frailty the `z = 0` ablation is correctly specified, while `z = 1` carries a
+latent the data cannot identify; marginalising over it spreads predictive mass
+and induces dependence that is not there. Worst case (75% censoring): oracle IBS
+−64%, joint ISE −190%. The penalty grows with censoring because fewer events
+leave `z` less constrained. Scale caveat: that is a large relative penalty on a
+small absolute error (`sqrt(ISE)` 7.8 vs 5.0 probability points).
 
-**Panel C — Dependence calibration.** Estimated conditional Kendall's tau
-against its target, for `latent_dim = 1`. The dashed diagonal is perfect
-calibration; below it is underestimation, above it overestimation. This panel
-plots tau, **not** latent-`z` values.
+Both gains cross zero at **tau ≈ 0.2–0.3** and grow with dependence and
+censoring: +69% IBS and +96% joint ISE at tau = 0.75 with 75% censoring.
 
-**Panel D — Event-prediction gain from the latent.** Paired
-`oracle_ibs(z=0) - oracle_ibs(z=1)`, same pairing as Panel B. Positive favours
-the shared-latent model. Axis scaled by 1e-2.
-
-Panels B and D share a structure worth stating in the caption: **both are paired
-differences within a repeat**, which removes cohort-to-cohort variation and
-makes the band a paired SD, not a between-variant SD.
-
-#### The tau = 0 penalty
-
-At tau = 0 both gains are negative: the shared latent makes the model **worse**,
-and this is a real effect rather than noise. It should be stated explicitly in
-the paper — a reader who notices the negative region and finds it unmentioned
-will discount the rest.
-
-Panel B, joint-survival ISE at tau = 0 (paired, 10 repeats):
-
-| censoring | ISE z=0 | ISE z=1 | gain | relative | t |
-|---|---|---|---|---|---|
-| 25% | 0.00287 | 0.00623 | -0.00336 | -117% | -4.2 |
-| 50% | 0.00203 | 0.00603 | -0.00400 | -198% | -5.8 |
-| 75% | 0.00245 | 0.00711 | -0.00466 | -190% | -11.5 |
-
-Panel D, oracle IBS at tau = 0:
-
-| censoring | IBS z=0 | IBS z=1 | gain | relative |
-|---|---|---|---|---|
-| 25% | 0.0961 | 0.1004 | -0.0043 | -4% |
-| 50% | 0.0966 | 0.1185 | -0.0218 | -23% |
-| 75% | 0.1021 | 0.1670 | -0.0650 | **-64%** |
-
-**Why.** At tau = 0 the DGP has no shared frailty, so the `z = 0` ablation is
-correctly specified while `z = 1` carries a latent the data cannot identify. Its
-posterior stays near the prior, and marginalising over an uninformative latent
-spreads predictive mass and induces dependence that is not there. The penalty
-grows with censoring because heavier censoring leaves less event information to
-pin `z` down — at 75% censoring the latent is least constrained and does the
-most damage.
-
-**Scale caveat for Panel B.** This is a large *relative* penalty on a small
-*absolute* error: `sqrt(ISE)` is about 7.8 versus 5.0 probability points of RMS
-error on the surface, so both variants recover the joint distribution well. The
-1e-3 axis makes the negative region look comparable in size to the positive
-gains at tau = 0.75, but those are ~95% relative improvements against this ~190%
-relative degradation.
-
-**Crossover.** Both panels cross zero at roughly tau = 0.2-0.3, and the benefit
-then grows with both dependence and censoring — at tau = 0.75 with 75%
-censoring, +69% on IBS and +96% on joint ISE (absolute IBS gain 0.194).
-
-**Suggested framing.** Present this as a property of the evaluation rather than
-something to explain away: the shared latent is not free capacity. It costs when
-there is no dependence to capture and earns its place when there is, with a
-clean crossover in between. That is a more credible claim than a model that
-never loses.
+> **Framing.** The shared latent is not free capacity — it costs when there is
+> no dependence and earns its place when there is, with a clean crossover. That
+> is more credible than a model that never loses.
 
 ---
 
 ## 2. Semi-synthetic study
 
-### Design
+Real covariates, simulated outcomes: a Cox model per dataset gives the
+marginals, a copula couples event and censoring times.
 
-Real covariates, simulated outcomes. For each source dataset a Cox model is
-fitted to the real data to give the marginals; event and censoring times are
-then drawn through a copula, so true event times and true censoring times are
-known while the covariate structure stays realistic.
-
-- **12 datasets**: whas, gbsg, metabric, churn, nacd, flchain, support,
-  employee, mimic_iv, seer_brain, seer_liver, seer_stomach
-- **5 scenarios**: independence at tau = 0, plus Gaussian / Clayton / Frank /
-  Gumbel at tau = 0.5
-- **10 seeds**; every model sees the same cohort and split within a seed
-- **8 models**: CoxPH, DeepSurv, MTLR, RSF, ClaytonAFT, HACSurv,
-  BayesianCoxGammaFrailty, DVFM
+- **12 datasets** x **5 scenarios** (independence at tau = 0; Gaussian /
+  Clayton / Frank / Gumbel at tau = 0.5) x **8 models** x **10 seeds** =
+  **4,800 rows**
 - 70/10/20 split, covariates z-scored on training statistics
-- 12 x 5 x 8 x 10 = **4,800 rows** in `results_raw.csv`
+- Per-dataset hyperparameters from a separate random search (10 trials, seed 99)
+  on a development cohort whose validation split the reporting runs never reuse
 
-Per-dataset hyperparameters live in `models.tuned_by_dataset`, selected by a
-separate random search (10 trials per model per dataset) on a development cohort
-with seed 99, scored by oracle IBS. That development cohort's validation split
-is never reused by the reporting runs.
+All primary metrics are **oracle** metrics, scored against the DGP's true event
+times rather than censored observations. State this explicitly — it is what
+separates these numbers from IPCW-style estimates. `ibs_ipcw` is a sensitivity
+check only and drives no conclusion.
 
-### Metrics
-
-All primary metrics are **oracle** metrics: scored against the DGP's true event
-times, not against the censored observations. This is the point of the
-semi-synthetic design and should be stated explicitly in the paper, since it is
-what separates these numbers from ordinary IPCW-style estimates.
-
-| Metric | Definition |
-|---|---|
-| `oracle_ibs` | Integrated Brier score of the predicted survival curve against true event times. **Primary selection metric.** |
-| `oracle_ci` | Concordance between true event times and the predicted median survival time |
-| `oracle_mae` | Mean absolute error between true event time and predicted median survival time |
-| `oracle_joint_survival_ise` | See Figure 2b below |
-| `frailty_spearman` | Spearman correlation between DVFM's recovered latent and the true `z` |
-| `absolute_conditional_kendall_tau_error` | \|learned tau - target tau\| |
-| `ibs_ipcw` | Observed-data sensitivity metric only; assumes conditionally independent censoring and is **not** used for any selection or conclusion |
-
-The survival-curve evaluation grid is **100 uniform points** from 0 to the 95th
-percentile of the *observed* event times in the training split, shared by all
-models. Both studies now use 100 points; the synthetic study previously used
-200.
-
-**Median survival time.** `oracle_ci` and `oracle_mae` are not computed from
-risk scores; both go through a predicted median survival time, taken from
-SurvivalEVAL's `predict_median_st`. It locates the S(t) = 0.5 crossing by
-**linear interpolation** between the bracketing grid points, and where a curve
-never reaches 0.5 it **extrapolates** along the line anchored at (0, 1) rather
-than returning a constant, so non-crossing subjects keep distinct and correctly
-ordered predictions. The whole metric stack -- Brier/IBS, concordance and the
-point predictions feeding it -- therefore comes from the one cited package.
-
-Two consequences worth knowing. Extrapolated medians can lie well outside the
-evaluation grid (on `mimic_iv`, up to 10,793 against a grid maximum of 2,450),
-which inflates `oracle_mae` for subjects whose curves stay high; this is
-SurvivalEVAL's behaviour and is left intact. And a curve that is identically 1
-has no finite median and yields `inf`, which propagates to a non-finite
-`oracle_mae` for that cell; the seed-level rank machinery treats non-finite
-values as failures and assigns them one rank below the worst successful model,
-so a degenerate prediction surfaces rather than scoring quietly.
+`oracle_ci` and `oracle_mae` go through a predicted median survival time from
+SurvivalEVAL's `predict_median_st`, which interpolates the S(t) = 0.5 crossing
+and extrapolates from (0, 1) when a curve never reaches it. Extrapolated medians
+can exceed the evaluation grid (on `mimic_iv`, 10,793 vs a grid max of 2,450),
+inflating `oracle_mae`; an identically-1 curve yields `inf`, which the rank
+machinery treats as a failure ranked below the worst successful model.
 
 ### Figure 1 — Model ranks (`semi_synthetic_model_ranks.pdf`)
 
-Three panels (Oracle CI, Oracle IBS, Oracle MAE), one row per model, at
-**tau = 0.5 only**.
-
-Computation, in order:
-
-1. **Rank within a single seed.** Inside each
-   (dataset, copula, tau, censoring, repeat) cell, the 8 models are ranked
-   against each other. Models are therefore compared on identical cohorts and
-   splits.
-2. **Average the 10 seeds** within each (dataset, copula, model).
-3. **Average the 4 copulas** within each (dataset, model), giving one mean rank
-   per dataset per model.
-
-Because the grid is balanced at exactly 10 repeats per cell, steps 2 and 3
-commute — averaging copulas first gives identical numbers. The notebook raises
-`Incomplete seed grid` if that balance is violated.
-
-4. **The plotted marker is the median of those 12 per-dataset mean ranks.**
-5. **The error bar is a 95% bootstrap confidence interval** for that median:
-   resample the 12 datasets with replacement 10,000 times, take the median each
-   time, report the 2.5% and 97.5% quantiles.
-
-> **Two things the caption must say.** The interval is a bootstrap CI for a
-> median over **datasets**, not a standard deviation and not a spread over
-> seeds — seed variation is deliberately averaged away in step 2, since seeds
-> are paired across models while datasets are the population being generalised
-> over. And **the vertical order is not a performance ranking**: DVFM is pinned
-> to the bottom row by construction, with the baselines above it ordered by mean
-> rank.
-
-Current median ranks (lower is better; regenerate after any rerun):
+Three panels (Oracle CI / IBS / MAE) at **tau = 0.5 only**. Rank the 8 models
+within each (dataset, copula, tau, censoring, repeat) cell, average the 10
+seeds, then the 4 copulas, giving one mean rank per dataset per model. The
+marker is the **median of those 12 values**; the bar is a **95% bootstrap CI**
+for that median over 10,000 resamples of the 12 datasets.
 
 | Model | Oracle CI | Oracle IBS | Oracle MAE |
 |---|---|---|---|
-| Cox-Gamma Frailty | 3.88 | 2.79 | 3.32 |
 | CoxPH | 4.56 | 2.89 | 3.24 |
-| HACSurv | 2.59 | 3.19 | 3.30 |
-| DVFM | 2.85 | 3.22 | 3.06 |
-| DeepSurv | 5.61 | 4.66 | 4.54 |
-| ClaytonAFT | 2.98 | 5.61 | 5.16 |
 | RSF | 6.39 | 5.81 | 6.22 |
 | MTLR | 6.49 | 7.71 | 6.61 |
+| DeepSurv | 5.61 | 4.66 | 4.54 |
+| ClaytonAFT | 2.98 | 5.61 | 5.16 |
+| HACSurv | 2.59 | 3.19 | 3.30 |
+| Cox-Gamma Frailty | 3.88 | 2.79 | 3.32 |
+| DVFM | 2.85 | 3.22 | 3.06 |
 
-### Figure 2 — Recovery diagnostics (`semi_synthetic_recovery.pdf`)
+> **Caption must say** that the interval is a bootstrap CI for a median over
+> **datasets** (seed variation is averaged away in step 2, since seeds are
+> paired across models while datasets are the population generalised over), and
+> that **row order is fixed for readability, not a performance ordering**.
 
-**DVFM only.** Two panels, grouped by copula. Aggregation is
-`dataset_balanced_summary`: average the 10 seeds within each
-(dataset, copula, tau), then report **mean +/- 1 SD across the 12 datasets**.
-Each bar is therefore 12 dataset-level values.
+No model reaches rank 1 because the marker is a median of means: a model would
+have to win nearly every seed and copula in at least half the datasets. Rank 1
+does occur at the level where ranking happens — for Oracle CI, DVFM takes it in
+159 of 480 paired seed cells, ahead of ClaytonAFT (125) and HACSurv (117).
 
-**Panel A — Individual shared-latent recovery.** Spearman correlation between
-recovered and true `z`. Independence is excluded (undefined at tau = 0), so
-this panel has 4 bars while Panel B has 5.
+### Figure 2 — Recovery diagnostics (DVFM only)
+
+Two figures, both 7.5 x 6.0 in for a subfigure pair.
+
+**`semi_synthetic_latent_recovery.pdf`** — Spearman(recovered `z`, true `z`),
+mean +/- 1 SD across the 12 datasets, one bar per dependent copula
+(independence excluded, undefined at tau = 0):
 
 ```
 clayton 0.750   frank 0.754   gaussian 0.746   gumbel 0.727     SD 0.05-0.08
 ```
 
-**Panel B — Dependence calibration.** \|learned tau - target tau\|, lower better.
+**`semi_synthetic_dependence_calibration.pdf`** — |learned tau − target tau| as
+a 12 x 5 heatmap, every dataset x copula cell, seeds averaged. This replaced a
+copula-averaged bar chart, because the pooled view hid the four findings below.
 
-```
-independence 0.174   clayton 0.250   frank 0.275   gaussian 0.289   gumbel 0.314
-```
+### The calibration result, stated honestly
 
-The SDs here (about 0.16 on means of about 0.28) are large relative to the
-differences between families, so the between-copula ordering in this panel is
-not well separated and should not be claimed as a finding.
+1. **Copula is the least informative axis.** Median within-dataset SD across the
+   four dependent copulas is 0.023; between-dataset SD is 0.165 — a ~7x
+   difference. Do not claim a between-copula ordering.
+2. **The error is one-directional.** All 48 dataset x copula cells at tau = 0.5
+   *under*estimate. Mean learned tau is 0.21 against a target of 0.50.
+3. **Two regimes, not a spectrum.** SUPPORT 0.04 and SEER (brain) 0.07 against
+   METABRIC 0.53, WHAS 0.49, GBSG 0.47, FLChain 0.43 — the last four have
+   learned tau ≈ 0, i.e. the model reports independent margins on data generated
+   with tau = 0.5.
+4. **Learned tau is largely a dataset-level constant.** Across datasets,
+   learned tau at target 0 and at target 0.5 correlate at **0.95**, and a 0.5
+   change in true tau moves the estimate by only **0.072** (slope ≈ 0.14).
+   SUPPORT reports 0.34 when the truth is 0 and 0.47 when it is 0.5; WHAS
+   reports ~0.01 in both. This is why the Independence column of the heatmap is
+   *inverted* relative to the copula columns, and it means SUPPORT's good score
+   is partly luck rather than calibration.
 
-> **Note the inconsistency with Figure 1**, which uses a median plus bootstrap
-> CI. Figure 2 uses mean +/- 1 SD. Both are defensible but they are different
-> quantities, and a reader will assume consistency unless each caption says
-> which it is.
+**Recovery and calibration are not in conflict.** `frailty_spearman` is
+rank-based and monotone-invariant — it measures whether the *ordering* of `z` is
+recovered. The learned tau is simulated from the decoder at the mean covariate
+and depends on the *magnitude* of `z`'s effect on both margins. An attenuated
+latent scale leaves Spearman at 0.75 while driving tau to 0. Expect a reviewer
+to ask; the one-line answer is "ordering yes, scale no".
 
-### Figure 2b — Joint-distribution recovery, DVFM vs. HACSurv
+### Figure 2c — Identifiability (`semi_synthetic_tau_vs_training_events.pdf`)
 
-`semi_synthetic_joint_recovery_dvfm_vs_hacsurv.pdf`.
+Learned tau against uncensored training events (log axis), one marker per
+dataset per target, dashed lines at both targets. Spearman rho between learned
+tau at target 0.5 and event count is **+0.85**: WHAS (155 events) and GBSG (212)
+sit on the tau = 0 line; SUPPORT (4,221) and SEER (brain) (4,188) reach 0.47 and
+0.44. The vertical stub is the response to the true dependence, and it is short
+everywhere.
 
-`oracle_joint_survival_ise` is the only recovery diagnostic that **both** DVFM
-and HACSurv export; it is empty for all six other baselines. The latent-recovery
-and tau-calibration metrics are DVFM-only, so no head-to-head is possible for
-Figure 2's panels.
+Two exceptions to a pure sample-size reading: METABRIC has 772 events and
+*negative* learned tau, and FLChain has 1,511 events (72.5% censored) and sits
+with the small datasets.
 
-**The metric.** For each held-out subject the model predicts a bivariate
-surface S(t, c | x) = P(T > t, C > c | x) on a 15 x 15 grid of time pairs
-(0 to the 95th percentile of training times on each axis), for 128 subjects,
-with the truth obtained from 2,000 DGP draws. The squared error is integrated
-over both axes by trapezoid, **divided by the grid area**, and averaged over
-subjects. Area normalisation makes it a mean squared error in probability
-units, so `sqrt(ISE)` reads directly as an RMS error in the joint survival
-probability.
+> **The defensible claim**: given enough uncensored events the latent scale is
+> identified and the learned tau approaches its target; below roughly 1,000
+> events it collapses toward independence. The fully synthetic run supports this
+> (0.440 at target 0.5, N = 10,000), but note the confound — that DGP's Weibull
+> margins are well specified for the decoder, while the semi-synthetic margins
+> are CoxPH fits.
 
-It is strict because the surface's edges *are* the marginals — S(t, 0 | x) is
-T's own survival curve and S(0, c | x) is C's — while the interior is the
-coupling. One number can only be small if both marginals and their dependence
-are right at every grid point. Kendall's tau collapses all of that to a single
-rank-association scalar; empirically the two are uncorrelated here (within-model
-Spearman between \|tau error\| and ISE is -0.10 for DVFM and +0.06 for HACSurv,
-both p > 0.4), which is the argument for reporting this separately from
-Figure 2's Panel B rather than as a refinement of it.
+### Figure 2d — Joint recovery, DVFM vs HACSurv
 
-**Panels.** Left: grouped bars by copula, dataset-balanced mean +/- 1 SD across
-datasets. Right: per-dataset paired dots on a log axis, pooled over copulas.
-The left panel's whiskers are dominated by cross-dataset scale spread (ISE
-ranges roughly 60x across datasets) rather than by any difference between the
-models, so the right panel carries the model comparison.
+`semi_synthetic_joint_recovery_by_copula.pdf` (grouped bars by copula) and
+`semi_synthetic_joint_recovery_by_dataset.pdf` (paired per dataset, log axis),
+same size for a subfigure pair.
 
-**Caveats for the paper.**
+`oracle_joint_survival_ise` is the only recovery diagnostic both models export.
+For each held-out subject the model predicts S(t, c | x) on a 15 x 15 grid
+(128 subjects, truth from 2,000 DGP draws); squared error is integrated over
+both axes and **divided by the grid area**, so `sqrt(ISE)` reads as an RMS error
+in the joint survival probability. The surface's edges are the marginals and its
+interior the coupling, so one number is small only if both are right —
+empirically it is uncorrelated with |tau error| (within-model Spearman −0.10 for
+DVFM, +0.06 for HACSurv), which is why it is reported separately.
 
-- The two models are at **parity**, and the aggregate mean is carried almost
-  entirely by one dataset. Excluding `flchain`, DVFM 0.0167 vs HACSurv 0.0181,
-  paired Wilcoxon p = 0.57. With it, 0.0389 vs 0.0469, p = 0.12.
-- **`flchain` is a shared failure**: RMS error above 0.5 in probability for both
-  models, nearly identical across all five copulas including independence. That
-  invariance means it is not a dependence-modelling failure, and it coincides
-  with that dataset having the *best* oracle IBS of the twelve. Treat it as an
-  open diagnostic, not a result.
-- Which model wins is a **dataset property, not a copula property** — 9 of 12
-  datasets have all five copulas agreeing on the winner. If the difference were
-  about recovering dependence structure it should vary with copula family.
-- Both models are shared-frailty constructions (DVFM marginalises a Gaussian
-  latent by Monte Carlo; HACSurv's Archimedean generator phi(t) = E[exp(-Mt)] is
-  the Laplace transform of a latent frailty), so parity is unsurprising. The
-  real asymmetry is that DVFM infers a **per-subject** latent through an encoder
-  while HACSurv marginalises a population-level one, and that DVFM's dependence
-  can vary with covariates while HACSurv's generator is global.
-- The semi-synthetic DGP applies a **single scalar copula parameter to every
-  subject**, so its dependence is covariate-homogeneous — exactly HACSurv's
-  assumption. This benchmark cannot exercise DVFM's covariate-varying dependence.
+Caveats, all of which belong in the text:
 
-### Figure 3 — Subject-level latent recovery
+- **Parity.** 0.0389 vs 0.0469, paired Wilcoxon p = 0.12; DVFM lower in 37 of
+  60 cells. Excluding `flchain`: 0.0167 vs 0.0181, p = 0.57.
+- **`flchain` is a shared failure** — RMS error above 0.5 in probability for
+  both models, nearly identical across all five copulas including independence,
+  so it is not a dependence-modelling failure. Open diagnostic, not a result.
+- Which model wins is a **dataset property, not a copula property**: 9 of 12
+  datasets have all five copulas agreeing on the winner.
+- Both are shared-frailty constructions, so parity is unsurprising. The
+  asymmetry is that DVFM infers a **per-subject** latent and can vary dependence
+  with covariates; HACSurv's generator is global. **The DGP applies one scalar
+  copula parameter to every subject**, which is exactly HACSurv's assumption, so
+  this benchmark cannot exercise that advantage.
 
-Hexbin and scatter views of recovered vs. true `z` for a single dataset,
-pooling held-out subjects across repeats, split by censoring status and by
-copula family. Each repeat keeps its own validation-derived affine calibration;
-no test subjects are used to fit that mapping. These answer robustness rather
-than headline performance: recovery does not degrade for censored subjects, and
-holds across copula families.
+### Figure 3 and tables
 
-### Tables
+`semi_synthetic_subject_frailty_recovery.pdf` plus the hexbin views: recovered
+vs true `z` for one dataset, pooled over repeats, split by censoring status and
+copula family, each repeat keeping its own validation-derived affine
+calibration. Robustness, not headline performance — recovery does not degrade
+for censored subjects.
 
-- **`semi_synthetic_datasets.tex`** — source dataset characteristics: N, raw and
-  encoded feature counts, original censoring rate, split.
-- **`semi_synthetic_model_summary_tau0.tex`** and
-  **`semi_synthetic_model_summary_tau0p5.tex`** — one table per dependence
-  level; tau levels are never pooled. Each entry is the **median across the 12
-  datasets of a model's mean seed-level rank**, i.e. exactly the quantity
-  Figure 1 plots, so a table number can be read straight off the corresponding
-  figure panel. The W/T/L column is a paired oracle-IBS record against DVFM,
-  computed within that tau level, with a 1e-4 tie tolerance and reported from
-  each comparator's perspective. Labels are
-  `tab:semi_synthetic_models_tau0` and `tab:semi_synthetic_models_tau0p5`.
+`semi_synthetic_datasets.tex` (dataset characteristics) and
+`semi_synthetic_model_summary_tau0{,p5}.tex` (one per dependence level, never
+pooled). Table entries are exactly the quantity Figure 1 plots, so a number can
+be read off the matching panel. The W/T/L column is a paired oracle-IBS record
+against DVFM with a 1e-4 tie tolerance.
 
 ---
 
-## 3. Known issues to carry into the paper
+## 3. Claims to make, and to avoid
+
+**Supported.** Subject-level frailty *ordering* is recovered well and uniformly
+(Spearman ~0.75 across datasets, ~0.95 at tau = 0.75 in the synthetic study).
+The shared latent pays for itself in prediction above tau ≈ 0.25. DVFM is at or
+near the top of the baseline field on all three oracle metrics, and at parity
+with HACSurv on joint recovery.
+
+**Not supported.** Dependence-*magnitude* calibration. Every cell
+underestimates, four of twelve datasets collapse to independence, and the
+estimate barely responds to the true tau. Report it as a limitation with the
+event-count threshold, or the heatmap will be read as an unflagged failure.
+
+**Do not claim** a between-copula ordering in either recovery figure — the
+within-dataset spread is far smaller than the between-dataset spread.
+
+---
+
+## 4. Known issues
 
 - **DeepSurv results before commit `b74cebe` are invalid.** Its Cox partial
-  likelihood multiplied an `(N,)` event mask by an `(N, 1)` risk-score column,
-  which broadcast to `(N, N)`; the sum factorised so that the event indicator
-  cancelled, training the model as if nothing were censored. Damage scaled with
-  censoring rate (Spearman -0.71 against the deficit versus CoxPH) and inverted
-  the risk ordering entirely on `mimic_iv`. Fixed, with a regression test in
-  `tests/test_sota.py`; all DeepSurv numbers were retuned and rerun afterwards.
-- **Do not compare Kendall's tau across DVFM and HACSurv.** Both write to the
-  `learned_conditional_kendall_tau` column but use different estimators: DVFM
-  takes an empirical tau from 2,000 sampled (T, C) pairs at the mean covariate
-  vector, HACSurv evaluates the analytic generator integral. One is a noisy
-  single-point sample estimate, the other exact. Within-model comparisons are
-  fine.
+  likelihood broadcast an `(N,)` event mask against an `(N, 1)` risk column, so
+  the event indicator cancelled and the model trained as if nothing were
+  censored. Fixed, regression test in `tests/test_sota.py`, all DeepSurv numbers
+  retuned and rerun.
+- **Do not compare Kendall's tau across DVFM and HACSurv.** Both write
+  `learned_conditional_kendall_tau` but DVFM takes an empirical tau from 2,000
+  sampled (T, C) pairs at the mean covariate while HACSurv evaluates the
+  analytic generator integral. Within-model comparisons are fine.
 - **`oracle_joint_survival_ise` exists only at tau = 0 and tau = 0.5**, so there
-  is no tau sweep for that metric in the semi-synthetic study.
-- The **independence scenario is the only one at tau = 0**; the runner emits one
-  product-copula condition rather than four duplicates. Any code filtering by
-  tau must account for the copula set changing with tau.
+  is no tau sweep for it in the semi-synthetic study.
+- **The independence scenario is the only one at tau = 0** — the copula set
+  changes with tau, so any code filtering by tau must account for it.
+- Figure 1 uses a median with a bootstrap CI while the recovery figures use mean
+  +/- 1 SD. Both are defensible; each caption must say which.
