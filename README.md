@@ -40,10 +40,7 @@ selected by editing defaults.
 # 1. Resolve and validate a configuration without training (seconds)
 dvfm-run --config configs/synthetic.yaml --validate-only
 
-# 2. Two-epoch smoke test that exercises the full pipeline (minutes)
-dvfm-run --config configs/frailty_recovery_smoke.yaml
-
-# 3. A real study (hours; normally submitted through GWF -- see section 4)
+# 2. A real study (hours; normally submitted through GWF -- see section 4)
 dvfm-run --config configs/synthetic.yaml
 ```
 
@@ -54,20 +51,17 @@ every submission.
 
 ## 3. The studies
 
-Each study is one config, one output directory, and — for the studies that need a cluster — one
-GWF workflow. Everything in the paper comes from the two rows in bold.
+Each study is one config, one output directory, and one GWF workflow. Everything in the paper
+comes from the two rows in bold.
 
 | Study | Config | Workflow | Output |
 |---|---|---|---|
 | **Primary synthetic** (DVFM only, `latent_dim` 0 vs 1) | `synthetic.yaml` | `synthetic` | `results/synthetic/` |
 | **Semi-synthetic benchmark** (12 datasets, 8 models) | `semi_synthetic.yaml` | `semi_synthetic` | `results/semi-synthetic/` |
 | Semi-synthetic hyperparameter tuning | `semi_synthetic_tuning.yaml` | `semi_synthetic_tuning` | `results/semi-synthetic-tuning/` |
-| Frailty-recovery diagnostic | `frailty_recovery_diagnostic.yaml` | `frailty_recovery` | `results/frailty-recovery-diagnostic/` |
-| HACSurv-2D feasibility | `hacsurv_synthetic_pilot.yaml` | `hacsurv_synthetic` | `results/hacsurv-gaussian-reference-pilot/` |
-| Preserved reference run | `reference_original.yaml` | — | `results/reference-original/` |
 
-Smoke configs run the same code paths in minutes and have no workflow:
-`frailty_recovery_smoke.yaml` and `hacsurv_synthetic_smoke.yaml`.
+Tuning runs first and writes the per-dataset hyperparameters that
+`semi_synthetic.yaml` consumes under `models.tuned_by_dataset`.
 
 ---
 
@@ -131,7 +125,6 @@ loudly if a run is incomplete.
 | `notebooks/synthetic_results.ipynb` | `results/synthetic/` | `paper/figures/synthetic_*.pdf` |
 | `notebooks/semi_synthetic_results.ipynb` | `results/semi-synthetic/` | `paper/figures/semi_synthetic_*.pdf`, `paper/tables/*.tex` |
 | `notebooks/semi_synthetic_event_distribution.ipynb` | `results/semi-synthetic/` | source vs generated distribution figures |
-| `notebooks/frailty_recovery_diagnostic.ipynb` | `results/frailty-recovery-diagnostic/` | recovery diagnostics |
 
 Run them from the repository root, or from `notebooks/` — both resolve the project root.
 [`docs/FIGURES.md`](docs/FIGURES.md) specifies what each figure shows and how each number is
@@ -190,7 +183,6 @@ src/experiments/  configuration schema, runner, recovery diagnostics
 src/sota/         comparison models behind a common adapter interface
 src/utility/      data-generating processes, metrics, splitting, runtime
 tests/            configuration and functional tests
-reference/        unchanged source implementation and provenance
 docs/             manuscript and research notes
 ```
 
