@@ -3,8 +3,16 @@
 This directory is the single home for comparison-model implementations and
 adapters. Missing baselines were ported from the MIT-licensed
 `thecml/survival-copula` repository at revision
-`0b4b031609185f510c892aea1269df90f0ac9a88`. HACSurv retains its separate
-upstream provenance documented in the repository-level `SOURCE_NOTES.md`.
+`0b4b031609185f510c892aea1269df90f0ac9a88`; see `LICENSE.survival-copula`.
+
+The minimal `HACSurv_2D` port in `hacsurv.py` was adapted, with the upstream
+repository owner's permission, from https://github.com/Raymvp/HACSurv at
+revision `da945141058cf6ccd5cb175002d6bc35b6e9bd9a`. It retains the neural
+monotone margins, stochastic mixture-of-exponentials generator, inverse
+autograd rule, and bivariate observed-data likelihood, with local adaptations
+for explicit device/dtype management, numerical checks, and validation-only
+checkpointing. Full provenance for every vendored component is in
+[`docs/SOURCE_NOTES.md`](../../docs/SOURCE_NOTES.md).
 
 ## Duplicate implementation decisions
 
