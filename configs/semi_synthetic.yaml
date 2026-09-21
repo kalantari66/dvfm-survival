@@ -185,9 +185,9 @@ models:
     mc_samples: 100
   # Development-seed-99 oracle-IBS winners. HACSurv multipliers are resolved
   # to absolute copula learning rates so this mapping can be applied directly
-  # at fit time. The DeepSurv rows come from the separate, identically
-  # configured semi_synthetic_tuning_deepsurv study, rerun after its search
-  # grid was widened to reach the learning rates Katzman et al. (2017) report.
+  # at fit time. The DeepSurv rows come from a rerun of the same tuning
+  # protocol with a search grid widened to reach the learning rates Katzman
+  # et al. (2017) report.
   tuned_by_dataset:
     whas:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
