@@ -17,8 +17,10 @@ conda env create -f environment.yml
 conda activate dvfm
 ```
 
-One environment contains GWF, the editable project, the test extras, and the CUDA 13.0 PyTorch
-build. Verify it:
+One environment contains [GWF](https://gwf.app/), the editable project, the test extras, and the
+CUDA 13.0 PyTorch build. GWF is a Python workflow manager that turns a script of target
+definitions into SLURM jobs, tracking which have already completed; this repository uses it to
+submit each study to a cluster. Verify the environment with:
 
 ```bash
 gwf --version
@@ -67,7 +69,9 @@ Tuning runs first and writes the per-dataset hyperparameters that
 
 ## 4. Running on the cluster
 
-Workflows are GWF targets. Create the environment once on the login node, then submit:
+Workflows are [GWF](https://gwf.app/) targets: each `workflow.py` declares the jobs a study needs
+and their dependencies, and GWF submits only the ones that are not already done. Create the
+environment once on the login node, then submit:
 
 ```bash
 conda activate dvfm

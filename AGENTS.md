@@ -21,7 +21,9 @@ The layers are:
   fitted model into rows of results.
 - `configs/` — one YAML per study. The config is the experiment; code changes that alter a
   study's meaning belong in a new config, not a silent edit to an existing one.
-- `workflows/` — GWF submission targets, one per study. These are the cluster entry points.
+- `workflows/` — [GWF](https://gwf.app/) submission targets, one per study. GWF is a Python
+  workflow manager that expands a target script into SLURM jobs and reruns only what is
+  missing. These are the cluster entry points.
 - `scripts/` — per-dataset runners and the aggregation steps the workflows call.
 - `notebooks/` — read completed artifacts from `results/` and write into `paper/`. They never fit
   a model.
