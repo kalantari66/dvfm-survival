@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 from sklearn.linear_model import LinearRegression
 from torch.utils.data import DataLoader
-from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
+from sota.adapters import fit_sksurv_ensemble, fit_weibull_aft
 
 from sota.baselines import (
     _fit_cox_and_predict_survival,
@@ -458,13 +458,6 @@ def _fit_baseline(
             train.X, train.time, train.event, test.X, grid,
             epochs=int(settings["epochs"]), lr=float(settings["learning_rate"]),
             device=device,
-        )
-    elif name == "deephit":
-        settings = cfg["models"]["deephit"]
-        _, survival = fit_deephit(
-            train.X, train.time, train.event,
-            validation.X, validation.time, validation.event,
-            test.X, grid, settings, device,
         )
     elif name in {"gbsa", "rsf"}:
         _, survival = fit_sksurv_ensemble(

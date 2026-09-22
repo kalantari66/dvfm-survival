@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
+from sota.adapters import fit_sksurv_ensemble, fit_weibull_aft
 
 
 @pytest.fixture

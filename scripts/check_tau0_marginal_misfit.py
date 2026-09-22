@@ -33,7 +33,7 @@ DEFAULT_RESULT_ROOT = PROJECT_ROOT / "results" / "semi-synthetic"
 CELL_KEYS = ["dataset", "copula", "target_kendall_tau", "target_censoring_rate", "repeat"]
 MODEL_NAMES = {
     "dvfm": "DVFM", "coxph": "CoxPH", "deepsurv": "DeepSurv", "rsf": "RSF",
-    "mtlr": "MTLR", "deephit": "DeepHit", "hacsurv": "HACSurv",
+    "mtlr": "MTLR", "hacsurv": "HACSurv",
     "hacsurv_2d": "HACSurv", "clayton_aft": "ClaytonAFT", "gbsa": "GBSA",
     "bayesian_cox_gamma_frailty": "BayesianCoxGammaFrailty",
 }

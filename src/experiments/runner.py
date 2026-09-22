@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
-from sota.adapters import fit_deephit, fit_sksurv_ensemble, fit_weibull_aft
+from sota.adapters import fit_sksurv_ensemble, fit_weibull_aft
 from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
 from sota.hacsurv import fit_hacsurv_2d
 
@@ -258,16 +258,6 @@ def _fit_one_split(
                 survival, model_time_points
             ) * time_scale,
             "survival": survival, **info,
-        }
-
-    if "deephit" in enabled:
-        median, survival = fit_deephit(
-            model_train.X, model_train.time, model_train.event,
-            model_validation.X, model_validation.time, model_validation.event,
-            model_test.X, model_time_points, model_cfg["deephit"], device,
-        )
-        predictions["DeepHit"] = {
-            "median": median * time_scale, "survival": survival,
         }
 
     for ensemble_name, display_name in (("gbsa", "GBSA"), ("rsf", "RSF")):

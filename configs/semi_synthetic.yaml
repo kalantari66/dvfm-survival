@@ -126,7 +126,7 @@ preprocessing:
   zscore_x: true
 models:
   # One representative independent learner per class plus dependent-censoring
-  # comparators. Tree, Weibull-AFT, and DeepHit sensitivity runs are appendix-only.
+  # comparators. Tree and Weibull-AFT sensitivity runs are appendix-only.
   enabled: [coxph, deepsurv, mtlr, rsf, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
   coxph:
     alpha: 0.0001
