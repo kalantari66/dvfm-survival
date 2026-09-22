@@ -121,5 +121,5 @@ confirm a config change is well formed.
 | Hyperparameter search spaces and selection | [`configs/semi_synthetic_tuning.yaml`](configs/semi_synthetic_tuning.yaml) |
 | Metric definitions | [`src/utility/metrics.py`](src/utility/metrics.py) |
 | Figure and table definitions | [`notebooks/`](notebooks/) |
-| Environment and run commands | [`README.md`](README.md), [`environment.yml`](environment.yml) |
+| Environment and run commands | [`README.md`](README.md), [`environment.yml`](environment.yml), [`environment.lock.yml`](environment.lock.yml) |
 

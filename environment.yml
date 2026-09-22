@@ -5,8 +5,8 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - gwf=2.0.5
+  - gwf=2.1.1
   - pip:
       - --extra-index-url https://download.pytorch.org/whl/cu130
-      - torch==2.14.0+cu130
+      - torch==2.13.0
       - -e .[test]

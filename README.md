@@ -18,6 +18,20 @@ conda env create -f environment.yml
 conda activate dvfm
 ```
 
+`environment.yml` is the portable specification. `environment.lock.yml` is the exact resolved
+environment that produced the published results, captured from the cluster with
+`conda env export`; it is Linux/x86-64 specific and rebuilds in two steps, because the project
+itself is installed from the working tree rather than from an index:
+
+```bash
+conda env create -n dvfm-lock -f environment.lock.yml
+conda activate dvfm-lock
+pip install -e . --no-deps
+```
+
+`--no-deps` is required: without it pip re-resolves this project's dependency ranges and can
+upgrade packages the lock just pinned.
+
 One environment contains [GWF](https://gwf.app/), the editable project, the test extras, and the
 CUDA 13.0 PyTorch build. GWF is a Python workflow manager that turns a script of target
 definitions into SLURM jobs, tracking which have already completed; this repository uses it to
