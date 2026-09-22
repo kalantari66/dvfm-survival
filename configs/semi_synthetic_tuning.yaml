@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: semI_synthetic_tuning}
-resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-l40s, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-l40s, account: anonymous}
 experiment_config: configs/semi_synthetic.yaml
 study:
   name: semi-synthetic-tuning

@@ -27,13 +27,6 @@ DEFAULTS: dict[str, Any] = {
             "hidden_dims": [64, 32], "dropout": 0.0, "weight_decay": 0.0,
         },
         "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
-        "deephit": {
-            "epochs": 200, "batch_size": 256, "learning_rate": 1e-3,
-            "time_bins": 100, "num_nodes_shared": [64, 32],
-            "batch_norm": True, "dropout": 0.1, "alpha": 0.2,
-            "sigma": 0.1, "early_stop": True, "patience": 10,
-            "verbose": False,
-        },
         "gbsa": {
             "n_estimators": 100, "learning_rate": 0.1, "max_depth": 3,
             "loss": "coxph", "min_samples_split": 2, "min_samples_leaf": 1,
@@ -508,7 +501,7 @@ def validate_config(cfg: dict) -> None:
 
     supported = {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm",
-        "deephit", "gbsa", "rsf", "weibull_aft",
+        "gbsa", "rsf", "weibull_aft",
         "bayesian_cox_gamma_frailty",
     }
     unknown = set(cfg["models"]["enabled"]) - supported

@@ -2,193 +2,234 @@
 
 Research code for **Deep Variational Frailty Models (DVFM)** under dependent right censoring.
 
-The repository asks one falsifiable question: under which structural conditions can a shared-latent generative model recover the event-time distribution or dependence-generating frailty from right-censored observations? See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the overall design and [`SYNTHETIC.md`](SYNTHETIC.md) for the primary synthetic protocol.
+The repository asks one falsifiable question: under which structural conditions can a
+shared-latent generative model recover the event-time distribution or the dependence-generating
+frailty from right-censored observations? The study protocols are defined by the configurations in
+[`configs/`](configs/), the data-generating processes by [`src/utility/`](src/utility/), and the
+invariants any change must preserve by [`AGENTS.md`](AGENTS.md). The manuscript appendices give the
+formal statement of each protocol.
 
-## Install with Conda
+---
 
-```powershell
+## 1. Install
+
+```bash
 conda env create -f environment.yml
 conda activate dvfm
 ```
 
-If `conda` is not on `PATH` in Windows Command Prompt, activate it directly:
-
-```bat
-deactivate
-CALL C:\Users\cml\miniconda3\condabin\conda.bat activate dvfm
-```
-
-The prompt should then begin with `(dvfm)`. Opening an **Anaconda Prompt** also makes `conda activate dvfm` available normally.
-
-This single environment contains GWF, the editable project, tests, and the CUDA 13.0 PyTorch build. Verify it with:
-
-```powershell
-gwf --version
-python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-```
-
-## Run
-
-```powershell
-# Validate without training
-dvfm-run --config configs/reference_original.yaml --validate-only
-
-# Preserved reference experiment
-dvfm-run --config configs/reference_original.yaml
-
-# Controlled size × tau × censoring × latent-dimension pilot
-dvfm-run --config configs/synthetic_pilot.yaml
-
-# Primary 10-seed synthetic benchmark (normally submit through GWF)
-dvfm-run --config configs/synthetic.yaml
-
-# Fast local check of the predictive hyperparameter machinery
-dvfm-run --config configs/synthetic_hyperparameter_smoke.yaml
-
-# Focused one-change decoder calibration ablation
-dvfm-run --config configs/synthetic_dependence_calibration.yaml --validate-only
-
-# Shared-loading shrinkage and hard-concrete gate ablation
-dvfm-run --config configs/synthetic_latent_regularization.yaml --validate-only
-
-# Paired smooth-gate/group-lasso follow-up
-dvfm-run --config configs/synthetic_latent_regularization2.yaml --validate-only
-
-# Short HACSurv-2D integration check
-dvfm-run --config configs/hacsurv_synthetic_smoke.yaml
-
-# Two-epoch CUDA smoke test for the focused recovery diagnostic
-dvfm-run --config configs/frailty_recovery_smoke.yaml
-
-# Prespecified four-variant frailty-recovery diagnostic
-dvfm-run --config configs/frailty_recovery_diagnostic.yaml
-
-# File-based semi-synthetic smoke example
-dvfm-run --config configs/semi_synthetic_example.yaml
-
-# Multi-dataset semi-synthetic benchmark
-dvfm-run --config configs/semi_synthetic.yaml --validate-only
-```
-
-Results are written below `results/<study-name>/` and include raw results, aggregated results, and the fully resolved configuration.
-
-Submit the complete primary synthetic benchmark as one GWF target:
+`environment.yml` is the portable specification. `environment.lock.yml` is the exact resolved
+environment that produced the published results, captured from the cluster with
+`conda env export`; it is Linux/x86-64 specific and rebuilds in two steps, because the project
+itself is installed from the working tree rather than from an index:
 
 ```bash
+conda env create -n dvfm-lock -f environment.lock.yml
+conda activate dvfm-lock
+pip install -e . --no-deps
+```
+
+`--no-deps` is required: without it pip re-resolves this project's dependency ranges and can
+upgrade packages the lock just pinned.
+
+One environment contains [GWF](https://gwf.app/), the editable project, the test extras, and the
+CUDA 13.0 PyTorch build. GWF is a Python workflow manager that turns a script of target
+definitions into SLURM jobs, tracking which have already completed; this repository uses it to
+submit each study to a cluster. Verify the environment with:
+
+```bash
+gwf --version
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+dvfm-run --help
+```
+
+If `conda` is not on `PATH` in Windows Command Prompt, activate it directly with
+`CALL %USERPROFILE%\miniconda3\condabin\conda.bat activate dvfm`, or open an Anaconda Prompt.
+
+---
+
+## 2. Quick start
+
+Everything runs through one console script. The study is chosen by `--config`; nothing is
+selected by editing defaults.
+
+```bash
+# 1. Resolve and validate a configuration without training (seconds)
+dvfm-run --config configs/synthetic.yaml --validate-only
+
+# 2. A real study (hours; normally submitted through GWF -- see section 4)
+dvfm-run --config configs/synthetic.yaml
+```
+
+`--validate-only` is the cheapest way to confirm a config change is well formed. Run it before
+every submission.
+
+---
+
+## 3. The studies
+
+Each study is one config, one output directory, and one GWF workflow. Everything in the paper
+comes from the two rows in bold.
+
+| Study | Config | Workflow | Output |
+|---|---|---|---|
+| **Primary synthetic** (DVFM only, `latent_dim` 0 vs 1) | `synthetic.yaml` | `synthetic` | `results/synthetic/` |
+| **Semi-synthetic benchmark** (12 datasets, 8 models) | `semi_synthetic.yaml` | `semi_synthetic` | `results/semi-synthetic/` |
+| Semi-synthetic hyperparameter tuning | `semi_synthetic_tuning.yaml` | `semi_synthetic_tuning` | `results/semi-synthetic-tuning/` |
+
+Tuning runs first and writes the per-dataset hyperparameters that
+`semi_synthetic.yaml` consumes under `models.tuned_by_dataset`.
+
+---
+
+## 4. Running on the cluster
+
+Workflows are [GWF](https://gwf.app/) targets: each `workflow.py` declares the jobs a study needs
+and their dependencies, and GWF submits only the ones that are not already done. Create the
+environment once on the login node, then submit:
+
+```bash
+conda activate dvfm
+
 gwf -f workflows/synthetic/workflow.py status
 gwf -f workflows/synthetic/workflow.py run
 ```
 
-The complete hyperparameter screen is submitted as one GWF target:
+Replace `synthetic` with any workflow name from the table above. Always check `status` before
+`run`.
 
-```bash
-gwf -f workflows/synthetic_hyperparameter/workflow.py status
-gwf -f workflows/synthetic_hyperparameter/workflow.py run
+SLURM resources (cores, memory, walltime, partition, account) live in the `resources:` block of
+the study's YAML, not in the workflow file. The workflow activates the same `dvfm` environment on
+the compute node, and the configs set `compute.device: cuda` so a job fails loudly rather than
+falling back silently to CPU.
+
+The semi-synthetic benchmark is split finely: one GPU target per dataset × model × seed, followed
+by CPU aggregation targets that assemble seed-, model-, and dataset-level summaries. Partial
+progress is therefore resumable — rerunning `run` submits only what is missing.
+
+---
+
+## 5. What a run produces
+
+Each study writes below its `study.output_dir`:
+
+```text
+results/<study>/
+  _SUCCESS                  marker written only on a complete run
+  run_manifest.csv          one row per fit, with status
+  results_raw.csv           one row per fit × checkpoint × prediction mode
+  results_mean.csv          aggregated across repeats
+  results_std.csv
+  resolved_config.yaml      the fully expanded configuration actually used
+  dvfm_diagnostics.csv      latent diagnostics (DVFM studies)
+  latent_recovery_test.csv  per-subject recovered vs true latent, where defined
 ```
 
-The dependence-calibration ablation also runs as one target:
+`results/`, `data/` and `figures/` are git-ignored. They are outputs — never hand-edit them, and
+never commit them.
 
-```bash
-gwf -f workflows/dependence_calibration/workflow.py status
-gwf -f workflows/dependence_calibration/workflow.py run
-```
+When reading results, filter to `is_primary_checkpoint == true` and
+`prediction_mode == aggregate_posterior`. Other rows exist for ablation and are not the reported
+numbers.
 
-The latent shrinkage/gating ablation also runs as one target:
+---
 
-```bash
-gwf -f workflows/latent_regularization/workflow.py status
-gwf -f workflows/latent_regularization/workflow.py run
-```
+## 6. Analysis and figures
 
-The paired smooth-gate/group-lasso follow-up has a separate target:
+Notebooks read completed artifacts and write into `paper/`. They never fit a model, and they fail
+loudly if a run is incomplete.
 
-```bash
-gwf -f workflows/latent_regularization2/workflow.py status
-gwf -f workflows/latent_regularization2/workflow.py run
-```
+| Notebook | Reads | Writes |
+|---|---|---|
+| `notebooks/synthetic_results.ipynb` | `results/synthetic/` | `paper/figures/synthetic_*.pdf` |
+| `notebooks/semi_synthetic_results.ipynb` | `results/semi-synthetic/` | `paper/figures/semi_synthetic_*.pdf`, `paper/tables/*.tex` |
+| `notebooks/semi_synthetic_event_distribution.ipynb` | `results/semi-synthetic/` | source vs generated distribution figures |
 
-The focused HACSurv feasibility run is also one GWF target:
+Run them from the repository root, or from `notebooks/` — both resolve the project root. Each
+notebook is the specification of the figures and tables it writes: what a panel shows and how a
+number is computed is defined by the cell that produces it, not by a separate document.
 
-```bash
-gwf -f workflows/hacsurv_synthetic/workflow.py run
-```
+---
 
-The semi-synthetic benchmark submits one two-hour `gpu-short` target for each
-dataset/model/seed combination, followed by CPU aggregation targets:
-
-```bash
-gwf -f workflows/semi_synthetic/workflow.py status
-gwf -f workflows/semi_synthetic/workflow.py run
-```
-
-## Canonical experiment specification
+## 7. Configuration schema
 
 Every runnable YAML uses the same top-level sections:
 
 ```yaml
 schema_version: 1
 workflow:       # optional GWF target settings
-resources:      # optional SLURM cores, memory, walltime, partition, account
-study:          # identity, stage, output directory
-seeds:          # separate DGP, sampling, split, and model seeds for new synthetic runs
+resources:      # SLURM cores, memory, walltime, partition, account
+study:          # name, stage, output directory
+seeds:          # repeat seeds; seed i drives generation, splitting and model init
 compute:        # device and CPU threading
-data:           # generator/file source and scenarios or grid
+data:           # generator or file source, plus scenarios or a grid
 split:          # holdout or cross-validation with a disjoint validation partition
 preprocessing:  # train-fitted covariate transforms
-models:         # enabled models and settings
+models:         # enabled models and their settings
 evaluation:     # time grid, primary metrics, saved artifacts
 ```
 
-The loader supplies shared defaults, validates the schema, and expands `data.grid` into deterministic atomic scenarios. New generators should expose Kendall's tau and target censoring rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.
+The loader supplies shared defaults, validates the schema, and expands `data.grid` into
+deterministic atomic scenarios. New generators should expose Kendall's tau and a target censoring
+rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.
 
-Comparison models live under `src/sota/`. See
-[`src/sota/README.md`](src/sota/README.md) for provenance and the comparison
-between overlapping implementations. The primary synthetic benchmark is
-DVFM-only; comparison models, including Bayesian individual Cox--Gamma
-frailty, are reserved for model-comparison experiments.
+A change that alters the meaning of an existing study needs a **new** config and a new output
+directory, so previously produced artifacts stay interpretable.
 
-## Run the synthetic pilot with GWF
+---
 
-Create and activate the project environment on the cluster login node:
-
-```bash
-conda env create -f environment.yml
-conda activate dvfm
-gwf --version
-```
-
-The synthetic YAML owns its SLURM resource settings. The complete grid runs in
-one GPU target:
+## 8. Tests
 
 ```bash
-gwf -f workflows/synthetic/workflow.py status
-gwf -f workflows/synthetic/workflow.py run
+pytest tests/                                     # full suite
+pytest tests/test_config.py                       # config schema and validation
+pytest tests/test_sota.py                         # baselines, including regression tests
 ```
 
-The focused frailty-recovery diagnostic has its own target:
+Report pre-existing failures separately from regressions.
 
-```bash
-gwf -f workflows/frailty_recovery/workflow.py status
-gwf -f workflows/frailty_recovery/workflow.py run
-```
+---
 
-The workflow activates the same `dvfm` environment on the compute node. Its experiment config sets `compute.device: cuda`, causing the job to fail instead of silently falling back to CPU.
-
-## Layout
+## 9. Layout
 
 ```text
-configs/                 canonical runnable configurations
-docs/                    manuscript and research notes
-notebooks/               retained analysis and calibration notebooks
-reference/               unchanged source implementation and provenance
-src/dvfm/                DVFM model, training, and prediction only
-src/experiments/         configuration and experiment orchestration
-src/sota/                competing survival-model implementations
-src/utility/             generic data, splitting, runtime, and metrics tools
-tests/                   configuration and functional smoke tests
-EXPERIMENTS.md            exact experimental and reporting design
+configs/          runnable study configurations
+workflows/        one GWF submission target per study
+scripts/          per-dataset runners and aggregation steps the workflows call
+notebooks/        analysis of completed artifacts into paper/
+src/dvfm/         DVFM model, training, prediction
+src/experiments/  configuration schema, runner, recovery diagnostics
+src/sota/         comparison models behind a common adapter interface
+src/utility/      data-generating processes, metrics, splitting, runtime
+tests/            configuration and functional tests
+paper/            generated figures and tables consumed by the manuscript
 ```
+
+Comparison models live under [`src/sota/`](src/sota/), behind a common adapter interface; a module
+that was ported from an external implementation carries its provenance in its own header. The
+primary synthetic benchmark is DVFM-only; comparison models are reserved for the semi-synthetic
+study.
+
+---
+
+## 10. Further reading
+
+| Topic | Source |
+|---|---|
+| Primary synthetic protocol | [`configs/synthetic.yaml`](configs/synthetic.yaml) |
+| Semi-synthetic protocol | [`configs/semi_synthetic.yaml`](configs/semi_synthetic.yaml) |
+| Data-generating processes and latent definitions | [`src/utility/synthetic.py`](src/utility/synthetic.py), [`src/utility/semisynthetic.py`](src/utility/semisynthetic.py) |
+| Hyperparameter search spaces and selection | [`configs/semi_synthetic_tuning.yaml`](configs/semi_synthetic_tuning.yaml) |
+| Metric definitions | [`src/utility/metrics.py`](src/utility/metrics.py) |
+| Figure and table definitions | [`notebooks/`](notebooks/) |
+| Rules for autonomous coding agents | [`AGENTS.md`](AGENTS.md) |
+
+---
 
 ## Interpretation
 
-Dependent censoring is non-identifiable from right-censored observations without structural assumptions. DVFM is evaluated as an inductive bias, not as a universal identification theorem or a test for informative censoring. Baseline prediction from `x`, retrospective frailty inference from `(x,t,event)`, and population dependence recovery are separate tasks.
+Dependent censoring is not identifiable from right-censored observations without structural
+assumptions. DVFM is evaluated as an inductive bias, not as a universal identification theorem or
+as a test for informative censoring. Baseline prediction from `x`, retrospective frailty inference
+from `(x, t, event)`, and population dependence recovery are separate tasks, and a method can
+succeed at one while failing at another.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from .deephit import make_deephit_single, train_deephit_model
 from .sksurv import make_gbsa_model, make_rsf_model
 from .weibull_aft import make_weibull_aft_model
 
@@ -65,42 +64,4 @@ def fit_weibull_aft(X_train, time_train, event_train, X_test, time_points, confi
     return medians, curves
 
 
-def fit_deephit(X_train, time_train, event_train, X_validation,
-                time_validation, event_validation, X_test, time_points,
-                config, device):
-    from pycox.models import DeepHitSingle
-
-    time_bins = int(config.get("time_bins", 100))
-    label_transform = DeepHitSingle.label_transform(time_bins)
-    y_train = label_transform.fit_transform(
-        np.asarray(time_train, dtype=float), np.asarray(event_train, dtype=int)
-    )
-    y_validation = label_transform.transform(
-        np.asarray(time_validation, dtype=float),
-        np.asarray(event_validation, dtype=int),
-    )
-    model = make_deephit_single(
-        np.asarray(X_train).shape[1], time_bins, device, config,
-        label_transform=label_transform,
-    )
-    model = train_deephit_model(
-        model,
-        np.asarray(X_train, dtype=np.float32),
-        y_train,
-        (np.asarray(X_validation, dtype=np.float32), y_validation),
-        config,
-    )
-    frame = model.predict_surv_df(np.asarray(X_test, dtype=np.float32))
-    source_time = frame.index.to_numpy(dtype=float)
-    source_curves = frame.to_numpy(dtype=float).T
-    grid = np.asarray(time_points, dtype=float)
-    curves = np.vstack([
-        np.interp(grid, source_time, curve, left=1.0, right=curve[-1])
-        for curve in source_curves
-    ])
-    curves = np.minimum.accumulate(np.clip(curves, 0.0, 1.0), axis=1)
-    medians = _median_from_curves(curves, grid, np.max(time_train))
-    return medians, curves
-
-
-__all__ = ["fit_deephit", "fit_sksurv_ensemble", "fit_weibull_aft"]
+__all__ = ["fit_sksurv_ensemble", "fit_weibull_aft"]

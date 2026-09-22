@@ -184,9 +184,10 @@ def stratified_time_event_subsample(
 ) -> pd.DataFrame:
     """Draw an exact sample stratified by event status and quantile time bins.
 
-    This follows the Lillelund et al. semi-synthetic protocol. Exact
-    largest-remainder allocation preserves the joint stratum proportions while
-    avoiding the size drift introduced by independently rounding each stratum.
+    This follows the semi-synthetic protocol of the prior work cited in the
+    paper. Exact largest-remainder allocation preserves the joint stratum
+    proportions while avoiding the size drift introduced by independently
+    rounding each stratum.
     """
     target_size = int(target_size)
     if target_size < 1:

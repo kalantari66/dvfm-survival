@@ -49,7 +49,7 @@ def canonicalize(frame):
     }
     out = out.rename(columns={k: v for k, v in aliases.items() if k in out and v not in out})
     names = {"dvfm": "DVFM", "coxph": "CoxPH", "deepsurv": "DeepSurv", "rsf": "RSF",
-             "gbsa": "GBSA", "mtlr": "MTLR", "deephit": "DeepHit", "hacsurv": "HACSurv",
+             "gbsa": "GBSA", "mtlr": "MTLR", "hacsurv": "HACSurv",
              "hacsurv_2d": "HACSurv", "clayton_aft": "ClaytonAFT",
              "bayesian_cox_gamma_frailty": "BayesianCoxGammaFrailty",
              "bayesiancoxgammafrailty": "BayesianCoxGammaFrailty"}

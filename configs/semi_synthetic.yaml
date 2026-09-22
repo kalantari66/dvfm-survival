@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: semi_synthetic}
-resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: anonymous}
 study:
   name: semi-synthetic
   stage: pilot
@@ -126,7 +126,7 @@ preprocessing:
   zscore_x: true
 models:
   # One representative independent learner per class plus dependent-censoring
-  # comparators. Tree, Weibull-AFT, and DeepHit sensitivity runs are appendix-only.
+  # comparators. Tree and Weibull-AFT sensitivity runs are appendix-only.
   enabled: [coxph, deepsurv, mtlr, rsf, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
   coxph:
     alpha: 0.0001
@@ -185,9 +185,9 @@ models:
     mc_samples: 100
   # Development-seed-99 oracle-IBS winners. HACSurv multipliers are resolved
   # to absolute copula learning rates so this mapping can be applied directly
-  # at fit time. The DeepSurv rows come from the separate, identically
-  # configured semi_synthetic_tuning_deepsurv study, rerun after its search
-  # grid was widened to reach the learning rates Katzman et al. (2017) report.
+  # at fit time. The DeepSurv rows come from a rerun of the same tuning
+  # protocol with a search grid widened to reach the learning rates Katzman
+  # et al. (2017) report.
   tuned_by_dataset:
     whas:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
