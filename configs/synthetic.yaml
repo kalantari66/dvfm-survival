@@ -55,6 +55,9 @@ models:
 evaluation:
   # Matches the semi-synthetic study so the two share one grid resolution.
   n_time_points: 100
+  # Anchored on the true event times the oracle metrics score against, so the
+  # horizon is not truncated by the censoring the oracle metrics see past.
+  time_grid: uniform_train_true_event_quantile
   grid_max_quantile: 0.95
   primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
   prediction_modes: [prior, aggregate_posterior]

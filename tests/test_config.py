@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from experiments.config import expand_scenarios, expand_seed_streams, load_config, semisynthetic_datasets
+from experiments.config import (
+    expand_scenarios, expand_seed_streams, load_config, semisynthetic_datasets,
+    validate_config,
+)
 from experiments.runner import _models_for_dataset
 
 
@@ -172,3 +175,24 @@ def test_semi_synthetic_oracle_tuning_winners_are_promoted():
         "n_estimators", "learning_rate", "max_depth", "min_samples_split",
         "min_samples_leaf", "max_features", "subsample",
     }
+
+
+def test_both_primary_studies_anchor_the_grid_on_true_event_times():
+    """The oracle metrics score against true event times, so the grid must too.
+
+    The observed-data anchors are truncated by censoring, which is what the
+    oracle metrics are defined to see past; pinned here so the two studies
+    cannot drift apart again.
+    """
+    for name in ("synthetic.yaml", "semi_synthetic.yaml"):
+        evaluation = load_config(ROOT / "configs" / name)["evaluation"]
+        assert evaluation["time_grid"] == "uniform_train_true_event_quantile"
+        assert 0.0 < float(evaluation["grid_max_quantile"]) <= 1.0
+        assert int(evaluation["n_time_points"]) == 100
+
+
+def test_unsupported_time_grid_is_rejected():
+    cfg = load_config(ROOT / "configs" / "synthetic.yaml")
+    cfg["evaluation"]["time_grid"] = "uniform_train_made_up"
+    with pytest.raises(ValueError, match="time_grid is unsupported"):
+        validate_config(cfg)

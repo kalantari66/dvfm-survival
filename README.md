@@ -169,6 +169,16 @@ models:         # enabled models and their settings
 evaluation:     # time grid, primary metrics, saved artifacts
 ```
 
+`evaluation.time_grid` selects the shared survival-curve evaluation horizon:
+
+| value | horizon | use |
+|---|---|---|
+| `uniform_train_true_event_quantile` | `grid_max_quantile` of the training split's **true** event times | both primary studies; matches what the oracle metrics score against |
+| `uniform_train_event_quantile` | `grid_max_quantile` of the **observed** event times, uncensored subjects only | truncated by censoring; retained for sources without a generating truth |
+| `uniform_train_observed_max` | `max_time_factor` x the longest observed training time | the default; a single order statistic, so one long follow-up sets the horizon |
+
+The first requires a data source that supplies true event times and raises otherwise.
+
 The loader supplies shared defaults, validates the schema, and expands `data.grid` into
 deterministic atomic scenarios. New generators should expose Kendall's tau and a target censoring
 rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.

@@ -388,7 +388,10 @@ evaluation:
   # One training-only grid is used to query every model. The upper bound is
   # robust to isolated long censored observations; MTLR keeps its own bins.
   n_time_points: 100
-  time_grid: uniform_train_event_quantile
+  # Anchored on the true event times the oracle metrics score against. The
+  # observed-event quantile used previously is computed from uncensored
+  # subjects only and is therefore truncated by censoring.
+  time_grid: uniform_train_true_event_quantile
   grid_max_quantile: 0.95
   # Primary semi-synthetic accuracy: evaluated against DGP event-time truth.
   primary_metrics: [oracle_ibs]

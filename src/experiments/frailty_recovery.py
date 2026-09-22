@@ -560,7 +560,8 @@ def run_frailty_recovery_diagnostic(cfg: dict, out_dir: Path, device: torch.devi
     pd.DataFrame(manifest).to_csv(out_dir / "run_manifest.csv", index=False)
     results.to_csv(out_dir / "results_raw.csv", index=False)
     groups = ["mechanism", "architecture", "training_variant", "checkpoint", "is_primary_checkpoint", "prediction_mode"]
-    metrics = ["oracle_ibs", "oracle_ci", "oracle_mae", "oracle_mae_censored", "oracle_mae_uncensored"]
+    metrics = ["oracle_ibs", "oracle_ci", "oracle_mae", "oracle_mae_censored", "oracle_mae_uncensored",
+               "oracle_median_clipped_fraction"]
     results.groupby(groups)[metrics].mean().reset_index().to_csv(out_dir / "results_mean.csv", index=False)
     results.groupby(groups)[metrics].std().reset_index().to_csv(out_dir / "results_std.csv", index=False)
     with (out_dir / "resolved_config.json").open("w", encoding="utf-8") as handle:

@@ -78,12 +78,26 @@ def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
 def evaluation_time_grid(train: SurvivalData, evaluation: dict) -> np.ndarray:
     """Build the shared, training-only survival-curve evaluation grid.
 
-    ``uniform_train_event_quantile`` prevents isolated long censoring times
-    from stretching the grid.  It is a query grid only: discrete-time models
-    retain their own training-bin construction.
+    ``uniform_train_true_event_quantile`` anchors the horizon on the event
+    times the oracle metrics are scored against. The two observed-data
+    strategies each fail one requirement: ``uniform_train_observed_max`` is a
+    single order statistic, so one long follow-up sets the horizon for every
+    subject, and ``uniform_train_event_quantile`` is computed from uncensored
+    subjects only, who are the fast-failing minority under heavy censoring, so
+    it is biased short exactly where the horizon needs to be longest. Both are
+    retained for studies without a generating truth. It is a query grid only:
+    discrete-time models retain their own training-bin construction.
     """
     strategy = str(evaluation.get("time_grid", "uniform_train_observed_max"))
-    if strategy == "uniform_train_event_quantile":
+    if strategy == "uniform_train_true_event_quantile":
+        if train.true_event_time is None:
+            raise ValueError(
+                "evaluation.time_grid=uniform_train_true_event_quantile requires "
+                "a data source that supplies true event times"
+            )
+        truth = np.asarray(train.true_event_time, dtype=float)
+        upper = float(np.quantile(truth, float(evaluation["grid_max_quantile"])))
+    elif strategy == "uniform_train_event_quantile":
         event_times = np.asarray(train.time)[np.asarray(train.event, dtype=bool)]
         # A degenerate split should not prevent an otherwise useful experiment
         # from running; use observed training durations as a documented fallback.
@@ -451,6 +465,7 @@ def _fit_one_split(
             "oracle_ibs": np.nan,
             "oracle_ci": np.nan,
             "oracle_mae": np.nan,
+            "oracle_median_clipped_fraction": np.nan,
             "oracle_joint_survival_ise": np.nan,
         })
     tau = None
@@ -478,6 +493,9 @@ def _fit_one_split(
             "oracle_ibs": clean_metrics.get("IBS Oracle", np.nan),
             "oracle_ci": clean_metrics.get("CI Oracle", np.nan),
             "oracle_mae": clean_metrics.get("MAE Oracle", np.nan),
+            "oracle_median_clipped_fraction": clean_metrics.get(
+                "Median Clipped Fraction", np.nan
+            ),
             "numerical_failure": False,
         })
         row.update({
@@ -682,6 +700,7 @@ def run(cfg: dict) -> pd.DataFrame:
                                     "Training Time Scale": training_time_scale(train),
                                     "numerical_failure": True, "error": repr(exc),
                                     "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
+                                    "oracle_median_clipped_fraction": np.nan,
                                     "oracle_joint_survival_ise": np.nan,
                                 })
                     diagnostics.append({

@@ -583,9 +583,14 @@ def validate_config(cfg: dict) -> None:
         if not 0.0 < quantile <= 1.0:
             raise ValueError("evaluation.joint_grid_max_quantile must be in (0, 1]")
     time_grid = str(cfg["evaluation"].get("time_grid", "uniform_train_observed_max"))
-    if time_grid not in {"uniform_train_observed_max", "uniform_train_event_quantile"}:
+    if time_grid not in {
+        "uniform_train_observed_max", "uniform_train_event_quantile",
+        "uniform_train_true_event_quantile",
+    }:
         raise ValueError("evaluation.time_grid is unsupported")
-    if time_grid == "uniform_train_event_quantile":
+    if time_grid in {
+        "uniform_train_event_quantile", "uniform_train_true_event_quantile",
+    }:
         quantile = float(_require(
             cfg["evaluation"], "grid_max_quantile", "evaluation"
         ))

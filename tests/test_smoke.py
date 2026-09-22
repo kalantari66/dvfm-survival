@@ -1,11 +1,13 @@
 """Functional tests only; these are not performance benchmarks."""
 
 import numpy as np
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
 from utility.metrics import (
     JointSurvivalEvaluation,
+    compute_oracle_metrics,
     median_survival_time,
     compute_ipcw_brier_ibs,
     compute_oracle_brier_ibs,
@@ -604,3 +606,65 @@ def test_median_survival_time_clips_non_crossing_curves_to_the_grid():
     assert medians[2] == grid[-1]
     assert np.isfinite(medians).all()
     assert (medians <= grid[-1]).all()
+
+
+def test_true_event_quantile_grid_outreaches_the_observed_anchors():
+    """Under censoring the observed anchors stop short of the true events.
+
+    The oracle metrics score against ``true_event_time``, so a horizon built
+    from observed times is truncated by exactly the censoring those metrics
+    are defined to see past.
+    """
+    rng = np.random.default_rng(3)
+    true_event = rng.exponential(scale=100.0, size=2000)
+    censor = rng.exponential(scale=25.0, size=2000)          # ~80% censoring
+    observed = np.minimum(true_event, censor)
+    event = (true_event <= censor).astype(int)
+    train = SurvivalData(
+        X=np.zeros((2000, 1)), time=observed, event=event,
+        feature_names=["x"], true_event_time=true_event,
+    )
+    settings = {"n_time_points": 100, "grid_max_quantile": 0.95,
+                "max_time_factor": 1.2}
+
+    truth_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_true_event_quantile"})
+    event_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_event_quantile"})
+    max_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_observed_max"})
+
+    assert truth_grid[-1] == pytest.approx(np.quantile(true_event, 0.95))
+    assert truth_grid[-1] > event_grid[-1]
+    assert truth_grid[-1] > max_grid[-1]
+    assert len(truth_grid) == 100
+
+
+def test_true_event_quantile_grid_requires_a_generating_truth():
+    train = SurvivalData(
+        X=np.zeros((5, 1)), time=np.arange(1.0, 6.0),
+        event=np.ones(5, dtype=int), feature_names=["x"],
+    )
+    with pytest.raises(ValueError, match="true event times"):
+        evaluation_time_grid(train, {
+            "n_time_points": 10, "grid_max_quantile": 0.95,
+            "time_grid": "uniform_train_true_event_quantile"})
+
+
+def test_clipped_fraction_matches_the_curves_that_never_reach_half():
+    """The reported diagnostic must agree with what the median actually clips.
+
+    ``save_predictions`` is off, so this column is the only record of how often
+    the median was not identified within the horizon.
+    """
+    grid = np.linspace(0.0, 10.0, 51)
+    crossing = np.exp(-np.linspace(0.3, 0.8, 7)[:, None] * grid[None, :])
+    never = np.tile(np.linspace(1.0, 0.8, 51), (3, 1))
+    curves = np.vstack([crossing, never])
+    truth = np.full(len(curves), 3.0)
+
+    result = compute_oracle_metrics(curves, grid, truth)
+    predicted = median_survival_time(curves, grid)
+
+    assert result["oracle_median_clipped_fraction"] == pytest.approx(3 / 10)
+    assert np.mean(predicted == grid[-1]) == pytest.approx(3 / 10)

@@ -118,10 +118,19 @@ def compute_oracle_metrics(
     _, ibs = compute_oracle_brier_ibs(
         survival_curves, time_points, true_event_times
     )
+    # Derived the same way ``median_survival_time`` decides to clip, so the
+    # diagnostic cannot drift from the definition it reports on.
+    curves = np.asarray(survival_curves, dtype=float)
+    crossed = (curves <= 0.5).any(axis=1)
     result = {
         "oracle_ibs": float(ibs),
         "oracle_ci": concordance_index(truth, predicted),
         "oracle_mae": float(np.mean(np.abs(truth - predicted))),
+        # Share of subjects whose median is clipped to the grid endpoint
+        # because the curve never reaches 0.5 inside the evaluation horizon.
+        "oracle_median_clipped_fraction": (
+            float(1.0 - np.mean(crossed)) if len(curves) else np.nan
+        ),
     }
     if event_indicators is not None:
         observed = np.asarray(event_indicators, dtype=int) == 1
@@ -279,6 +288,7 @@ def collect_metrics(
         oracle = {
             "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
             "oracle_mae_censored": np.nan, "oracle_mae_uncensored": np.nan,
+            "oracle_median_clipped_fraction": np.nan,
         }
     oracle_output = {
         f"{prefix} IBS Oracle": oracle["oracle_ibs"],
@@ -286,6 +296,9 @@ def collect_metrics(
         f"{prefix} MAE Oracle": oracle["oracle_mae"],
         f"{prefix} MAE Oracle Censored": oracle["oracle_mae_censored"],
         f"{prefix} MAE Oracle Uncensored": oracle["oracle_mae_uncensored"],
+        f"{prefix} Median Clipped Fraction": (
+            oracle["oracle_median_clipped_fraction"]
+        ),
     }
     if oracle_only:
         return oracle_output
