@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 from utility.metrics import (
     JointSurvivalEvaluation,
+    median_survival_time,
     compute_ipcw_brier_ibs,
     compute_oracle_brier_ibs,
     collect_metrics,
@@ -582,3 +583,24 @@ def test_clayton_aft_likelihood_matches_its_exact_generator():
                                       torch.as_tensor(sample.event, dtype=torch.float32))
     assert torch.isfinite(true_nll)
     assert true_nll < wrong_nll
+
+
+def test_median_survival_time_clips_non_crossing_curves_to_the_grid():
+    """Pin the median definition against a silent switch to extrapolation.
+
+    Delegating this to an extrapolating median moves ``oracle_ci`` and
+    ``oracle_mae`` by whole ranks while leaving ``oracle_ibs`` untouched, so
+    the definition is pinned here rather than left to the metric library.
+    """
+    grid = np.linspace(0.0, 100.0, 51)
+    crossing = np.linspace(1.0, 0.0, 51)
+    never = np.linspace(1.0, 0.7, 51)
+    flat = np.ones(51)
+
+    medians = median_survival_time(np.stack([crossing, never, flat]), grid)
+
+    assert medians[0] == grid[np.argmax(crossing <= 0.5)]
+    assert medians[1] == grid[-1]
+    assert medians[2] == grid[-1]
+    assert np.isfinite(medians).all()
+    assert (medians <= grid[-1]).all()

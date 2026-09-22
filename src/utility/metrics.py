@@ -15,7 +15,6 @@ from scipy.stats import kendalltau, pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error, r2_score
 from SurvivalEVAL import SurvivalEvaluator
 from SurvivalEVAL import concordance as survival_eval_concordance
-from SurvivalEVAL.Evaluations.util import predict_median_st
 
 
 def _as_arrays(survival_curves, time_points, event_times, event_indicators):
@@ -140,24 +139,22 @@ def _masked_mae(truth, prediction, mask):
 
 
 def median_survival_time(survival_curves, time_points):
-    """SurvivalEVAL median survival time, i.e. the S(t)=0.5 crossing.
+    """First grid crossing of S(t)<=0.5, with the last grid point as fallback.
 
-    Delegates to ``predict_median_st`` so the point predictions behind
-    ``oracle_ci`` and ``oracle_mae`` come from the same package that supplies
-    the concordance and Brier implementations. Relative to a plain grid search
-    this interpolates linearly between the bracketing grid points to locate the
-    exact crossing, and where a curve never reaches 0.5 it extrapolates along
-    the line anchored at (0, 1) instead of returning a constant, so
-    non-crossing subjects keep distinct and correctly ordered predictions.
-
-    A curve that is identically 1 has no finite median and yields ``inf``; that
-    is SurvivalEVAL's behaviour and is left intact, since such a prediction is
-    degenerate and should surface rather than be silently clipped.
+    The grid ends at a quantile of the observed training event times, so on a
+    censored cohort a large share of curves never reach 0.5 and their median
+    is not identified. Those subjects are clipped to the grid endpoint rather
+    than extrapolated past it, which keeps every prediction inside the horizon
+    the curves were evaluated on and keeps ``oracle_mae`` bounded. The cost is
+    that they tie, and concordance resolves a tied pair at half credit.
     """
     curves = np.asarray(survival_curves, dtype=float)
     grid = np.asarray(time_points, dtype=float)
-    medians = predict_median_st(curves, grid, "Linear")
-    return np.atleast_1d(medians).astype(float)
+    medians = np.full(len(curves), float(grid[-1]), dtype=float)
+    crossed = curves <= 0.5
+    hit = crossed.any(axis=1)
+    medians[hit] = grid[np.argmax(crossed, axis=1)[hit]]
+    return medians
 
 
 def censoring_rate(event_indicators):
