@@ -1,6 +1,6 @@
 schema_version: 1
 workflow: {target_name: semi_synthetic}
-resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: c2i-colon}
+resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: anonymous}
 study:
   name: semi-synthetic
   stage: pilot

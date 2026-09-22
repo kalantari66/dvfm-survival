@@ -3,7 +3,8 @@
 Repository structure, reproducibility protocol and development rules for autonomous coding agents
 working in the DVFM survival repository. It covers how the repository is put together and how to
 change it safely — not what the experiments found. For install and run commands see
-[`README.md`](README.md); for the experimental protocols see [`docs/`](docs).
+[`README.md`](README.md); the experimental protocols are defined by the configurations in
+[`configs/`](configs/) and the generators in [`src/utility/`](src/utility/).
 
 ## Structure
 
@@ -78,8 +79,7 @@ update, together:
 3. the consumer in `src/experiments/runner.py` or the relevant model;
 4. the GWF target in `workflows/` if the field affects resources or target naming;
 5. `tests/test_config.py`; and
-6. the protocol document that describes it (`docs/SYNTHETIC.md`, `docs/TUNING.md`, or
-   `docs/DGP.md`).
+6. the configuration-schema section of `README.md`, if the field is user-facing.
 
 A change that alters the meaning of an existing study needs a new config and a new output
 directory, so that old artifacts remain interpretable.
@@ -115,10 +115,11 @@ confirm a config change is well formed.
 
 | Topic | Source |
 |---|---|
-| Primary synthetic protocol | [`docs/SYNTHETIC.md`](docs/SYNTHETIC.md) |
-| Data-generating processes and latent definitions | [`docs/DGP.md`](docs/DGP.md) |
-| Hyperparameter-tuning protocol | [`docs/TUNING.md`](docs/TUNING.md) |
-| Figure and table specifications | [`docs/FIGURES.md`](docs/FIGURES.md) |
-| Vendored code and attribution | [`docs/SOURCE_NOTES.md`](docs/SOURCE_NOTES.md), [`src/sota/README.md`](src/sota/README.md) |
-| Reference-implementation parameter audit | [`docs/PARAMETER_AUDIT.md`](docs/PARAMETER_AUDIT.md) |
+| Primary synthetic protocol | [`configs/synthetic.yaml`](configs/synthetic.yaml) |
+| Semi-synthetic protocol | [`configs/semi_synthetic.yaml`](configs/semi_synthetic.yaml) |
+| Data-generating processes and latent definitions | [`src/utility/synthetic.py`](src/utility/synthetic.py), [`src/utility/semisynthetic.py`](src/utility/semisynthetic.py) |
+| Hyperparameter search spaces and selection | [`configs/semi_synthetic_tuning.yaml`](configs/semi_synthetic_tuning.yaml) |
+| Metric definitions | [`src/utility/metrics.py`](src/utility/metrics.py) |
+| Figure and table definitions | [`notebooks/`](notebooks/) |
 | Environment and run commands | [`README.md`](README.md), [`environment.yml`](environment.yml) |
+

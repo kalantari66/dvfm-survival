@@ -1,7 +1,7 @@
 """State-of-the-art survival baselines used by DVFM experiments.
 
 Models copied or adapted from external repositories keep their provenance in
-``src/sota/README.md``. Overlapping baselines deliberately delegate to the
+their own module header. Overlapping baselines deliberately delegate to the
 paper's preserved reference implementations.
 """
 

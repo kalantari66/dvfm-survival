@@ -4,9 +4,10 @@ Research code for **Deep Variational Frailty Models (DVFM)** under dependent rig
 
 The repository asks one falsifiable question: under which structural conditions can a
 shared-latent generative model recover the event-time distribution or the dependence-generating
-frailty from right-censored observations? See [`docs/SYNTHETIC.md`](docs/SYNTHETIC.md) for the
-primary synthetic protocol, [`docs/DGP.md`](docs/DGP.md) for the data-generating processes, and
-[`AGENTS.md`](AGENTS.md) for the invariants any change must preserve.
+frailty from right-censored observations? The study protocols are defined by the configurations in
+[`configs/`](configs/), the data-generating processes by [`src/utility/`](src/utility/), and the
+invariants any change must preserve by [`AGENTS.md`](AGENTS.md). The manuscript appendices give the
+formal statement of each protocol.
 
 ---
 
@@ -130,9 +131,9 @@ loudly if a run is incomplete.
 | `notebooks/semi_synthetic_results.ipynb` | `results/semi-synthetic/` | `paper/figures/semi_synthetic_*.pdf`, `paper/tables/*.tex` |
 | `notebooks/semi_synthetic_event_distribution.ipynb` | `results/semi-synthetic/` | source vs generated distribution figures |
 
-Run them from the repository root, or from `notebooks/` — both resolve the project root.
-[`docs/FIGURES.md`](docs/FIGURES.md) specifies what each figure shows and how each number is
-computed.
+Run them from the repository root, or from `notebooks/` — both resolve the project root. Each
+notebook is the specification of the figures and tables it writes: what a panel shows and how a
+number is computed is defined by the cell that produces it, not by a separate document.
 
 ---
 
@@ -187,13 +188,13 @@ src/experiments/  configuration schema, runner, recovery diagnostics
 src/sota/         comparison models behind a common adapter interface
 src/utility/      data-generating processes, metrics, splitting, runtime
 tests/            configuration and functional tests
-docs/             manuscript and research notes
+paper/            generated figures and tables consumed by the manuscript
 ```
 
-Comparison models live under [`src/sota/`](src/sota/); see
-[`src/sota/README.md`](src/sota/README.md) for provenance and the comparison between overlapping
-implementations. The primary synthetic benchmark is DVFM-only; comparison models are reserved for
-the semi-synthetic study.
+Comparison models live under [`src/sota/`](src/sota/), behind a common adapter interface; a module
+that was ported from an external implementation carries its provenance in its own header. The
+primary synthetic benchmark is DVFM-only; comparison models are reserved for the semi-synthetic
+study.
 
 ---
 
@@ -201,12 +202,12 @@ the semi-synthetic study.
 
 | Topic | Source |
 |---|---|
-| Primary synthetic protocol | [`docs/SYNTHETIC.md`](docs/SYNTHETIC.md) |
-| Data-generating processes and latent definitions | [`docs/DGP.md`](docs/DGP.md) |
-| Hyperparameter-tuning protocol | [`docs/TUNING.md`](docs/TUNING.md) |
-| Figure and table specifications | [`docs/FIGURES.md`](docs/FIGURES.md) |
-| Vendored code and attribution | [`docs/SOURCE_NOTES.md`](docs/SOURCE_NOTES.md) |
-| Reference-implementation parameter audit | [`docs/PARAMETER_AUDIT.md`](docs/PARAMETER_AUDIT.md) |
+| Primary synthetic protocol | [`configs/synthetic.yaml`](configs/synthetic.yaml) |
+| Semi-synthetic protocol | [`configs/semi_synthetic.yaml`](configs/semi_synthetic.yaml) |
+| Data-generating processes and latent definitions | [`src/utility/synthetic.py`](src/utility/synthetic.py), [`src/utility/semisynthetic.py`](src/utility/semisynthetic.py) |
+| Hyperparameter search spaces and selection | [`configs/semi_synthetic_tuning.yaml`](configs/semi_synthetic_tuning.yaml) |
+| Metric definitions | [`src/utility/metrics.py`](src/utility/metrics.py) |
+| Figure and table definitions | [`notebooks/`](notebooks/) |
 | Rules for autonomous coding agents | [`AGENTS.md`](AGENTS.md) |
 
 ---
