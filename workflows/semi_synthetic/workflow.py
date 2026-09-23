@@ -18,7 +18,12 @@ MODEL_AGGREGATOR = (
     PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_dataset_models.py"
 )
 AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_semi_synthetic_results.py"
+RECOVERY_RUNNER = PROJECT_ROOT / "scripts" / "run_recovery_baselines.py"
+RECOVERY_AGGREGATOR = PROJECT_ROOT / "scripts" / "aggregate_recovery_baselines.py"
 RESULT_FILES = ("results_raw.csv", "results_mean.csv", "results_std.csv", "dgp_diagnostics.csv")
+RECOVERY_FILES = ("recovery_rows.csv", "ibs_crosscheck.csv")
+# Models whose fits the recovery cross-check is verified against.
+RECOVERY_BENCHMARK_MODELS = ("coxph", "bayesian_cox_gamma_frailty")
 CROSS_DATASET_FILES = (
     *RESULT_FILES, "dataset_characteristics.csv",
     "accuracy_primary_and_sensitivity.csv",
@@ -27,7 +32,7 @@ CPU_MODELS = {
     "coxph", "rsf", "mtlr", "deepsurv",
     "bayesian_cox_gamma_frailty", "clayton_aft",
 }
-GPU_MODELS = {"hacsurv_2d", "dvfm"}
+GPU_MODELS = {"hacsurv_2d", "dvfm", "dvfm_z0"}
 
 
 def _options(resources: dict, model: str | None = None) -> dict[str, str]:
@@ -126,6 +131,91 @@ def aggregate_seeds(
     )
 
 
+def recovery_baselines_seed(
+    dataset: dict, seed_index: int, result_root: Path, resources: dict
+) -> AnonymousTarget:
+    """Score the CoxPH and Cox--Gamma frailty proxies for one dataset/seed."""
+    name = str(dataset["name"])
+    result_dir = result_root / name / "recovery_baselines" / f"seed_{seed_index}"
+    outputs = [result_dir / filename for filename in RECOVERY_FILES]
+    outputs.extend([result_dir / "resolved_config.json", result_dir / "_SUCCESS"])
+    checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
+    spec = f"""
+    set -euo pipefail
+    cd "{PROJECT_ROOT}"
+    mkdir -p "{result_dir}"
+    rm -f "{result_dir / '_SUCCESS'}"
+    echo "[GWF] $(date) starting recovery baselines: {name}/{seed_index}"
+    export PYTHONUNBUFFERED=1
+    export OMP_NUM_THREADS="{resources['cores']}"
+    export MKL_NUM_THREADS="{resources['cores']}"
+    export OPENBLAS_NUM_THREADS="{resources['cores']}"
+    export NUMEXPR_NUM_THREADS="{resources['cores']}"
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate dvfm
+    python "{RECOVERY_RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --seed-index "{seed_index}" --output-dir "{result_dir}" --validate-only
+    python "{RECOVERY_RUNNER}" --config "{EXPERIMENT_CONFIG}" --dataset "{name}" --seed-index "{seed_index}" --output-dir "{result_dir}"
+    {checks}
+    touch "{result_dir / '_SUCCESS'}"
+    echo "[GWF] $(date) completed recovery baselines: {name}/{seed_index}"
+    """
+    source_path = None
+    if dataset.get("path"):
+        source_path = Path(dataset["path"])
+        if not source_path.is_absolute():
+            source_path = PROJECT_ROOT / source_path
+    inputs = [
+        EXPERIMENT_CONFIG, RECOVERY_RUNNER, PROJECT_ROOT / "environment.yml",
+        PROJECT_ROOT / "pyproject.toml",
+        *sorted(path for package in ("dvfm", "experiments", "sota", "utility")
+                for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
+    ]
+    if source_path is not None:
+        inputs.append(source_path)
+    return AnonymousTarget(
+        inputs=[str(path) for path in inputs],
+        outputs=[str(path) for path in outputs],
+        options=_options(resources), spec=spec,
+    )
+
+
+def aggregate_recovery_baselines(
+    datasets: list[dict], seed_count: int, result_root: Path, resources: dict
+) -> AnonymousTarget:
+    """Merge recovery seeds and verify they refit the reported cohorts."""
+    names = [str(dataset["name"]) for dataset in datasets]
+    result_dir = result_root / "recovery_baselines"
+    inputs = [RECOVERY_AGGREGATOR, EXPERIMENT_CONFIG, *(
+        result_root / name / "recovery_baselines" / f"seed_{seed_index}" / filename
+        for name in names for seed_index in range(seed_count)
+        for filename in RECOVERY_FILES
+    ), *(
+        # The cross-check compares each refit against the benchmark fit, so the
+        # per-model seed aggregates must exist first.
+        result_root / name / model / "results_raw.csv"
+        for name in names for model in RECOVERY_BENCHMARK_MODELS
+    )]
+    outputs = [result_dir / filename for filename in RECOVERY_FILES]
+    outputs.append(result_dir / "_SUCCESS")
+    checks = "\n    ".join(f'test -s "{path}"' for path in outputs[:-1])
+    spec = f"""
+    set -euo pipefail
+    cd "{PROJECT_ROOT}"
+    mkdir -p "{result_dir}"
+    rm -f "{result_dir / '_SUCCESS'}"
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate dvfm
+    python "{RECOVERY_AGGREGATOR}" --config "{EXPERIMENT_CONFIG}" --result-root "{result_root}"
+    {checks}
+    touch "{result_dir / '_SUCCESS'}"
+    """
+    return AnonymousTarget(
+        inputs=[str(path) for path in inputs],
+        outputs=[str(path) for path in outputs],
+        options=_options(resources), spec=spec,
+    )
+
+
 def aggregate_models(
     dataset: dict, models: list[str], result_root: Path, resources: dict
 ) -> AnonymousTarget:
@@ -197,6 +287,19 @@ seed_count = (
     if isinstance(config["seeds"], list)
     else len(config["seeds"]["model"])
 )
+recovery_names = {
+    str(name).lower()
+    for name in config["evaluation"].get("recovery_baseline_datasets", [])
+}
+recovery_datasets = [
+    dataset for dataset in datasets
+    if str(dataset["name"]).lower() in recovery_names
+]
+if len(recovery_datasets) != len(recovery_names):
+    raise ValueError(
+        "evaluation.recovery_baseline_datasets names a dataset that is not "
+        "configured under data.datasets"
+    )
 
 gwf = Workflow()
 for dataset in datasets:
@@ -217,6 +320,22 @@ for dataset in datasets:
     gwf.target_from_template(
         f"{config['workflow']['target_name']}_{dataset['name']}_aggregate_models",
         aggregate_models(dataset, models, result_root, config["resources"]),
+    )
+for dataset in recovery_datasets:
+    for seed_index in range(seed_count):
+        gwf.target_from_template(
+            f"{config['workflow']['target_name']}_{dataset['name']}"
+            f"_recovery_baselines_seed_{seed_index}",
+            recovery_baselines_seed(
+                dataset, seed_index, result_root, config["resources"]
+            ),
+        )
+if recovery_datasets:
+    gwf.target_from_template(
+        f"{config['workflow']['target_name']}_aggregate_recovery_baselines",
+        aggregate_recovery_baselines(
+            recovery_datasets, seed_count, result_root, config["resources"]
+        ),
     )
 gwf.target_from_template(
     f"{config['workflow']['target_name']}_aggregate",

@@ -40,6 +40,12 @@ from utility.splitting import (
 from dvfm.training import train_dvfm
 
 
+# DVFM and its matched no-frailty ablation are separate models: separate jobs,
+# separate result directories and separate rows. They share every setting but
+# the latent dimension, which the configuration expresses with a YAML merge.
+DVFM_VARIANTS = {"dvfm": "DVFM", "dvfm_z0": "DVFM-z0"}
+
+
 def _deep_update(base: dict, update: dict) -> dict:
     """Recursively apply a dataset's selected model hyperparameters."""
     resolved = deepcopy(base)
@@ -308,8 +314,10 @@ def _fit_one_split(
             "median": median, "survival": survival,
         }
 
-    if "dvfm" in enabled:
-        c = model_cfg["dvfm"]
+    for variant, display in DVFM_VARIANTS.items():
+        if variant not in enabled:
+            continue
+        c = model_cfg[variant]
         train_loader = DataLoader(
             SurvivalDataset(model_train.X, model_train.time, model_train.event),
             batch_size=int(c["batch_size"]),
@@ -361,7 +369,7 @@ def _fit_one_split(
         elif checkpoint != "final":
             raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
         frailty_summary = {}
-        if latent_output_dir is not None:
+        if latent_output_dir is not None and model.encoder is not None:
             from .latent_recovery import export_latent_recovery
 
             # Diagnostic DataLoader iteration must not alter prediction MC draws.
@@ -369,7 +377,7 @@ def _fit_one_split(
                 latent_metrics = export_latent_recovery(
                     model, model_validation, model_test,
                     validation_indices, test_indices,
-                    latent_output_dir, {**context, "Model": "DVFM", "Checkpoint": checkpoint},
+                    latent_output_dir, {**context, "Model": display, "Checkpoint": checkpoint},
                     int(c["batch_size"]), device,
                 )
             if not latent_metrics.empty:
@@ -397,7 +405,7 @@ def _fit_one_split(
         median = get_median_survival_time(
             survival, model_time_points
         ) * time_scale
-        predictions["DVFM"] = {
+        predictions[display] = {
             "median": median,
             "survival": survival,
             "learned_gate": float(
@@ -421,7 +429,7 @@ def _fit_one_split(
                 model, np.mean(train.X, axis=0),
                 int(eval_cfg.get("dependence_samples", 2000)), device,
             )
-            predictions["DVFM"].update({
+            predictions[display].update({
                 "learned_conditional_kendall_tau": learned_tau,
                 "conditional_kendall_tau_error": learned_tau - float(target_tau),
                 "absolute_conditional_kendall_tau_error": abs(learned_tau - float(target_tau)),
@@ -433,7 +441,7 @@ def _fit_one_split(
                 batch_size=int(eval_cfg.get("joint_model_batch_size", c["batch_size"])),
                 seed=0, device=device,
             )
-            predictions["DVFM"]["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+            predictions[display]["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
                 joint_prediction, joint_evaluation
             )
 
@@ -649,7 +657,7 @@ def run(cfg: dict) -> pd.DataFrame:
                             ),
                         )
                     joint_evaluation = None
-                    joint_models = {"dvfm", "hacsurv_2d"}
+                    joint_models = {*DVFM_VARIANTS, "hacsurv_2d"}
                     enabled_models = {
                         str(name).lower() for name in cfg["models"]["enabled"]
                     }
@@ -669,40 +677,47 @@ def run(cfg: dict) -> pd.DataFrame:
                         )
                     base_cfg = deepcopy(cfg)
                     base_cfg["models"] = deepcopy(cfg["models"])
-                    base_cfg["models"]["enabled"] = [name for name in cfg["models"]["enabled"] if str(name).lower() != "dvfm"]
+                    base_cfg["models"]["enabled"] = [
+                        name for name in cfg["models"]["enabled"]
+                        if str(name).lower() not in DVFM_VARIANTS
+                    ]
                     if base_cfg["models"]["enabled"]:
                         split_rows, preds = _fit_one_split(
                             train, validation, test, base_cfg, device, context,
                             joint_evaluation=joint_evaluation,
                         )
                         rows.extend(split_rows)
-                    if "dvfm" in enabled_models:
-                        latent_dims = cfg["models"]["dvfm"].get(
-                            "latent_dims", [cfg["models"]["dvfm"]["latent_dim"]]
+                    # Each DVFM variant is fitted on its own so one variant's
+                    # numerical failure is recorded without losing the other.
+                    for variant in (
+                        name for name in DVFM_VARIANTS if name in enabled_models
+                    ):
+                        dvfm_cfg = deepcopy(cfg)
+                        dvfm_cfg["models"] = deepcopy(cfg["models"])
+                        dvfm_cfg["models"]["enabled"] = [variant]
+                        exports_latent = (
+                            int(dvfm_cfg["models"][variant]["latent_dim"]) == 1
+                            and cfg["evaluation"].get("save_latent_recovery", True)
                         )
-                        for latent_dim in latent_dims:
-                            dvfm_cfg = deepcopy(cfg)
-                            dvfm_cfg["models"] = deepcopy(cfg["models"])
-                            dvfm_cfg["models"]["enabled"] = ["dvfm"]
-                            dvfm_cfg["models"]["dvfm"]["latent_dim"] = int(latent_dim)
-                            try:
-                                split_rows, preds = _fit_one_split(
-                                    train, validation, test, dvfm_cfg, device, context,
-                                    latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
-                                                       if int(latent_dim) == 1 and cfg["evaluation"].get("save_latent_recovery", True) else None),
-                                    validation_indices=validation_idx, test_indices=test_idx,
-                                    joint_evaluation=joint_evaluation,
-                                )
-                                rows.extend(split_rows)
-                            except Exception as exc:
-                                rows.append({
-                                    **context, "Model": "DVFM", "latent_dim": int(latent_dim),
-                                    "Training Time Scale": training_time_scale(train),
-                                    "numerical_failure": True, "error": repr(exc),
-                                    "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
-                                    "oracle_median_clipped_fraction": np.nan,
-                                    "oracle_joint_survival_ise": np.nan,
-                                })
+                        try:
+                            split_rows, preds = _fit_one_split(
+                                train, validation, test, dvfm_cfg, device, context,
+                                latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                                   if exports_latent else None),
+                                validation_indices=validation_idx, test_indices=test_idx,
+                                joint_evaluation=joint_evaluation,
+                            )
+                            rows.extend(split_rows)
+                        except Exception as exc:
+                            rows.append({
+                                **context, "Model": DVFM_VARIANTS[variant],
+                                "latent_dim": int(dvfm_cfg["models"][variant]["latent_dim"]),
+                                "Training Time Scale": training_time_scale(train),
+                                "numerical_failure": True, "error": repr(exc),
+                                "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
+                                "oracle_median_clipped_fraction": np.nan,
+                                "oracle_joint_survival_ise": np.nan,
+                            })
                     diagnostics.append({
                         **context, "Censor Time Scale": generated.censor_time_scale,
                         "Source Samples": dgp.source_n_samples,

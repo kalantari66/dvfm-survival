@@ -14,7 +14,7 @@ CPU_MODELS = {
     "coxph", "rsf", "mtlr", "deepsurv",
     "bayesian_cox_gamma_frailty", "clayton_aft",
 }
-GPU_MODELS = {"hacsurv_2d", "dvfm"}
+GPU_MODELS = {"hacsurv_2d", "dvfm", "dvfm_z0"}
 
 
 def main() -> None:

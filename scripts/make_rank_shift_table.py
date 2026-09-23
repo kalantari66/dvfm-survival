@@ -33,6 +33,8 @@ MODEL_LABELS = {
 # This grouping is the table's claim, not a ranking.
 DEPENDENT_MODELS = ["DVFM", "ClaytonAFT", "HACSurv"]
 INDEPENDENT_MODELS = ["BayesianCoxGammaFrailty", "CoxPH", "DeepSurv", "RSF", "MTLR"]
+# Internal controls that share the benchmark's result files but never rank.
+ABLATION_MODELS = ["DVFM-z0"]
 
 
 def snake_case(name):
@@ -54,6 +56,9 @@ def canonicalize(frame):
              "bayesian_cox_gamma_frailty": "BayesianCoxGammaFrailty",
              "bayesiancoxgammafrailty": "BayesianCoxGammaFrailty"}
     out["model"] = out["model"].astype(str).str.lower().map(names).fillna(out["model"].astype(str))
+    # The matched no-frailty ablation is an internal control, not a competing
+    # method, so it never takes part in the benchmark ranking.
+    out = out[~out["model"].isin(ABLATION_MODELS)].copy()
     out["copula"] = out["copula"].astype(str).str.title()
     return out
 
