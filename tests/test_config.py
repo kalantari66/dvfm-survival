@@ -143,7 +143,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["dvfm"]["scale_link"] == "exp"
     assert set(cfg["models"]["enabled"]) == {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d",
-        "bayesian_cox_gamma_frailty", "dvfm", "rsf",
+        "bayesian_cox_gamma_frailty", "dvfm", "dvfm_z0", "rsf",
     }
 
 
