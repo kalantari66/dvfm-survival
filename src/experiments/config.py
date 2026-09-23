@@ -473,6 +473,61 @@ def validate_config(cfg: dict) -> None:
             dims = cfg["models"]["dvfm"].get("latent_dims", [cfg["models"]["dvfm"].get("latent_dim")])
             if not dims or any(int(dim) < 0 for dim in dims):
                 raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+    elif source == "real_latent_ablation":
+        for spec in semisynthetic_datasets(data):
+            reserved = set(spec["numeric_features"] + spec["categorical_features"]) | {
+                spec["time_column"], spec["event_column"],
+            }
+            external = spec.get("external_columns", [])
+            if not isinstance(external, list) or any(
+                not isinstance(column, str) or not column for column in external
+            ):
+                raise ValueError("dataset.external_columns must be a list of column names")
+            id_column = spec.get("id_column")
+            if id_column is not None and (not isinstance(id_column, str) or not id_column):
+                raise ValueError("dataset.id_column must be a non-empty string")
+            if (set(external) | ({id_column} - {None})) & reserved:
+                raise ValueError(
+                    "dataset.id_column and external_columns cannot be features or outcomes"
+                )
+            limit = spec.get("max_missing_fraction")
+            if limit is not None and (
+                isinstance(limit, bool) or not isinstance(limit, (int, float))
+                or not 0.0 <= float(limit) <= 1.0
+            ):
+                raise ValueError("dataset.max_missing_fraction must be null or in [0, 1]")
+            if not isinstance(spec.get("missing_indicators", False), bool):
+                raise ValueError("dataset.missing_indicators must be true or false")
+            if spec.get("subsample") or spec.get("drop_encoded_features"):
+                raise ValueError(
+                    "real_latent_ablation does not support subsample or drop_encoded_features"
+                )
+        expand_seed_streams(_require(cfg, "seeds", "config"))
+        if str(cfg["split"].get("stratify", "")).lower() != "time_event":
+            raise ValueError("real_latent_ablation splits require split.stratify: time_event")
+        if [str(name).lower() for name in cfg["models"]["enabled"]] != ["dvfm"]:
+            raise ValueError("real_latent_ablation requires models.enabled: [dvfm]")
+        dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
+        if not isinstance(dims, list) or any(
+            not isinstance(dim, int) or dim < 0 for dim in dims
+        ) or len(set(dims)) != len(dims):
+            raise ValueError("models.dvfm.latent_dims must be unique nonnegative integers")
+        if 0 not in dims or len(dims) < 2:
+            raise ValueError(
+                "models.dvfm.latent_dims must include the latent-free reference 0 "
+                "and at least one latent dimension"
+            )
+        if int(_require(cfg["evaluation"], "likelihood_samples", "evaluation")) < 1:
+            raise ValueError("evaluation.likelihood_samples must be positive")
+        horizon = cfg["evaluation"].get("likelihood_horizon")
+        if horizon is not None and (
+            isinstance(horizon, bool) or not isinstance(horizon, (int, float)) or horizon <= 0
+        ):
+            raise ValueError("evaluation.likelihood_horizon must be null or a positive time")
+        if cfg["evaluation"].get("time_grid") == "uniform_train_true_event_quantile":
+            raise ValueError(
+                "real_latent_ablation has no true event times; choose an observed-data time_grid"
+            )
     elif source in {"real_file", "semi_synthetic_file"}:
         study_seeds = _require(study, "seeds", "study")
         if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):

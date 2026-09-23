@@ -135,6 +135,66 @@ def scale_observed_time(data: SurvivalData, scale: float) -> SurvivalData:
     )
 
 
+def fit_dvfm(model_train: SurvivalData, model_validation: SurvivalData, c: dict, device):
+    """Build, train, and load the primary checkpoint of one DVFM.
+
+    Inputs are already on the model time scale. Returns the fitted model, the
+    training artifacts, the training loader used for aggregate-posterior
+    prediction, and the name of the loaded checkpoint.
+    """
+    train_loader = DataLoader(
+        SurvivalDataset(model_train.X, model_train.time, model_train.event),
+        batch_size=int(c["batch_size"]),
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        SurvivalDataset(
+            model_validation.X, model_validation.time, model_validation.event
+        ),
+        batch_size=int(c["batch_size"]),
+        shuffle=False,
+    )
+    model = DVFM(
+        input_dim=model_train.X.shape[1],
+        latent_dim=int(c["latent_dim"]),
+        encoder_hidden=list(c.get("encoder_hidden", [64, 32])),
+        decoder_hidden=list(c.get("decoder_hidden", [32, 64])),
+        dropout=float(c.get("dropout", 0.0)),
+        scale_link=str(c.get("scale_link", "softplus")),
+        latent_path=str(c.get("latent_path", "nonlinear")),
+        shape_mode=str(c.get("shape_mode", "conditional")),
+        latent_gate=str(c.get("latent_gate", "none")),
+        gate_initial_value=float(c.get("gate_initial_value", 0.9)),
+        gate_temperature=float(c.get("gate_temperature", 0.67)),
+        latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
+        logvar_min=float(c.get("logvar_min", -12.0)),
+        logvar_max=float(c.get("logvar_max", 8.0)),
+    ).to(device)
+    artifacts = train_dvfm(
+        model,
+        train_loader,
+        val_loader,
+        n_epochs=int(c["epochs"]),
+        lr=float(c["learning_rate"]),
+        beta_max=float(c["beta_max"]),
+        warmup_epochs=int(c["warmup_epochs"]),
+        free_bits=float(c["free_bits"]),
+        device=device,
+        checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
+        numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
+        weight_decay=float(c.get("weight_decay", 0.0)),
+        latent_group_lasso=float(c.get("latent_group_lasso", 0.0)),
+        gate_l1=float(c.get("gate_l1", 0.0)),
+        return_artifacts=True,
+    )
+    checkpoint = str(c.get("primary_checkpoint", "best_validation_elbo_post_warmup"))
+    if checkpoint == "best_validation_elbo_post_warmup":
+        model.load_state_dict(artifacts["best_validation_elbo_state"])
+    elif checkpoint != "final":
+        raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
+    return model, artifacts, train_loader, checkpoint
+
+
 def _fit_one_split(
     train: SurvivalData,
     validation: SurvivalData,
@@ -310,56 +370,9 @@ def _fit_one_split(
 
     if "dvfm" in enabled:
         c = model_cfg["dvfm"]
-        train_loader = DataLoader(
-            SurvivalDataset(model_train.X, model_train.time, model_train.event),
-            batch_size=int(c["batch_size"]),
-            shuffle=True,
+        model, artifacts, train_loader, checkpoint = fit_dvfm(
+            model_train, model_validation, c, device
         )
-        val_loader = DataLoader(
-            SurvivalDataset(
-                model_validation.X, model_validation.time, model_validation.event
-            ),
-            batch_size=int(c["batch_size"]),
-            shuffle=False,
-        )
-        model = DVFM(
-            input_dim=train.X.shape[1],
-            latent_dim=int(c["latent_dim"]),
-            encoder_hidden=list(c.get("encoder_hidden", [64, 32])),
-            decoder_hidden=list(c.get("decoder_hidden", [32, 64])),
-            dropout=float(c.get("dropout", 0.0)),
-            scale_link=str(c.get("scale_link", "softplus")),
-            latent_path=str(c.get("latent_path", "nonlinear")),
-            shape_mode=str(c.get("shape_mode", "conditional")),
-            latent_gate=str(c.get("latent_gate", "none")),
-            gate_initial_value=float(c.get("gate_initial_value", 0.9)),
-            gate_temperature=float(c.get("gate_temperature", 0.67)),
-            latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
-            logvar_min=float(c.get("logvar_min", -12.0)),
-            logvar_max=float(c.get("logvar_max", 8.0)),
-        ).to(device)
-        artifacts = train_dvfm(
-            model,
-            train_loader,
-            val_loader,
-            n_epochs=int(c["epochs"]),
-            lr=float(c["learning_rate"]),
-            beta_max=float(c["beta_max"]),
-            warmup_epochs=int(c["warmup_epochs"]),
-            free_bits=float(c["free_bits"]),
-            device=device,
-            checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
-            numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
-            weight_decay=float(c.get("weight_decay", 0.0)),
-            latent_group_lasso=float(c.get("latent_group_lasso", 0.0)),
-            gate_l1=float(c.get("gate_l1", 0.0)),
-            return_artifacts=True,
-        )
-        checkpoint = str(c.get("primary_checkpoint", "best_validation_elbo_post_warmup"))
-        if checkpoint == "best_validation_elbo_post_warmup":
-            model.load_state_dict(artifacts["best_validation_elbo_state"])
-        elif checkpoint != "final":
-            raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
         frailty_summary = {}
         if latent_output_dir is not None:
             from .latent_recovery import export_latent_recovery
@@ -538,6 +551,15 @@ def validate_inputs(cfg: dict) -> None:
         for spec in semisynthetic_datasets(data_cfg):
             load_semisynthetic_source(spec)
         return
+    if source == "real_latent_ablation":
+        from .real_latent_ablation import load_real_cohort
+        for spec in semisynthetic_datasets(data_cfg):
+            frame, _, _ = load_real_cohort(spec)
+            extra = [spec.get("id_column"), *spec.get("external_columns", [])]
+            missing = sorted({column for column in extra if column} - set(frame.columns))
+            if missing:
+                raise ValueError(f"{spec['name']} is missing columns: {missing}")
+        return
     _load_dataset(data_cfg, source)
 
 
@@ -557,6 +579,10 @@ def run(cfg: dict) -> pd.DataFrame:
         from .synthetic import run_synthetic_pilot
 
         rows = run_synthetic_pilot(cfg, out_dir, device).to_dict("records")
+    elif source == "real_latent_ablation":
+        from .real_latent_ablation import run_real_latent_ablation
+
+        rows = run_real_latent_ablation(cfg, out_dir, device).to_dict("records")
     elif source == "frailty_recovery_diagnostic":
         from .frailty_recovery import run_frailty_recovery_diagnostic
 

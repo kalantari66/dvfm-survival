@@ -76,9 +76,27 @@ comes from the two rows in bold.
 | **Primary synthetic** (DVFM only, `latent_dim` 0 vs 1) | `synthetic.yaml` | `synthetic` | `results/synthetic/` |
 | **Semi-synthetic benchmark** (12 datasets, 8 models) | `semi_synthetic.yaml` | `semi_synthetic` | `results/semi-synthetic/` |
 | Semi-synthetic hyperparameter tuning | `semi_synthetic_tuning.yaml` | `semi_synthetic_tuning` | `results/semi-synthetic-tuning/` |
+| PRO-ACT real-data latent ablation (DVFM `latent_dim` 0 vs 1) | `proact_latent_ablation.yaml` | `proact_latent_ablation` | `results/proact-latent-ablation/` |
 
 Tuning runs first and writes the per-dataset hyperparameters that
 `semi_synthetic.yaml` consumes under `models.tuned_by_dataset`.
+
+The PRO-ACT ablation reads a cohort built from the access-controlled raw form exports; the built
+file stays in the git-ignored `data/` directory:
+
+```bash
+python scripts/build_proact_death_cohort.py --raw-dir <PROACT_ALL_FORMS directory>
+dvfm-run --config configs/proact_latent_ablation.yaml
+```
+
+On the cluster, copy the raw forms to the config's `workflow.raw_dir` and run
+`workflows/proact_latent_ablation/workflow.py`, which builds the cohort on CPU and then fits on GPU.
+
+Death is the event and the last assessment day is the censoring time. Subjects absent from the
+mortality form have no recorded vital status and are excluded; covariates follow MENSA's
+single-event PRO-ACT set ([`src/utility/proact.py`](src/utility/proact.py)). A `latent_dim = 1`
+win shows the latent carries held-out signal the covariates do not. It is not a test of
+event-censoring dependence.
 
 ---
 
@@ -178,6 +196,15 @@ evaluation:     # time grid, primary metrics, saved artifacts
 | `uniform_train_observed_max` | `max_time_factor` x the longest observed training time | the default; a single order statistic, so one long follow-up sets the horizon |
 
 The first requires a data source that supplies true event times and raises otherwise.
+
+`data.source: real_latent_ablation` fits DVFM on a real cohort once per entry of
+`models.dvfm.latent_dims`, which must include the latent-free reference `0`; every dimension shares
+the split and model seed of its repeat. Each `data.datasets` entry takes the semi-synthetic
+dataset fields plus an optional `id_column` and `external_columns`, which are carried into the
+per-subject export but never used as features. `max_missing_fraction` drops configured covariates whose cohort-wide missing fraction exceeds it, before splitting, and records the decision in `feature_missingness.csv`. `missing_indicators: true` adds an unscaled 0/1 column for every covariate that is missing in the training split. `evaluation.likelihood_samples` sets the Monte
+Carlo sample count for the latent model's held-out ELBO, IWAE and margin likelihoods; the
+latent-free likelihood is exact. `evaluation.likelihood_horizon` (natural time units, optional) administratively censors the held-out likelihoods: a subject still free of both outcomes at the horizon contributes P(T > h, C > h | x). The run adds `paired_differences.csv`, `paired_summary.csv`,
+`latent_external_validation.csv` and `subjects/<dataset>_repeat_<i>.csv` to the outputs below.
 
 The loader supplies shared defaults, validates the schema, and expands `data.grid` into
 deterministic atomic scenarios. New generators should expose Kendall's tau and a target censoring

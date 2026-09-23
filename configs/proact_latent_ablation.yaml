@@ -1,0 +1,87 @@
+schema_version: 1
+# raw_dir holds the access-controlled PRO-ACT form exports; it is under the
+# git-ignored data/ directory and must be populated on the cluster by hand.
+workflow: {target_name: proact_latent_ablation, raw_dir: data/raw/2024_09_020_PROACT_ALL_FORMS}
+# 20 DVFM fits take about an hour on one consumer GPU.
+resources: {cores: 4, memory: 25g, walltime: "04:00:00", partition: gpu-l40s, account: anonymous}
+study:
+  name: proact-latent-ablation
+  stage: pilot
+  # Real-data appendix: does a scalar latent carry held-out signal the
+  # covariates do not? A d_z=1 win is not a test of event-censoring dependence;
+  # a mixture of Weibulls can win on marginal flexibility alone.
+  output_dir: results/proact-latent-ablation
+# Repeat i uses seed i for the split and for model initialization. Both latent
+# dimensions see the identical split and seed, so differences are paired.
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: real_latent_ablation
+  datasets:
+    # Built by scripts/build_proact_death_cohort.py from the raw PRO-ACT forms.
+    # E is death (Death_Days when Subject_Died == Yes); C is the last day seen
+    # on an assessment form. Only subjects on the mortality form are included:
+    # without it neither outcome is observed. Covariates are MENSA's
+    # single-event PRO-ACT set.
+    - name: proact
+      path: data/proact_death.csv
+      time_column: time
+      event_column: event
+      id_column: subject_id
+      numeric_features: [Age, Onset_Delta, ALSFRS_R_Total, DiseaseProgressionRate, FVC_Mean]
+      categorical_features: [Sex, Site_of_Onset, Subject_used_Riluzole]
+      # Missingness is largely trial-level (e.g. ALSFRS-R 43%, site of onset
+      # 40%), so each imputed covariate also gets a 0/1 missing column.
+      missing_indicators: true
+      # Post-baseline functional decline: never a model input, only an
+      # external check of the posterior latent.
+      external_columns: [alsfrs_r_decline_per_month]
+split:
+  strategy: holdout
+  stratify: time_event
+  time_bins: 20
+  validation_fraction: 0.10
+  test_fraction: 0.20
+models:
+  enabled: [dvfm]
+  dvfm:
+    # 0 is the exact-likelihood, latent-free reference every other dim is
+    # paired against.
+    latent_dims: [0, 1]
+    # Set by hand for PRO-ACT, not tuned: SUPPORT's architecture and weight
+    # decay, no dropout, learning rate 0.001, and the semi-synthetic default
+    # latent-loading L1 of 0.1.
+    encoder_hidden: [64, 32]
+    decoder_hidden: [32, 64]
+    dropout: 0.0
+    learning_rate: 0.001
+    weight_decay: 0.00001
+    scale_link: exp
+    latent_loading_l1: 0.1
+    epochs: 200
+    batch_size: 64
+    beta_max: 1.0
+    warmup_epochs: 50
+    checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    logvar_min: -12.0
+    logvar_max: 8.0
+    free_bits: 0.0
+    mc_samples: 100
+evaluation:
+  n_time_points: 100
+  # No true event times exist. At the 0.9 quantile of training death times
+  # (~560 days) the censoring survival used by IPCW is ~0.56 and ~460 subjects
+  # remain at risk; the observed-max default would extrapolate to ~4500 days.
+  time_grid: uniform_train_event_quantile
+  grid_max_quantile: 0.9
+  # Monte Carlo samples per held-out subject for the latent model's ELBO, IWAE
+  # and margin likelihoods; the latent-free reference is exact.
+  likelihood_samples: 1000
+  # Held-out likelihoods stop at 5 years (5 x 365.25 days): a subject still
+  # free of death and censoring then contributes P(T > 5y, C > 5y | x), not a
+  # density, so no model is scored far beyond its follow-up support. Training
+  # and the survival-curve grid are unaffected.
+  likelihood_horizon: 1826.25
+  save_predictions: false
