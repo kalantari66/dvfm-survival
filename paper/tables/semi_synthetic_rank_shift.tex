@@ -6,23 +6,23 @@
 \centering
 \scriptsize
 \setlength{\tabcolsep}{3.5pt}
-\caption{\textbf{Dependence is what the rank responds to.} Model rank at $\tau=0 \to \tau=0.5$, median over the 12 semi-synthetic datasets; rank 1 is best, so a fall is an improvement. Every model that relaxes independent censoring improves on all three metrics; every model that assumes it degrades on all three.}
+\caption{\textbf{Dependence is what the rank responds to.} Model rank at $\tau=0 \to \tau=0.5$, median over the 12 semi-synthetic datasets; rank 1 is best, so a fall is an improvement. Every model that relaxes independent censoring improves on all three metrics. Every model that assumes it degrades on Oracle IBS and Oracle MAE, and all but the Cox--Gamma frailty model degrade on Oracle CI as well.}
 \label{tab:semi_synthetic_rank_shift}
 \begin{tabular}{@{}lccc@{}}
 \toprule
 Model & Oracle IBS & Oracle CI & Oracle MAE \\
 \midrule
 \multicolumn{4}{@{}l}{\emph{Relaxes independent censoring}} \\
-\textbf{DVFM (ours)} & \cellcolor{highrank}$5.45\,\textcolor{improvGreen}{\to}\,3.23$ & \cellcolor{highrank}$4.00\,\textcolor{improvGreen}{\to}\,2.85$ & \cellcolor{highrank}$4.80\,\textcolor{improvGreen}{\to}\,3.06$ \\
-Clayton AFT & \cellcolor{highrank}$7.20\,\textcolor{improvGreen}{\to}\,5.61$ & \cellcolor{highrank}$5.80\,\textcolor{improvGreen}{\to}\,2.98$ & \cellcolor{highrank}$6.90\,\textcolor{improvGreen}{\to}\,5.16$ \\
-HACSurv & \cellcolor{highrank}$4.30\,\textcolor{improvGreen}{\to}\,3.19$ & \cellcolor{highrank}$3.70\,\textcolor{improvGreen}{\to}\,2.59$ & \cellcolor{highrank}$3.90\,\textcolor{improvGreen}{\to}\,3.30$ \\
+\textbf{DVFM (ours)} & \cellcolor{highrank}$4.15\,\textcolor{improvGreen}{\to}\,2.49$ & \cellcolor{highrank}$4.60\,\textcolor{improvGreen}{\to}\,3.86$ & \cellcolor{highrank}$4.45\,\textcolor{improvGreen}{\to}\,2.45$ \\
+Clayton AFT & \cellcolor{highrank}$6.00\,\textcolor{improvGreen}{\to}\,3.64$ & \cellcolor{highrank}$6.70\,\textcolor{improvGreen}{\to}\,5.81$ & \cellcolor{highrank}$5.20\,\textcolor{improvGreen}{\to}\,3.10$ \\
+HACSurv & \cellcolor{highrank}$4.00\,\textcolor{improvGreen}{\to}\,2.20$ & \cellcolor{highrank}$3.45\,\textcolor{improvGreen}{\to}\,2.89$ & \cellcolor{highrank}$4.10\,\textcolor{improvGreen}{\to}\,2.20$ \\
 \midrule
 \multicolumn{4}{@{}l}{\emph{Assumes independent censoring}} \\
-DeepSurv & \cellcolor{lowrank}$4.20\,\textcolor{improvRed}{\to}\,4.66$ & \cellcolor{lowrank}$5.30\,\textcolor{improvRed}{\to}\,5.61$ & \cellcolor{lowrank}$4.15\,\textcolor{improvRed}{\to}\,4.54$ \\
-RSF & \cellcolor{lowrank}$5.20\,\textcolor{improvRed}{\to}\,5.81$ & \cellcolor{lowrank}$5.85\,\textcolor{improvRed}{\to}\,6.39$ & \cellcolor{lowrank}$5.35\,\textcolor{improvRed}{\to}\,6.22$ \\
-CG Frailty & \cellcolor{lowrank}$2.15\,\textcolor{improvRed}{\to}\,2.79$ & \cellcolor{lowrank}$2.70\,\textcolor{improvRed}{\to}\,3.88$ & \cellcolor{lowrank}$1.90\,\textcolor{improvRed}{\to}\,3.33$ \\
-MTLR & \cellcolor{lowrank}$6.80\,\textcolor{improvRed}{\to}\,7.71$ & \cellcolor{lowrank}$5.55\,\textcolor{improvRed}{\to}\,6.49$ & \cellcolor{lowrank}$6.50\,\textcolor{improvRed}{\to}\,6.61$ \\
-CoxPH & \cellcolor{lowrank}$1.30\,\textcolor{improvRed}{\to}\,2.89$ & \cellcolor{lowrank}$2.85\,\textcolor{improvRed}{\to}\,4.56$ & \cellcolor{lowrank}$1.75\,\textcolor{improvRed}{\to}\,3.24$ \\
+RSF & \cellcolor{lowrank}$6.90\,\textcolor{improvRed}{\to}\,7.30$ & \cellcolor{lowrank}$6.10\,\textcolor{improvRed}{\to}\,6.82$ & \cellcolor{lowrank}$6.70\,\textcolor{improvRed}{\to}\,7.19$ \\
+MTLR & \cellcolor{lowrank}$4.85\,\textcolor{improvRed}{\to}\,5.79$ & \cellcolor{lowrank}$5.65\,\textcolor{improvRed}{\to}\,5.97$ & \cellcolor{lowrank}$5.20\,\textcolor{improvRed}{\to}\,5.86$ \\
+DeepSurv & \cellcolor{lowrank}$5.05\,\textcolor{improvRed}{\to}\,6.70$ & \cellcolor{lowrank}$4.80\,\textcolor{improvRed}{\to}\,5.19$ & \cellcolor{lowrank}$4.85\,\textcolor{improvRed}{\to}\,6.44$ \\
+CG Frailty & \cellcolor{lowrank}$1.55\,\textcolor{improvRed}{\to}\,3.66$ & \cellcolor{highrank}$2.05\,\textcolor{improvGreen}{\to}\,1.79$ & \cellcolor{lowrank}$1.70\,\textcolor{improvRed}{\to}\,3.64$ \\
+CoxPH & \cellcolor{lowrank}$3.25\,\textcolor{improvRed}{\to}\,5.91$ & \cellcolor{lowrank}$2.20\,\textcolor{improvRed}{\to}\,3.38$ & \cellcolor{lowrank}$3.70\,\textcolor{improvRed}{\to}\,6.20$ \\
 \bottomrule
 \end{tabular}
 \end{wraptable}

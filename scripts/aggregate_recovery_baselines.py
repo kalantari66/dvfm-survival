@@ -45,7 +45,6 @@ def _benchmark_rows(result_root: Path, dataset: str) -> pd.DataFrame:
             "dataset": frame["Dataset"],
             "copula": frame["Copula"].astype(str).str.lower(),
             "target_kendall_tau": pd.to_numeric(frame["Target Kendall Tau"]),
-            "target_censoring_rate": pd.to_numeric(frame["Target Censoring Rate"]),
             "repeat": pd.to_numeric(frame["Repeat"]),
             "model": model,
             "benchmark_censoring_rate": pd.to_numeric(frame["Target Censoring Rate"]),
