@@ -436,5 +436,5 @@ evaluation:
   # Scalar-frailty recovery baselines for the shared-latent comparison: refit
   # CoxPH and Cox--Gamma on the same cohorts and score their frailty proxies
   # against the true latent, on the datasets carrying subject-level figures.
-  recovery_baseline_datasets: [support, seer_brain]
+  recovery_baseline_datasets: [seer_brain, seer_liver, seer_stomach]
   recovery_baseline_kendall_tau: 0.5
