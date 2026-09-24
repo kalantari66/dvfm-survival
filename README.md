@@ -1,150 +1,293 @@
-# DVFM Survival — Reference-Parameter Repository
+# DVFM Survival
 
-Clean GitHub repository for **Deep Variational Frailty Models (DVFM)** under dependent censoring.
+Research code for **Deep Variational Frailty Models (DVFM)** under dependent right censoring.
 
-This revision uses the supplied implementation directly and restores the active reference settings, especially **200 DVFM epochs**. The earlier five-epoch/sixty-epoch smoke configuration has been removed because it was not suitable for comparing model performance.
+The repository asks one falsifiable question: under which structural conditions can a
+shared-latent generative model recover the event-time distribution or the dependence-generating
+frailty from right-censored observations? The study protocols are defined by the configurations in
+[`configs/`](configs/), the data-generating processes by [`src/utility/`](src/utility/), and the
+invariants any change must preserve by [`AGENTS.md`](AGENTS.md). The manuscript appendices give the
+formal statement of each protocol.
 
-## What is unchanged
+---
 
-The following are imported from `src/dvfm/reference_core.py`, which is a package-compatible copy of the supplied `VAE_montcarlo.py`:
+## 1. Install
 
-- DVFM encoder and decoder
-- Weibull event/censoring likelihood
-- censored ELBO
-- KL annealing and optimizer loop
-- aggregate-posterior Monte Carlo prediction
-- synthetic dependent-censoring generators
-- DeepSurv implementation
-- MTLR implementation
-- oracle and IPCW Brier-score functions
+```bash
+conda env create -f environment.yml
+conda activate dvfm
+```
 
-The only compatibility edit in the package copy is a fallback from SciPy's removed `trapz` import to NumPy's equivalent. The original uploaded scripts are preserved unchanged in `reference/`.
+`environment.yml` is the portable specification. `environment.lock.yml` is the exact resolved
+environment that produced the published results, captured from the cluster with
+`conda env export`; it is Linux/x86-64 specific and rebuilds in two steps, because the project
+itself is installed from the working tree rather than from an index:
 
-## Reference parameters
+```bash
+conda env create -n dvfm-lock -f environment.lock.yml
+conda activate dvfm-lock
+pip install -e . --no-deps
+```
 
-The main values are:
+`--no-deps` is required: without it pip re-resolves this project's dependency ranges and can
+upgrade packages the lock just pinned.
+
+One environment contains [GWF](https://gwf.app/), the editable project, the test extras, and the
+CUDA 13.0 PyTorch build. GWF is a Python workflow manager that turns a script of target
+definitions into SLURM jobs, tracking which have already completed; this repository uses it to
+submit each study to a cluster. Verify the environment with:
+
+```bash
+gwf --version
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+dvfm-run --help
+```
+
+If `conda` is not on `PATH` in Windows Command Prompt, activate it directly with
+`CALL %USERPROFILE%\miniconda3\condabin\conda.bat activate dvfm`, or open an Anaconda Prompt.
+
+---
+
+## 2. Quick start
+
+Everything runs through one console script. The study is chosen by `--config`; nothing is
+selected by editing defaults.
+
+```bash
+# 1. Resolve and validate a configuration without training (seconds)
+dvfm-run --config configs/synthetic.yaml --validate-only
+
+# 2. A real study (hours; normally submitted through GWF -- see section 4)
+dvfm-run --config configs/synthetic.yaml
+```
+
+`--validate-only` is the cheapest way to confirm a config change is well formed. Run it before
+every submission.
+
+---
+
+## 3. The studies
+
+Each study is one config, one output directory, and one GWF workflow. Everything in the paper
+comes from the two rows in bold.
+
+| Study | Config | Workflow | Output |
+|---|---|---|---|
+| **Primary synthetic** (DVFM only, `latent_dim` 0 vs 1) | `synthetic.yaml` | `synthetic` | `results/synthetic/` |
+| **Semi-synthetic benchmark** (12 datasets, 8 models) | `semi_synthetic.yaml` | `semi_synthetic` | `results/semi-synthetic/` |
+| Semi-synthetic hyperparameter tuning | `semi_synthetic_tuning.yaml` | `semi_synthetic_tuning` | `results/semi-synthetic-tuning/` |
+| PRO-ACT real-data latent ablation (DVFM `latent_dim` 0 vs 1) | `proact_latent_ablation.yaml` | `proact_latent_ablation` | `results/proact-latent-ablation/` |
+
+Tuning runs first and writes the per-dataset hyperparameters that
+`semi_synthetic.yaml` consumes under `models.tuned_by_dataset`.
+
+The PRO-ACT ablation reads a cohort built from the access-controlled raw form exports; the built
+file stays in the git-ignored `data/` directory:
+
+```bash
+python scripts/build_proact_death_cohort.py --raw-dir <PROACT_ALL_FORMS directory>
+dvfm-run --config configs/proact_latent_ablation.yaml
+```
+
+On the cluster, copy the raw forms to the config's `workflow.raw_dir` and run
+`workflows/proact_latent_ablation/workflow.py`, which builds the cohort on CPU and then fits on GPU.
+
+Death is the event and the last assessment day is the censoring time. Subjects absent from the
+mortality form have no recorded vital status and are excluded; covariates follow MENSA's
+single-event PRO-ACT set ([`src/utility/proact.py`](src/utility/proact.py)). A `latent_dim = 1`
+win shows the latent carries held-out signal the covariates do not. It is not a test of
+event-censoring dependence.
+
+---
+
+## 4. Running on the cluster
+
+Workflows are [GWF](https://gwf.app/) targets: each `workflow.py` declares the jobs a study needs
+and their dependencies, and GWF submits only the ones that are not already done. Create the
+environment once on the login node, then submit:
+
+```bash
+conda activate dvfm
+
+gwf -f workflows/synthetic/workflow.py status
+gwf -f workflows/synthetic/workflow.py run
+```
+
+Replace `synthetic` with any workflow name from the table above. Always check `status` before
+`run`.
+
+SLURM resources (cores, memory, walltime, partition, account) live in the `resources:` block of
+the study's YAML, not in the workflow file. The workflow activates the same `dvfm` environment on
+the compute node, and the configs set `compute.device: cuda` so a job fails loudly rather than
+falling back silently to CPU.
+
+The semi-synthetic benchmark is split finely: one GPU target per dataset × model × seed, followed
+by CPU aggregation targets that assemble seed-, model-, and dataset-level summaries. Partial
+progress is therefore resumable — rerunning `run` submits only what is missing.
+
+---
+
+## 5. What a run produces
+
+Each study writes below its `study.output_dir`:
 
 ```text
-DVFM epochs       200
-DVFM learning rate 0.001
-latent dimension   20
-batch size          64
-beta max             1.0
-warm-up epochs      50
-free bits             0
-MC samples          100
-DeepSurv epochs     200
-MTLR epochs         200
-MTLR bins           200
-synthetic N       10000
-features             10
-test fraction       0.30
-time-grid points    1000
+results/<study>/
+  _SUCCESS                  marker written only on a complete run
+  run_manifest.csv          one row per fit, with status
+  results_raw.csv           one row per fit × checkpoint × prediction mode
+  results_mean.csv          aggregated across repeats
+  results_std.csv
+  resolved_config.yaml      the fully expanded configuration actually used
+  dvfm_diagnostics.csv      latent diagnostics (DVFM studies)
+  latent_recovery_test.csv  per-subject recovered vs true latent, where defined
+  recovery_baselines/       CoxPH and Cox--Gamma frailty recovery, with the
+                            oracle-IBS cross-check proving the refit cohorts
+                            match the benchmark ones
 ```
 
-See [`PARAMETER_AUDIT.md`](PARAMETER_AUDIT.md) for the complete mapping.
+`results/`, `data/` and `figures/` are git-ignored. They are outputs — never hand-edit them, and
+never commit them.
 
-## Installation
+When reading results, filter to `is_primary_checkpoint == true` and
+`prediction_mode == aggregate_posterior`. Other rows exist for ablation and are not the reported
+numbers.
+
+---
+
+## 6. Analysis and figures
+
+Notebooks read completed artifacts and write into `paper/`. They never fit a model, and they fail
+loudly if a run is incomplete.
+
+| Notebook | Reads | Writes |
+|---|---|---|
+| `notebooks/synthetic_results.ipynb` | `results/synthetic/` | `paper/figures/synthetic_*.pdf` |
+| `notebooks/semi_synthetic_results.ipynb` | `results/semi-synthetic/` | `paper/figures/semi_synthetic_*.pdf`, `paper/tables/*.tex` |
+| `notebooks/semi_synthetic_event_distribution.ipynb` | `results/semi-synthetic/` | source vs generated distribution figures |
+
+Run them from the repository root, or from `notebooks/` — both resolve the project root. Each
+notebook is the specification of the figures and tables it writes: what a panel shows and how a
+number is computed is defined by the cell that produces it, not by a separate document.
+
+---
+
+## 7. Configuration schema
+
+Every runnable YAML uses the same top-level sections:
+
+```yaml
+schema_version: 1
+workflow:       # optional GWF target settings
+resources:      # SLURM cores, memory, walltime, partition, account
+study:          # name, stage, output directory
+seeds:          # repeat seeds; seed i drives generation, splitting and model init
+compute:        # device and CPU threading
+data:           # generator or file source, plus scenarios or a grid
+split:          # holdout or cross-validation with a disjoint validation partition
+preprocessing:  # train-fitted covariate transforms
+models:         # enabled models and their settings
+evaluation:     # time grid, primary metrics, saved artifacts
+```
+
+`evaluation.time_grid` selects the shared survival-curve evaluation horizon:
+
+| value | horizon | use |
+|---|---|---|
+| `uniform_train_true_event_quantile` | `grid_max_quantile` of the training split's **true** event times | both primary studies; matches what the oracle metrics score against |
+| `uniform_train_event_quantile` | `grid_max_quantile` of the **observed** event times, uncensored subjects only | truncated by censoring; retained for sources without a generating truth |
+| `uniform_train_observed_max` | `max_time_factor` x the longest observed training time | the default; a single order statistic, so one long follow-up sets the horizon |
+
+The first requires a data source that supplies true event times and raises otherwise.
+
+`evaluation.recovery_baseline_datasets` and `evaluation.recovery_baseline_kendall_tau` scope the
+scalar-frailty recovery baselines. For each named dataset the `recovery_baselines` targets refit
+CoxPH and Cox--Gamma on the regenerated cohort, score their frailty proxies against the true
+latent, and cross-check each refit against the benchmark fit's oracle IBS. They require `coxph` and
+`bayesian_cox_gamma_frailty` in `models.enabled`, and a positive tau, since shared-latent recovery
+is undefined under independence.
+
+`dvfm_z0` is DVFM's matched no-frailty ablation and is enabled as its own model, so it gets its own
+jobs, result directory and rows under the name `DVFM-z0`. It is defined by a YAML merge of the
+`dvfm` block with `latent_dim: 0`, in `models` and again in each dataset's `tuned_by_dataset` entry,
+and validation rejects any other difference between the two: the ablation must share the
+architecture and tuned settings of the model it ablates. It sees the same cohorts and splits
+because generation and splitting run from the same seed streams, independently of the model.
+
+Being a model rather than a variant, it appears in every model-keyed artifact. Analysis code must
+exclude it from rankings that compare methods, since it is an internal control rather than a
+competing model; the notebooks and `make_rank_shift_table.py` filter it by name.
+
+`data.source: real_latent_ablation` fits DVFM on a real cohort once per entry of
+`models.dvfm.latent_dims`, which must include the latent-free reference `0`; every dimension shares
+the split and model seed of its repeat. Each `data.datasets` entry takes the semi-synthetic
+dataset fields plus an optional `id_column` and `external_columns`, which are carried into the
+per-subject export but never used as features. `max_missing_fraction` drops configured covariates whose cohort-wide missing fraction exceeds it, before splitting, and records the decision in `feature_missingness.csv`. `missing_indicators: true` adds an unscaled 0/1 column for every covariate that is missing in the training split. `evaluation.likelihood_samples` sets the Monte
+Carlo sample count for the latent model's held-out ELBO, IWAE and margin likelihoods; the
+latent-free likelihood is exact. `evaluation.likelihood_horizon` (natural time units, optional) administratively censors the held-out likelihoods: a subject still free of both outcomes at the horizon contributes P(T > h, C > h | x). The run adds `paired_differences.csv`, `paired_summary.csv`,
+`latent_external_validation.csv` and `subjects/<dataset>_repeat_<i>.csv` to the outputs below.
+
+The loader supplies shared defaults, validates the schema, and expands `data.grid` into
+deterministic atomic scenarios. New generators should expose Kendall's tau and a target censoring
+rate; the preserved legacy copula generator still accepts its family-specific `theta` explicitly.
+
+A change that alters the meaning of an existing study needs a **new** config and a new output
+directory, so previously produced artifacts stay interpretable.
+
+---
+
+## 8. Tests
 
 ```bash
-python -m venv .venv
+pytest tests/                                     # full suite
+pytest tests/test_config.py                       # config schema and validation
+pytest tests/test_sota.py                         # baselines, including regression tests
 ```
 
-Windows:
+Report pre-existing failures separately from regressions.
 
-```bat
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -e ".[test]"
-```
+---
 
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e ".[test]"
-```
-
-## Check the installation without changing parameters
-
-```bash
-dvfm-run --config configs/reference_original.yaml --validate-only
-pytest -v
-```
-
-`--validate-only` checks the configuration and dataset paths. It does not fit models or generate performance numbers.
-
-## Reproduce the active uploaded experiment
-
-```bash
-dvfm-run --config configs/reference_original.yaml
-```
-
-This configuration reproduces the active settings in `VAE_montcarlo.py`: Gaussian generator, theta 1, 10,000 samples, 70/30 split, 1,000 time points, and 200 epochs for DVFM/DeepSurv/MTLR.
-
-## Full synthetic benchmark
-
-```bash
-dvfm-run --config configs/paper_synthetic.yaml
-```
-
-This is computationally expensive: 10 scenarios × 5 repetitions, with 200 training epochs and 100 Monte Carlo samples.
-
-## Real datasets
-
-Place the datasets in `data/raw/` with the names and columns listed in `configs/paper_real.yaml`, then run:
-
-```bash
-dvfm-run --config configs/paper_real.yaml
-```
-
-The repository does not redistribute restricted real datasets.
-
-A generic real dataset can be CSV or Excel and must include:
-
-- an observed follow-up-time column;
-- an event indicator column (`1` event, `0` censored);
-- feature columns.
-
-## Semi-synthetic datasets
-
-A semi-synthetic file contains real or user-provided covariates plus complete simulated event and censoring times. The loader constructs
+## 9. Layout
 
 ```text
-observed_time = min(event_time, censor_time)
-event = 1(event_time <= censor_time)
+configs/          runnable study configurations
+workflows/        one GWF submission target per study
+scripts/          per-dataset runners and aggregation steps the workflows call
+notebooks/        analysis of completed artifacts into paper/
+src/dvfm/         DVFM model, training, prediction
+src/experiments/  configuration schema, runner, recovery diagnostics
+src/sota/         comparison models behind a common adapter interface
+src/utility/      data-generating processes, metrics, splitting, runtime
+tests/            configuration and functional tests
+paper/            generated figures and tables consumed by the manuscript
 ```
 
-Run the included format example with:
+Comparison models live under [`src/sota/`](src/sota/), behind a common adapter interface; a module
+that was ported from an external implementation carries its provenance in its own header. The
+primary synthetic benchmark is DVFM-only; comparison models are reserved for the semi-synthetic
+study.
 
-```bash
-dvfm-run --config configs/semi_synthetic_example.yaml
-```
+---
 
-## Outputs
+## 10. Further reading
 
-Each experiment writes:
+| Topic | Source |
+|---|---|
+| Primary synthetic protocol | [`configs/synthetic.yaml`](configs/synthetic.yaml) |
+| Semi-synthetic protocol | [`configs/semi_synthetic.yaml`](configs/semi_synthetic.yaml) |
+| Data-generating processes and latent definitions | [`src/utility/synthetic.py`](src/utility/synthetic.py), [`src/utility/semisynthetic.py`](src/utility/semisynthetic.py) |
+| Hyperparameter search spaces and selection | [`configs/semi_synthetic_tuning.yaml`](configs/semi_synthetic_tuning.yaml) |
+| Metric definitions | [`src/utility/metrics.py`](src/utility/metrics.py) |
+| Figure and table definitions | [`notebooks/`](notebooks/) |
+| Rules for autonomous coding agents | [`AGENTS.md`](AGENTS.md) |
 
-- `results_raw.csv`
-- `results_mean.csv`
-- `results_std.csv`
-- `resolved_config.json`
-- optional prediction arrays when enabled
+---
 
-## Repository structure
+## Interpretation
 
-```text
-src/dvfm/reference_core.py   package-compatible supplied algorithm code
-src/dvfm/runner.py           real/synthetic/semi-synthetic experiment interface
-src/dvfm/metrics.py          paper metrics
-src/dvfm/baselines.py        CoxPH and ClaytonAFT wrappers; reference neural baselines
-configs/                     exact reproducible parameter files
-reference/                   unchanged uploaded scripts
-paper/                       supplied manuscript
-PARAMETER_AUDIT.md           parameter provenance
-```
-
-## Citation
-
-Please cite the accompanying manuscript, *Deep Variational Frailty Models for Survival Prediction Under Dependent Censoring*.
+Dependent censoring is not identifiable from right-censored observations without structural
+assumptions. DVFM is evaluated as an inductive bias, not as a universal identification theorem or
+as a test for informative censoring. Baseline prediction from `x`, retrospective frailty inference
+from `(x, t, event)`, and population dependence recovery are separate tasks, and a method can
+succeed at one while failing at another.

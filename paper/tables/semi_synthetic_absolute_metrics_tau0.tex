@@ -1,0 +1,19 @@
+\begin{table}
+\caption{Absolute oracle metrics at Kendall's $\tau=0$, the values behind the ranks in Table~\ref{tab:semi_synthetic_models_tau0}. Seeds are averaged within each dataset $\times$ copula cell and the copulas within each dataset; the level is the median of those per-dataset values and the change beside it is the median across datasets of the within-dataset relative change against DVFM, $(\text{model} - \text{DVFM})/|\text{DVFM}|$. Levels are not comparable across datasets, since Oracle MAE carries each dataset's own time scale; the changes are, because they are formed inside a dataset before pooling. Lower is better for IBS and MAE, higher for CI.}
+\label{tab:semi_synthetic_absolute_metrics_tau0}
+\begin{tabular}{lrrrrrr}
+\toprule
+Model & Oracle IBS & Oracle IBS vs DVFM & Oracle CI & Oracle CI vs DVFM & Oracle MAE & Oracle MAE vs DVFM \\
+\midrule
+BayesianCoxGammaFrailty & 0.106 & -6.7\% & 0.668 & +1.6\% & 406 & -3.3\% \\
+DVFM ($d_z{=}0$) & 0.116 & -1.0\% & 0.668 & -0.1\% & 415 & -0.3\% \\
+DVFM & 0.120 & -- & 0.657 & -- & 422 & -- \\
+HACSurv & 0.122 & -1.6\% & 0.665 & +0.8\% & 411 & +0.6\% \\
+ClaytonAFT & 0.125 & +3.9\% & 0.652 & -0.3\% & 427 & +0.9\% \\
+CoxPH & 0.126 & -2.0\% & 0.652 & +1.0\% & 461 & -0.7\% \\
+MTLR & 0.126 & +4.6\% & 0.655 & -1.2\% & 438 & +4.1\% \\
+DeepSurv & 0.131 & +3.3\% & 0.653 & +0.2\% & 537 & +1.8\% \\
+RSF & 0.134 & +5.6\% & 0.645 & -1.6\% & 481 & +2.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}

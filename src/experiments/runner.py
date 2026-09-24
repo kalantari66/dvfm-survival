@@ -1,0 +1,880 @@
+"""Dataset-independent runner using the supplied algorithms and reference parameters."""
+
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from itertools import product
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader
+from sota.adapters import fit_sksurv_ensemble, fit_weibull_aft
+from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
+from sota.hacsurv import fit_hacsurv_2d
+
+from sota.baselines import (
+    _fit_cox_and_predict_survival,
+    fit_clayton_weibull_aft,
+    train_deepsurv,
+    train_mtlr,
+)
+from .config import expand_scenarios, expand_seed_streams, semisynthetic_datasets
+from utility.data import SurvivalData, load_real_data, load_semi_synthetic_data
+from utility.metrics import (
+    JointSurvivalEvaluation, censoring_rate, collect_metrics,
+    learned_conditional_kendall_tau, oracle_joint_survival_ise,
+    predict_dvfm_joint_survival, predict_hacsurv_joint_survival,
+)
+from dvfm.model import DVFM
+from utility.data import SurvivalDataset
+from dvfm.prediction import get_median_survival_time, predict_survival_curves
+from utility.synthetic import generate_copula_data
+from utility.runtime import resolve_device, seed_everything
+from utility.splitting import (
+    iter_split_indices, preprocess_covariates, subset_survival_data,
+    time_event_stratified_split_indices,
+)
+from dvfm.training import train_dvfm
+
+
+# DVFM and its matched no-frailty ablation are separate models: separate jobs,
+# separate result directories and separate rows. They share every setting but
+# the latent dimension, which the configuration expresses with a YAML merge.
+DVFM_VARIANTS = {"dvfm": "DVFM", "dvfm_z0": "DVFM-z0"}
+
+
+def _deep_update(base: dict, update: dict) -> dict:
+    """Recursively apply a dataset's selected model hyperparameters."""
+    resolved = deepcopy(base)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(resolved.get(key), dict):
+            resolved[key] = _deep_update(resolved[key], value)
+        else:
+            resolved[key] = deepcopy(value)
+    return resolved
+
+
+def _models_for_dataset(cfg: dict, dataset: str | None) -> dict:
+    """Resolve YAML model defaults with the selected per-dataset override."""
+    models = cfg["models"]
+    overrides = models.get("tuned_by_dataset", {})
+    selected = overrides.get(str(dataset), {}) if dataset is not None else {}
+    # ``tuned_by_dataset`` is configuration metadata, never a model itself.
+    return _deep_update(
+        {key: value for key, value in models.items() if key != "tuned_by_dataset"},
+        selected,
+    )
+
+
+def _splits(data: SurvivalData, split_cfg: dict, seed: int):
+    yield from iter_split_indices(data, split_cfg, seed)
+
+
+def _preprocess_three(train, validation, test, cfg):
+    return preprocess_covariates(train, validation, test, cfg)
+
+
+def _subset(data: SurvivalData, idx: np.ndarray) -> SurvivalData:
+    return subset_survival_data(data, idx)
+
+
+def evaluation_time_grid(train: SurvivalData, evaluation: dict) -> np.ndarray:
+    """Build the shared, training-only survival-curve evaluation grid.
+
+    ``uniform_train_true_event_quantile`` anchors the horizon on the event
+    times the oracle metrics are scored against. The two observed-data
+    strategies each fail one requirement: ``uniform_train_observed_max`` is a
+    single order statistic, so one long follow-up sets the horizon for every
+    subject, and ``uniform_train_event_quantile`` is computed from uncensored
+    subjects only, who are the fast-failing minority under heavy censoring, so
+    it is biased short exactly where the horizon needs to be longest. Both are
+    retained for studies without a generating truth. It is a query grid only:
+    discrete-time models retain their own training-bin construction.
+    """
+    strategy = str(evaluation.get("time_grid", "uniform_train_observed_max"))
+    if strategy == "uniform_train_true_event_quantile":
+        if train.true_event_time is None:
+            raise ValueError(
+                "evaluation.time_grid=uniform_train_true_event_quantile requires "
+                "a data source that supplies true event times"
+            )
+        truth = np.asarray(train.true_event_time, dtype=float)
+        upper = float(np.quantile(truth, float(evaluation["grid_max_quantile"])))
+    elif strategy == "uniform_train_event_quantile":
+        event_times = np.asarray(train.time)[np.asarray(train.event, dtype=bool)]
+        # A degenerate split should not prevent an otherwise useful experiment
+        # from running; use observed training durations as a documented fallback.
+        support = event_times if len(event_times) else np.asarray(train.time)
+        upper = float(np.quantile(support, float(evaluation["grid_max_quantile"])))
+    elif strategy == "uniform_train_observed_max":
+        upper = float(np.max(train.time) * float(evaluation["max_time_factor"]))
+    else:  # guarded by config validation; retained for direct API callers.
+        raise ValueError(f"Unsupported evaluation.time_grid: {strategy}")
+    return np.linspace(0.0, max(upper, 1e-8), int(evaluation["n_time_points"]))
+
+
+def training_time_scale(train: SurvivalData) -> float:
+    """Return a positive, training-only duration scale for model fitting."""
+    durations = np.asarray(train.time, dtype=float)
+    usable = durations[np.isfinite(durations) & (durations > 0.0)]
+    if not len(usable):
+        raise ValueError("Training durations contain no finite positive values")
+    scale = float(np.median(usable))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Training median duration must be finite and positive")
+    return scale
+
+
+def scale_observed_time(data: SurvivalData, scale: float) -> SurvivalData:
+    """Scale observed model inputs while preserving truth in natural units."""
+    return SurvivalData(
+        X=data.X,
+        time=np.asarray(data.time, dtype=float) / float(scale),
+        event=data.event,
+        feature_names=data.feature_names,
+        true_event_time=data.true_event_time,
+        true_censor_time=data.true_censor_time,
+        true_z=data.true_z,
+    )
+
+
+def fit_dvfm(model_train: SurvivalData, model_validation: SurvivalData, c: dict, device):
+    """Build, train, and load the primary checkpoint of one DVFM.
+
+    Inputs are already on the model time scale. Returns the fitted model, the
+    training artifacts, the training loader used for aggregate-posterior
+    prediction, and the name of the loaded checkpoint.
+    """
+    train_loader = DataLoader(
+        SurvivalDataset(model_train.X, model_train.time, model_train.event),
+        batch_size=int(c["batch_size"]),
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        SurvivalDataset(
+            model_validation.X, model_validation.time, model_validation.event
+        ),
+        batch_size=int(c["batch_size"]),
+        shuffle=False,
+    )
+    model = DVFM(
+        input_dim=model_train.X.shape[1],
+        latent_dim=int(c["latent_dim"]),
+        encoder_hidden=list(c.get("encoder_hidden", [64, 32])),
+        decoder_hidden=list(c.get("decoder_hidden", [32, 64])),
+        dropout=float(c.get("dropout", 0.0)),
+        scale_link=str(c.get("scale_link", "softplus")),
+        latent_path=str(c.get("latent_path", "nonlinear")),
+        shape_mode=str(c.get("shape_mode", "conditional")),
+        latent_gate=str(c.get("latent_gate", "none")),
+        gate_initial_value=float(c.get("gate_initial_value", 0.9)),
+        gate_temperature=float(c.get("gate_temperature", 0.67)),
+        latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
+        logvar_min=float(c.get("logvar_min", -12.0)),
+        logvar_max=float(c.get("logvar_max", 8.0)),
+    ).to(device)
+    artifacts = train_dvfm(
+        model,
+        train_loader,
+        val_loader,
+        n_epochs=int(c["epochs"]),
+        lr=float(c["learning_rate"]),
+        beta_max=float(c["beta_max"]),
+        warmup_epochs=int(c["warmup_epochs"]),
+        free_bits=float(c["free_bits"]),
+        device=device,
+        checkpoint_min_epoch=int(c.get("checkpoint_min_epoch", c["warmup_epochs"])),
+        numerical_failure_threshold=float(c.get("numerical_failure_threshold", 100.0)),
+        weight_decay=float(c.get("weight_decay", 0.0)),
+        latent_group_lasso=float(c.get("latent_group_lasso", 0.0)),
+        gate_l1=float(c.get("gate_l1", 0.0)),
+        return_artifacts=True,
+    )
+    checkpoint = str(c.get("primary_checkpoint", "best_validation_elbo_post_warmup"))
+    if checkpoint == "best_validation_elbo_post_warmup":
+        model.load_state_dict(artifacts["best_validation_elbo_state"])
+    elif checkpoint != "final":
+        raise ValueError(f"Unsupported DVFM primary checkpoint: {checkpoint}")
+    return model, artifacts, train_loader, checkpoint
+
+
+def _fit_one_split(
+    train: SurvivalData,
+    validation: SurvivalData,
+    test: SurvivalData,
+    cfg: dict,
+    device: torch.device,
+    context: dict,
+    *,
+    latent_output_dir: Path | None = None,
+    validation_indices=None,
+    test_indices=None,
+    joint_evaluation: JointSurvivalEvaluation | None = None,
+) -> tuple[list[dict], dict]:
+    eval_cfg = cfg["evaluation"]
+    model_cfg = _models_for_dataset(cfg, context.get("Dataset"))
+    enabled = {str(x).lower() for x in model_cfg["enabled"]}
+
+    time_points = evaluation_time_grid(train, eval_cfg)
+    time_scale = training_time_scale(train)
+    model_time_points = time_points / time_scale
+    model_train = scale_observed_time(train, time_scale)
+    model_validation = scale_observed_time(validation, time_scale)
+    model_test = scale_observed_time(test, time_scale)
+    model_joint_evaluation = None
+    if joint_evaluation is not None:
+        model_joint_evaluation = JointSurvivalEvaluation(
+            X=joint_evaluation.X,
+            event_grid=np.asarray(joint_evaluation.event_grid) / time_scale,
+            censor_grid=np.asarray(joint_evaluation.censor_grid) / time_scale,
+            truth=joint_evaluation.truth,
+        )
+    predictions: dict[str, dict] = {}
+    prediction_failures: dict[str, str] = {}
+
+    if "coxph" in enabled:
+        try:
+            c = model_cfg["coxph"]
+            median, survival = _fit_cox_and_predict_survival(
+                model_train.X, model_train.time, model_train.event,
+                model_test.X, model_time_points, config=c,
+            )
+        except Exception as exc:
+            print(f"CoxPH failed on this split: {exc}")
+            prediction_failures["CoxPH"] = repr(exc)
+        else:
+            predictions["CoxPH"] = {
+                "median": median * time_scale, "survival": survival,
+            }
+
+    if "deepsurv" in enabled:
+        c = model_cfg["deepsurv"]
+        _, median, survival = train_deepsurv(
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
+            n_epochs=int(c["epochs"]),
+            batch_size=c.get("batch_size"),
+            lr=float(c["learning_rate"]),
+            device="cpu",
+            eval_time_points=model_time_points,
+            hidden_dims=c.get("hidden_dims"),
+            dropout=float(c.get("dropout", 0.3)),
+            weight_decay=float(c.get("weight_decay", 0.0)),
+            X_val=model_validation.X,
+            time_val=model_validation.time,
+            event_val=model_validation.event,
+            early_stopping_patience=c.get("early_stopping_patience"),
+        )
+        predictions["DeepSurv"] = {
+            "median": median * time_scale, "survival": survival,
+        }
+
+    if "mtlr" in enabled:
+        c = model_cfg["mtlr"]
+        _, median, survival = train_mtlr(
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
+            X_val=model_validation.X,
+            time_val=model_validation.time,
+            event_val=model_validation.event,
+            num_bins=int(c["bins"]),
+            n_epochs=int(c["epochs"]),
+            batch_size=int(c.get("batch_size", 64)),
+            early_stopping_patience=c.get("early_stopping_patience"),
+            lr=float(c["learning_rate"]),
+            device="cpu",
+            eval_time_points=model_time_points,
+            hidden_dims=c.get("hidden_dims"),
+            dropout=float(c.get("dropout", 0.0)),
+            weight_decay=float(c.get("weight_decay", 0.0)),
+        )
+        predictions["MTLR"] = {
+            "median": median * time_scale, "survival": survival,
+        }
+
+    if "clayton_aft" in enabled:
+        c = model_cfg["clayton_aft"]
+        median, survival = fit_clayton_weibull_aft(
+            model_train.X,
+            model_train.time,
+            model_train.event,
+            model_test.X,
+            model_time_points,
+            epochs=int(c["epochs"]),
+            lr=float(c["learning_rate"]),
+            device="cpu",
+        )
+        predictions["ClaytonAFT"] = {
+            "median": median * time_scale, "survival": survival,
+        }
+
+    if "hacsurv_2d" in enabled:
+        c = model_cfg["hacsurv_2d"]
+        survival, info, _, fitted_model = fit_hacsurv_2d(
+            model_train.X, model_train.time, model_train.event,
+            model_validation.X, model_validation.time, model_validation.event,
+            model_test.X, model_time_points, device=device,
+            seed=int(context.get("Model Seed", 0)), **c,
+        )
+        if model_joint_evaluation is not None:
+            joint_prediction = predict_hacsurv_joint_survival(
+                fitted_model, model_joint_evaluation,
+                generator_samples=int(eval_cfg["joint_model_samples"]),
+                batch_size=int(eval_cfg["joint_model_batch_size"]),
+                device=device,
+            )
+            info["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+                joint_prediction, joint_evaluation
+            )
+        predictions["HACSurv"] = {
+            "median": get_median_survival_time(
+                survival, model_time_points
+            ) * time_scale,
+            "survival": survival, **info,
+        }
+
+    for ensemble_name, display_name in (("gbsa", "GBSA"), ("rsf", "RSF")):
+        if ensemble_name in enabled:
+            median, survival = fit_sksurv_ensemble(
+                ensemble_name, model_train.X, model_train.time, model_train.event,
+                model_test.X, model_time_points, model_cfg[ensemble_name],
+            )
+            predictions[display_name] = {
+                "median": median * time_scale, "survival": survival,
+            }
+
+    if "weibull_aft" in enabled:
+        median, survival = fit_weibull_aft(
+            model_train.X, model_train.time, model_train.event,
+            model_test.X, model_time_points,
+            model_cfg["weibull_aft"],
+        )
+        predictions["WeibullAFT"] = {
+            "median": median * time_scale, "survival": survival,
+        }
+
+    if "bayesian_cox_gamma_frailty" in enabled:
+        survival, _, _, _ = fit_bayesian_cox_gamma_frailty(
+            model_train.X, model_train.time, model_train.event,
+            model_validation.X, model_validation.time, model_validation.event,
+            model_test.X, model_time_points,
+            model_cfg["bayesian_cox_gamma_frailty"], device="cpu",
+        )
+        median = get_median_survival_time(
+            survival, model_time_points
+        ) * time_scale
+        predictions["BayesianCoxGammaFrailty"] = {
+            "median": median, "survival": survival,
+        }
+
+    for variant, display in DVFM_VARIANTS.items():
+        if variant not in enabled:
+            continue
+        c = model_cfg[variant]
+        model, artifacts, train_loader, checkpoint = fit_dvfm(
+            model_train, model_validation, c, device
+        )
+        frailty_summary = {}
+        if latent_output_dir is not None and model.encoder is not None:
+            from .latent_recovery import export_latent_recovery
+
+            # Diagnostic DataLoader iteration must not alter prediction MC draws.
+            with torch.random.fork_rng(devices=[]):
+                latent_metrics = export_latent_recovery(
+                    model, model_validation, model_test,
+                    validation_indices, test_indices,
+                    latent_output_dir, {**context, "Model": display, "Checkpoint": checkpoint},
+                    int(c["batch_size"]), device,
+                )
+            if not latent_metrics.empty:
+                selected = latent_metrics.loc[
+                    latent_metrics["split"].eq("test")
+                    & latent_metrics["subgroup"].eq("All")
+                    & latent_metrics["representation"].eq("Validation-calibrated")
+                ]
+                if not selected.empty:
+                    record = selected.iloc[0]
+                    frailty_summary = {
+                        "frailty_pearson": record["pearson"],
+                        "frailty_spearman": record["spearman"],
+                        "frailty_r2_calibrated": record["r2"],
+                        "frailty_rmse_calibrated": record["rmse"],
+                    }
+        survival = predict_survival_curves(
+            model=model,
+            X=model_test.X,
+            time_points=model_time_points,
+            train_loader=train_loader,
+            n_samples=int(c["mc_samples"]),
+            device=device,
+        )
+        median = get_median_survival_time(
+            survival, model_time_points
+        ) * time_scale
+        predictions[display] = {
+            "median": median,
+            "survival": survival,
+            "learned_gate": float(
+                model.decoder.gate_value(stochastic=False).detach().cpu()
+            ),
+            "gate_is_open": bool(
+                model.decoder.gate_value(stochastic=False).detach().cpu().item() >= 0.5
+            ),
+            "latent_loading_l1_magnitude": float(
+                model.decoder.latent_loading_l1().detach().cpu()
+            ),
+            "latent_loading_group_norm": float(
+                model.decoder.latent_loading_group_norm().detach().cpu()
+            ),
+            "latent_dim": int(c["latent_dim"]),
+            **frailty_summary,
+        }
+        target_tau = context.get("Target Kendall Tau")
+        if target_tau is not None:
+            learned_tau = learned_conditional_kendall_tau(
+                model, np.mean(train.X, axis=0),
+                int(eval_cfg.get("dependence_samples", 2000)), device,
+            )
+            predictions[display].update({
+                "learned_conditional_kendall_tau": learned_tau,
+                "conditional_kendall_tau_error": learned_tau - float(target_tau),
+                "absolute_conditional_kendall_tau_error": abs(learned_tau - float(target_tau)),
+            })
+        if model_joint_evaluation is not None:
+            joint_prediction = predict_dvfm_joint_survival(
+                model, model_joint_evaluation,
+                mc_samples=int(eval_cfg.get("joint_model_samples", c["mc_samples"])),
+                batch_size=int(eval_cfg.get("joint_model_batch_size", c["batch_size"])),
+                seed=0, device=device,
+            )
+            predictions[display]["oracle_joint_survival_ise"] = oracle_joint_survival_ise(
+                joint_prediction, joint_evaluation
+            )
+
+    metadata = dict(context)
+    metadata.update(
+        {
+            "Num Samples": int(len(train.time) + len(validation.time) + len(test.time)),
+            "Num Features": int(train.X.shape[1]),
+            "Train Size": int(len(train.time)),
+            "Validation Size": int(len(validation.time)),
+            "Test Size": int(len(test.time)),
+            "Event Rate Train": float(np.mean(train.event)),
+            "Event Rate Validation": float(np.mean(validation.event)),
+            "Event Rate Test": float(np.mean(test.event)),
+            "Censoring Rate Train": censoring_rate(train.event),
+            "Censoring Rate Validation": censoring_rate(validation.event),
+            "Censoring Rate Test": censoring_rate(test.event),
+            "Training Time Scale": time_scale,
+        }
+    )
+
+    rows: list[dict] = []
+    for name, error in prediction_failures.items():
+        rows.append({
+            **metadata,
+            "Model": name,
+            "numerical_failure": True,
+            "error": error,
+            "oracle_ibs": np.nan,
+            "oracle_ci": np.nan,
+            "oracle_mae": np.nan,
+            "oracle_median_clipped_fraction": np.nan,
+            "oracle_joint_survival_ise": np.nan,
+        })
+    tau = None
+    for name, pred in predictions.items():
+        is_synthetic = "synthetic" in str(context.get("Dataset Type", "")).lower()
+        metrics = collect_metrics(
+            name,
+            pred["median"],
+            pred["survival"],
+            test.time,
+            test.event,
+            test.true_event_time,
+            time_points,
+            tau=tau,
+            t_train=train.time,
+            e_train=train.event,
+            oracle_only=is_synthetic,
+        )
+        row = dict(metadata)
+        row["Model"] = name
+        prefix = f"{name} "
+        clean_metrics = {key.removeprefix(prefix): value for key, value in metrics.items()}
+        row.update(clean_metrics)
+        row.update({
+            "oracle_ibs": clean_metrics.get("IBS Oracle", np.nan),
+            "oracle_ci": clean_metrics.get("CI Oracle", np.nan),
+            "oracle_mae": clean_metrics.get("MAE Oracle", np.nan),
+            "oracle_median_clipped_fraction": clean_metrics.get(
+                "Median Clipped Fraction", np.nan
+            ),
+            "numerical_failure": False,
+        })
+        row.update({
+            key: value for key, value in pred.items()
+            if key not in {"median", "survival"}
+        })
+        rows.append(row)
+        tau = clean_metrics.get("evaluation_time_horizon", tau)
+
+    return rows, {
+        "time_points": time_points,
+        "test_time": test.time,
+        "test_event": test.event,
+        **predictions,
+    }
+
+
+def _load_dataset(spec: dict, source: str) -> SurvivalData:
+    if source == "real_file":
+        return load_real_data(
+            spec["path"], spec["time_column"], spec["event_column"], spec.get("feature_columns")
+        )
+    if source == "semi_synthetic_file":
+        return load_semi_synthetic_data(
+            spec["path"],
+            spec["true_event_time_column"],
+            spec["true_censor_time_column"],
+            spec.get("feature_columns"),
+        )
+    raise ValueError(source)
+
+
+def validate_inputs(cfg: dict) -> None:
+    data_cfg = cfg["data"]
+    source = str(data_cfg["source"]).lower()
+    if source in {"synthetic_copula", "gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
+        return
+    if source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
+        from utility.semisynthetic import load_semisynthetic_source
+        for spec in semisynthetic_datasets(data_cfg):
+            load_semisynthetic_source(spec)
+        return
+    if source == "real_latent_ablation":
+        from .real_latent_ablation import load_real_cohort
+        for spec in semisynthetic_datasets(data_cfg):
+            frame, _, _ = load_real_cohort(spec)
+            extra = [spec.get("id_column"), *spec.get("external_columns", [])]
+            missing = sorted({column for column in extra if column} - set(frame.columns))
+            if missing:
+                raise ValueError(f"{spec['name']} is missing columns: {missing}")
+        return
+    _load_dataset(data_cfg, source)
+
+
+def run(cfg: dict) -> pd.DataFrame:
+    validate_inputs(cfg)
+    study_cfg = cfg["study"]
+    data_cfg = cfg["data"]
+    source = str(data_cfg["source"]).lower()
+    out_dir = Path(study_cfg["output_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    device = resolve_device(str(cfg["compute"].get("device", "auto")))
+    torch.set_num_threads(max(1, int(cfg["compute"].get("torch_num_threads", 1))))
+    print(f"Using device: {device}")
+    rows: list[dict] = []
+
+    if source == "gaussian_shared_frailty":
+        from .synthetic import run_synthetic_pilot
+
+        rows = run_synthetic_pilot(cfg, out_dir, device).to_dict("records")
+    elif source == "real_latent_ablation":
+        from .real_latent_ablation import run_real_latent_ablation
+
+        rows = run_real_latent_ablation(cfg, out_dir, device).to_dict("records")
+    elif source == "frailty_recovery_diagnostic":
+        from .frailty_recovery import run_frailty_recovery_diagnostic
+
+        return run_frailty_recovery_diagnostic(cfg, out_dir, device)
+    elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
+        from utility.semisynthetic import (
+            fit_semisynthetic_dgp, generate_semisynthetic,
+            plot_event_distribution_comparison, semi_synthetic_joint_survival,
+        )
+
+        diagnostics = []
+        for dataset in semisynthetic_datasets(data_cfg):
+            dgp = fit_semisynthetic_dgp(
+                dataset, cox_penalizer=float(data_cfg.get("cox_penalizer", 0.01))
+            )
+            seed_streams = expand_seed_streams(cfg["seeds"])
+            repeat_indices = study_cfg.get("repeat_indices")
+            if repeat_indices is None:
+                repeat_indices = list(range(len(seed_streams)))
+            if len(repeat_indices) != len(seed_streams):
+                raise ValueError(
+                    "study.repeat_indices must have one entry per configured seed"
+                )
+            for repeat, seeds in zip(repeat_indices, seed_streams):
+                dgp_seed = seeds["dgp"]
+                sampling_seed = seeds["sampling"]
+                split_seed = seeds["split"]
+                model_seed = seeds["model"]
+                tau_values = data_cfg["kendall_tau"]
+                tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
+                copulas = data_cfg.get("copulas", [data_cfg.get("copula", "clayton")])
+                rate_specification = data_cfg["censoring_rates"]
+                target_rates = (
+                    [1.0 - float(dgp.source_event_rate)]
+                    if isinstance(rate_specification, str) and rate_specification.lower() == "original"
+                    else rate_specification
+                )
+                # Every named copula reduces to product at tau=0, so produce
+                # one independence condition rather than four duplicates.
+                scenario_conditions = (
+                    (copula, target_tau, target_rate)
+                    for target_tau, target_rate in product(tau_values, target_rates)
+                    for copula in (["independence"] if float(target_tau) == 0.0 else copulas)
+                )
+                for copula, target_tau, target_rate in scenario_conditions:
+                    generated = generate_semisynthetic(
+                        dgp, kendall_tau=float(target_tau),
+                        censoring_rate=float(target_rate), sampling_seed=int(sampling_seed),
+                        copula=str(copula),
+                    )
+                    train_idx, validation_idx, test_idx = time_event_stratified_split_indices(
+                        generated.data, cfg["split"], int(split_seed)
+                    )
+                    train, validation, test = _preprocess_three(
+                        _subset(generated.data, train_idx),
+                        _subset(generated.data, validation_idx),
+                        _subset(generated.data, test_idx),
+                        {**cfg["preprocessing"], "numeric_features": dataset["numeric_features"]},
+                    )
+                    seed_everything(int(model_seed))
+                    scenario = f"{dataset['name']}_{str(copula).lower()}_tau_{float(target_tau):g}_censor_{float(target_rate):g}"
+                    context = {
+                        "Study": study_cfg["name"], "Stage": study_cfg["stage"],
+                        "Dataset Type": source, "Dataset": dataset["name"],
+                        "Source Path": str(dataset.get("path", f"builtin:{dataset.get('loader')}")), "Scenario": scenario,
+                        "Copula": str(copula).lower(), "Dependence": "independent_censoring" if float(target_tau) == 0 else "dependent_censoring",
+                        "Theta": generated.clayton_theta,
+                        "Target Kendall Tau": generated.target_kendall_tau,
+                        "Empirical Copula Kendall Tau": generated.empirical_copula_kendall_tau,
+                        "Empirical Marginal Kendall Tau": generated.empirical_marginal_kendall_tau,
+                        "Target Censoring Rate": generated.target_censoring_rate,
+                        "Achieved Censoring Rate": generated.achieved_censoring_rate,
+                        "Censoring Rate Source": "original_cohort" if isinstance(rate_specification, str) else "configured",
+                        "Repeat": repeat, "Fold": 0, "DGP Seed": int(dgp_seed),
+                        "Sampling Seed": int(sampling_seed), "Split Seed": int(split_seed),
+                        "Model Seed": int(model_seed),
+                    }
+                    if (
+                        cfg["evaluation"].get("save_event_distribution_plots", False)
+                        and hasattr(dgp, "source_time")
+                        and hasattr(dgp, "source_event")
+                    ):
+                        plot_event_distribution_comparison(
+                            dgp, generated,
+                            out_dir / "figures" / f"event_distribution_{scenario}_repeat_{repeat}.pdf",
+                            title=(
+                                f"{dataset['name']} | {str(copula).title()} copula | "
+                                f"target $\\tau$ = {float(target_tau):.2f} | "
+                                f"repeat {repeat}"
+                            ),
+                        )
+                    joint_evaluation = None
+                    joint_models = {*DVFM_VARIANTS, "hacsurv_2d"}
+                    enabled_models = {
+                        str(name).lower() for name in cfg["models"]["enabled"]
+                    }
+                    if (
+                        cfg["evaluation"].get("compute_oracle_joint_survival_ise", False)
+                        and bool(enabled_models & joint_models)
+                        and hasattr(dgp.event_margin, "baseline_times")
+                        and hasattr(dgp.censor_margin, "baseline_times")
+                    ):
+                        count = min(int(cfg["evaluation"]["joint_n_subjects"]), len(test.X))
+                        chosen = np.random.default_rng(int(split_seed) + 70_000).choice(len(test.X), size=count, replace=False)
+                        event_grid = np.linspace(0.0, np.quantile(train.true_event_time, cfg["evaluation"]["joint_grid_max_quantile"]), int(cfg["evaluation"]["joint_n_time_points"]))
+                        censor_grid = np.linspace(0.0, np.quantile(train.true_censor_time, cfg["evaluation"]["joint_grid_max_quantile"]), int(cfg["evaluation"]["joint_n_time_points"]))
+                        joint_evaluation = JointSurvivalEvaluation(
+                            test.X[chosen], event_grid, censor_grid,
+                            semi_synthetic_joint_survival(dgp, generated, test.X[chosen], event_grid, censor_grid),
+                        )
+                    base_cfg = deepcopy(cfg)
+                    base_cfg["models"] = deepcopy(cfg["models"])
+                    base_cfg["models"]["enabled"] = [
+                        name for name in cfg["models"]["enabled"]
+                        if str(name).lower() not in DVFM_VARIANTS
+                    ]
+                    if base_cfg["models"]["enabled"]:
+                        split_rows, preds = _fit_one_split(
+                            train, validation, test, base_cfg, device, context,
+                            joint_evaluation=joint_evaluation,
+                        )
+                        rows.extend(split_rows)
+                    # Each DVFM variant is fitted on its own so one variant's
+                    # numerical failure is recorded without losing the other.
+                    for variant in (
+                        name for name in DVFM_VARIANTS if name in enabled_models
+                    ):
+                        dvfm_cfg = deepcopy(cfg)
+                        dvfm_cfg["models"] = deepcopy(cfg["models"])
+                        dvfm_cfg["models"]["enabled"] = [variant]
+                        exports_latent = (
+                            int(dvfm_cfg["models"][variant]["latent_dim"]) == 1
+                            and cfg["evaluation"].get("save_latent_recovery", True)
+                        )
+                        try:
+                            split_rows, preds = _fit_one_split(
+                                train, validation, test, dvfm_cfg, device, context,
+                                latent_output_dir=(out_dir / "latent_recovery" / f"{scenario}_repeat_{repeat}"
+                                                   if exports_latent else None),
+                                validation_indices=validation_idx, test_indices=test_idx,
+                                joint_evaluation=joint_evaluation,
+                            )
+                            rows.extend(split_rows)
+                        except Exception as exc:
+                            rows.append({
+                                **context, "Model": DVFM_VARIANTS[variant],
+                                "latent_dim": int(dvfm_cfg["models"][variant]["latent_dim"]),
+                                "Training Time Scale": training_time_scale(train),
+                                "numerical_failure": True, "error": repr(exc),
+                                "oracle_ibs": np.nan, "oracle_ci": np.nan, "oracle_mae": np.nan,
+                                "oracle_median_clipped_fraction": np.nan,
+                                "oracle_joint_survival_ise": np.nan,
+                            })
+                    diagnostics.append({
+                        **context, "Censor Time Scale": generated.censor_time_scale,
+                        "Source Samples": dgp.source_n_samples,
+                        "Source Samples Before Subsampling": getattr(
+                            dgp, "source_n_samples_before_subsampling", dgp.source_n_samples
+                        ),
+                        "Subsample Target Size": getattr(dgp, "subsample_target_size", None),
+                        "Source Event Rate": dgp.source_event_rate,
+                        "Raw Features": len(dataset["numeric_features"]) + len(dataset["categorical_features"]),
+                        "Encoded Features": len(dgp.feature_names),
+                        "Cox Penalizer": dgp.cox_penalizer,
+                    })
+                    if cfg["evaluation"].get("save_predictions", False):
+                        _save_predictions(out_dir, context, preds)
+        pd.DataFrame(diagnostics).to_csv(out_dir / "dgp_diagnostics.csv", index=False)
+    elif source == "synthetic_copula":
+        scenarios = expand_scenarios(data_cfg)
+        for scenario in scenarios:
+            for repeat, seed in enumerate(study_cfg["seeds"]):
+                seed_everything(seed)
+                X, time, event, true_t, true_c = generate_copula_data(
+                    n_samples=int(scenario.get("n_samples", data_cfg["n_samples"])),
+                    n_features=int(scenario.get("n_features", data_cfg["n_features"])),
+                    copula_type=str(scenario["copula"]),
+                    theta=float(scenario["theta"]),
+                    seed=seed,
+                )
+                data = SurvivalData(
+                    X,
+                    time,
+                    event,
+                    [f"X{i}" for i in range(X.shape[1])],
+                    true_t,
+                    true_c,
+                )
+                for fold, (train_idx, validation_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
+                    train, validation, test = _preprocess_three(
+                        _subset(data, train_idx), _subset(data, validation_idx),
+                        _subset(data, test_idx), cfg["preprocessing"]
+                    )
+                    context = {
+                        "Study": study_cfg["name"],
+                        "Stage": study_cfg["stage"],
+                        "Dataset Type": source,
+                        "Dataset": scenario.get("name", scenario["copula"]),
+                        "Scenario": scenario.get("id", scenario.get("name", scenario["copula"])),
+                        "Copula": scenario["copula"],
+                        "Dependence": scenario.get("dependence", "custom"),
+                        "Theta": float(scenario["theta"]),
+                        "Repeat": repeat,
+                        "Fold": fold,
+                        "Seed": seed,
+                    }
+                    split_rows, preds = _fit_one_split(train, validation, test, cfg, device, context)
+                    rows.extend(split_rows)
+                    if cfg["evaluation"].get("save_predictions", False):
+                        _save_predictions(out_dir, context, preds)
+    else:
+        data = _load_dataset(data_cfg, source)
+        for repeat, seed in enumerate(study_cfg["seeds"]):
+            seed_everything(seed)
+            for fold, (train_idx, validation_idx, test_idx) in enumerate(_splits(data, cfg["split"], seed)):
+                train, validation, test = _preprocess_three(
+                    _subset(data, train_idx), _subset(data, validation_idx),
+                    _subset(data, test_idx), cfg["preprocessing"]
+                )
+                context = {
+                    "Study": study_cfg["name"],
+                    "Stage": study_cfg["stage"],
+                    "Dataset Type": source,
+                    "Dataset": data_cfg.get("name", Path(data_cfg["path"]).stem),
+                    "Source Path": str(data_cfg["path"]),
+                    "Copula": None,
+                    "Dependence": source,
+                    "Theta": None,
+                    "Repeat": repeat,
+                    "Fold": fold,
+                    "Seed": seed,
+                }
+                split_rows, preds = _fit_one_split(train, validation, test, cfg, device, context)
+                rows.extend(split_rows)
+                if cfg["evaluation"].get("save_predictions", False):
+                    _save_predictions(out_dir, context, preds)
+
+    results = pd.DataFrame(rows)
+    if results.empty:
+        raise RuntimeError("No experiments were completed")
+    results.to_csv(out_dir / "results_raw.csv", index=False)
+
+    group_cols = [
+        c
+        for c in ("Study", "Stage", "Dataset", "Scenario", "Copula", "Dependence", "Theta", "Model",
+                  "study", "scenario", "n_samples", "target_kendall_tau", "target_censoring_rate",
+                  "mechanism", "model", "latent_dim", "hyperparameter_variant",
+                  "comparison_parent",
+                  "epochs", "batch_size", "dropout", "weight_decay", "encoder_hidden",
+                  "decoder_hidden", "scale_link", "latent_path", "shape_mode",
+                  "latent_loading_l1", "latent_group_lasso", "latent_gate", "gate_l1",
+                  "gate_initial_value", "gate_temperature",
+                  "checkpoint", "is_primary_checkpoint", "prediction_mode",
+                  "partition")
+        if c in results and not results[c].isna().all()
+    ]
+    numeric = results.select_dtypes(include=[np.number]).columns.tolist()
+    excluded = {
+        "Repeat", "Fold", "Seed", "Sampling Seed", "Split Seed", "Model Seed",
+        "repeat", "dgp_seed", "sampling_seed", "split_seed", "model_seed",
+    }
+    metric_cols = [c for c in numeric if c not in excluded and c not in group_cols]
+    results.groupby(group_cols, dropna=False)[metric_cols].mean().reset_index().to_csv(
+        out_dir / "results_mean.csv", index=False
+    )
+    results.groupby(group_cols, dropna=False)[metric_cols].std().reset_index().to_csv(
+        out_dir / "results_std.csv", index=False
+    )
+    with (out_dir / "resolved_config.json").open("w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, default=str)
+    print(f"Saved results to {out_dir.resolve()}")
+    return results
+
+
+def _save_predictions(out_dir: Path, context: dict, preds: dict) -> None:
+    name = "_".join(str(context.get(k, "")) for k in ("Dataset", "Scenario", "Repeat", "Fold"))
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)
+    payload = {
+        "time_points": preds["time_points"],
+        "test_time": preds["test_time"],
+        "test_event": preds["test_event"],
+    }
+    for model, values in preds.items():
+        if isinstance(values, dict):
+            payload[f"{model}_median"] = values["median"]
+            payload[f"{model}_survival"] = values["survival"]
+    np.savez_compressed(out_dir / f"predictions_{safe}.npz", **payload)

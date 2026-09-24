@@ -1,0 +1,73 @@
+schema_version: 1
+workflow: {target_name: semI_synthetic_tuning}
+resources: {cores: 4, memory: 25g, walltime: "12:00:00", partition: gpu-l40s, account: c2i-colon}
+experiment_config: configs/semi_synthetic.yaml
+study:
+  name: semi-synthetic-tuning
+  output_dir: results/semi-synthetic-tuning
+development:
+  # One development-only cohort per source dataset. Its validation partition is
+  # never used by the final ten-seed reporting suite.
+  seed: 99
+  copula: gaussian
+  kendall_tau: 0.50
+  validation_fraction: 0.30
+  time_bins: 20
+tuning:
+  trials: 10
+  # The generated DGP provides true event times, so select directly against
+  # ground-truth event survival rather than an observed-data censoring proxy.
+  selection_metric: IBS Oracle
+  # Each discrete choice is sampled independently for every random trial.
+  # The final scalar-latent DVFM is tuned with one latent dimension.
+  search_spaces:
+    deepsurv:
+      # Katzman et al. (2017) Table 3 tune Adam to 0.010-0.154 on the real
+      # datasets (WHAS 0.067, SUPPORT 0.047, METABRIC 0.010, GBSG 0.154), so
+      # the grid has to reach that range; full-batch training makes one epoch
+      # one gradient step, which a sub-0.001 rate cannot exploit.
+      learning_rate: [0.001, 0.003, 0.01, 0.03, 0.1]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      hidden_dims: [[16], [32, 16], [64], [64, 32], [64, 64, 16]]
+      dropout: [0.0, 0.1, 0.25]
+    mtlr:
+      learning_rate: [0.0003, 0.001, 0.003, 0.01]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      hidden_dims: [[16], [32, 16], [64], [64, 32]]
+      dropout: [0.0, 0.1, 0.25]
+      bins: [50, 100, 200]
+    rsf:
+      # Keep the forest stochasticity fixed within a trial; the generated
+      # development cohort and oracle IBS determine the selected setting.
+      n_estimators: [100, 300, 500]
+      max_depth: [3, 5, 8]
+      min_samples_split: [2, 10, 25]
+      min_samples_leaf: [1, 5, 10]
+      max_features: [sqrt, log2, 0.5]
+    gbsa:
+      n_estimators: [100, 300, 500]
+      learning_rate: [0.01, 0.05, 0.1]
+      max_depth: [1, 2, 3]
+      min_samples_split: [2, 10, 25]
+      min_samples_leaf: [1, 5, 10]
+      max_features: [sqrt, log2, 0.5]
+      subsample: [0.6, 0.8, 1.0]
+    clayton_aft:
+      learning_rate: [0.0001, 0.0005, 0.001, 0.005, 0.01]
+    hacsurv_2d:
+      learning_rate: [0.00003, 0.0001, 0.0003]
+      copula_lr_multiplier: [0.3, 1.0, 3.0]
+      hidden_size: [16, 32, 64]
+      hidden_survival: [16, 32, 64]
+      scale_regularization: [0.1, 1.0, 10.0]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+    bayesian_cox_gamma_frailty:
+      learning_rate: [0.003, 0.01, 0.03, 0.1]
+      n_intervals: [5, 10, 20]
+      baseline_smoothness: [0.1, 1.0, 10.0]
+      beta_prior_sd: [1.0, 2.5, 5.0]
+    dvfm:
+      learning_rate: [0.0003, 0.001, 0.003]
+      weight_decay: [0.0, 0.00001, 0.0001, 0.001]
+      architecture: [[[32, 16], [16, 32]], [[64, 32], [32, 64]], [[64, 64, 16], [16, 64, 64]]]
+      dropout: [0.0, 0.1, 0.25]

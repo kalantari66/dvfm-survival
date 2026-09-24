@@ -16,16 +16,19 @@ dependencies = [
   "torch>=2.1",
   "lifelines>=0.28",
   "matplotlib>=3.7",
+  "seaborn>=0.13",
   "openpyxl>=3.1",
-  "PyYAML>=6.0",
+  "PyYAML>=6.0", 
   "SurvivalEVAL>=0.8.0",
+  "scikit-survival>=0.22",
+  "pyarrow>=12.0",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7.4"]
 
 [project.scripts]
-dvfm-run = "dvfm.cli:main"
+dvfm-run = "experiments.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

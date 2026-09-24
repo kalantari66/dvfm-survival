@@ -1,13 +1,48 @@
 """Functional tests only; these are not performance benchmarks."""
 
 import numpy as np
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from dvfm.metrics import compute_ipcw_brier_ibs, compute_oracle_brier_ibs
-from dvfm.model import DVFM, SurvivalDataset
+from utility.metrics import (
+    JointSurvivalEvaluation,
+    compute_oracle_metrics,
+    median_survival_time,
+    compute_ipcw_brier_ibs,
+    compute_oracle_brier_ibs,
+    collect_metrics,
+    oracle_joint_survival_ise,
+)
+from sota.baselines import ClaytonWeibullAFT
+from dvfm.model import DVFM
+from sota.hacsurv import HACSurv2D
+from sota.bayesian_cox_gamma_frailty import (
+    BayesianIndividualCoxGammaFrailty,
+    fit_bayesian_cox_gamma_frailty,
+)
+from utility.data import SurvivalDataset
 from dvfm.prediction import predict_survival_curves
-from dvfm.synthetic import generate_copula_data
+from dvfm.training import train_dvfm
+from utility.synthetic import (
+    generate_clayton_aft_data,
+    generate_clayton_gamma_frailty,
+    generate_copula_data,
+    generate_gaussian_shared_frailty,
+)
+from utility.semisynthetic import sample_clayton_uniforms
+from utility.splitting import (
+    time_event_stratified_split_indices,
+    time_event_stratified_train_validation_indices,
+)
+from utility.data import SurvivalData
+import experiments.runner as runner_module
+from experiments.runner import (
+    _fit_one_split,
+    evaluation_time_grid,
+    scale_observed_time,
+    training_time_scale,
+)
 
 
 def test_generator_shapes():
@@ -17,6 +52,167 @@ def test_generator_shapes():
     assert X.shape == (128, 5)
     assert time.shape == event.shape == true_t.shape == true_c.shape == (128,)
     assert set(np.unique(event)).issubset({0, 1})
+
+
+def test_semisynthetic_clayton_sampler_and_time_event_split():
+    uniforms, theta = sample_clayton_uniforms(10_000, kendall_tau=0.5, seed=71)
+    from scipy.stats import kendalltau
+
+    assert theta == 2.0
+    assert abs(float(kendalltau(uniforms[:, 0], uniforms[:, 1]).statistic) - 0.5) < 0.03
+    rng = np.random.default_rng(72)
+    event = rng.binomial(1, 0.4, size=1000)
+    time = rng.lognormal(mean=1.0 + event, sigma=0.8, size=1000)
+    data = SurvivalData(rng.normal(size=(1000, 2)), time, event, ["x0", "x1"])
+    train, validation, test = time_event_stratified_split_indices(
+        data,
+        {"validation_fraction": 0.1, "test_fraction": 0.2, "time_bins": 20},
+        seed=73,
+    )
+    assert (len(train), len(validation), len(test)) == (700, 100, 200)
+    for indices in (train, validation, test):
+        assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
+
+
+def test_time_event_train_validation_split_uses_no_test_partition():
+    rng = np.random.default_rng(74)
+    event = rng.binomial(1, 0.4, size=1_000)
+    time = rng.lognormal(mean=1.0 + event, sigma=0.8, size=1_000)
+    data = SurvivalData(rng.normal(size=(1_000, 2)), time, event, ["x0", "x1"])
+    config = {"validation_fraction": 0.30, "time_bins": 20}
+    train, validation = time_event_stratified_train_validation_indices(data, config, seed=75)
+    repeat_train, repeat_validation = time_event_stratified_train_validation_indices(
+        data, config, seed=75
+    )
+    assert (len(train), len(validation)) == (700, 300)
+    assert not np.intersect1d(train, validation).size
+    assert set(train) | set(validation) == set(range(len(data.time)))
+    np.testing.assert_array_equal(train, repeat_train)
+    np.testing.assert_array_equal(validation, repeat_validation)
+    for indices in (train, validation):
+        assert abs(float(event[indices].mean()) - float(event.mean())) < 0.02
+
+
+def test_shared_grid_uses_training_event_support_not_long_censoring_tail():
+    data = SurvivalData(
+        X=np.zeros((5, 1)), time=np.array([1.0, 2.0, 3.0, 1_000.0, 2_000.0]),
+        event=np.array([1, 1, 1, 0, 0]), feature_names=["x0"],
+    )
+    grid = evaluation_time_grid(data, {
+        "n_time_points": 100, "time_grid": "uniform_train_event_quantile",
+        "grid_max_quantile": 0.95,
+    })
+    assert len(grid) == 100
+    assert grid[0] == 0.0
+    assert grid[-1] == np.quantile(data.time[data.event == 1], 0.95)
+
+
+def test_all_models_receive_normalized_time_and_predictions_return_natural_scale(
+    monkeypatch,
+):
+    train = SurvivalData(
+        X=np.arange(8, dtype=float).reshape(4, 2),
+        time=np.array([10.0, 20.0, 30.0, 40.0]),
+        event=np.array([1, 1, 0, 1]), feature_names=["x0", "x1"],
+        true_event_time=np.array([11.0, 22.0, 33.0, 44.0]),
+    )
+    validation = SurvivalData(
+        X=np.ones((2, 2)), time=np.array([15.0, 35.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([16.0, 36.0]),
+    )
+    test = SurvivalData(
+        X=np.ones((2, 2)), time=np.array([25.0, 50.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([26.0, 52.0]),
+    )
+    captured = {}
+
+    def fake_cox(X_train, t_train, e_train, X_test, time_points, config):
+        captured["train_time"] = np.asarray(t_train)
+        captured["grid"] = np.asarray(time_points)
+        survival = np.ones((len(X_test), len(time_points)))
+        survival[:, -1] = 0.4
+        return np.full(len(X_test), 1.5), survival
+
+    monkeypatch.setattr(runner_module, "_fit_cox_and_predict_survival", fake_cox)
+    cfg = {
+        "models": {
+            "enabled": ["coxph"],
+            "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
+        },
+        "evaluation": {
+            "n_time_points": 5,
+            "time_grid": "uniform_train_observed_max",
+            "max_time_factor": 1.0,
+        },
+    }
+    rows, output = _fit_one_split(
+        train, validation, test, cfg, torch.device("cpu"),
+        {"Dataset": "unit", "Dataset Type": "semi-synthetic"},
+    )
+
+    assert training_time_scale(train) == 25.0
+    np.testing.assert_allclose(captured["train_time"], train.time / 25.0)
+    np.testing.assert_allclose(captured["grid"], output["time_points"] / 25.0)
+    np.testing.assert_allclose(output["CoxPH"]["median"], [37.5, 37.5])
+    assert rows[0]["Training Time Scale"] == 25.0
+    scaled = scale_observed_time(test, 25.0)
+    np.testing.assert_allclose(scaled.time, test.time / 25.0)
+    np.testing.assert_array_equal(scaled.true_event_time, test.true_event_time)
+
+
+def test_hacsurv_joint_ise_uses_scaled_model_grid_and_original_metric_grid(
+    monkeypatch,
+):
+    train = SurvivalData(
+        X=np.zeros((4, 2)), time=np.array([10.0, 20.0, 30.0, 40.0]),
+        event=np.array([1, 1, 0, 1]), feature_names=["x0", "x1"],
+        true_event_time=np.array([11.0, 22.0, 33.0, 44.0]),
+    )
+    validation = SurvivalData(
+        X=np.zeros((2, 2)), time=np.array([15.0, 35.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([16.0, 36.0]),
+    )
+    test = SurvivalData(
+        X=np.zeros((2, 2)), time=np.array([25.0, 50.0]),
+        event=np.array([1, 0]), feature_names=["x0", "x1"],
+        true_event_time=np.array([26.0, 52.0]),
+    )
+    event_grid = np.array([0.0, 25.0, 50.0])
+    censor_grid = np.array([0.0, 20.0, 40.0])
+    truth = np.ones((2, 3, 3))
+    joint = JointSurvivalEvaluation(test.X, event_grid, censor_grid, truth)
+
+    def fake_fit(*args, **kwargs):
+        model_grid = np.asarray(args[7])
+        return np.ones((len(test.X), len(model_grid))), {}, [], object()
+
+    def fake_joint(model, evaluation, **kwargs):
+        np.testing.assert_allclose(evaluation.event_grid, event_grid / 25.0)
+        np.testing.assert_allclose(evaluation.censor_grid, censor_grid / 25.0)
+        return truth.copy()
+
+    monkeypatch.setattr(runner_module, "fit_hacsurv_2d", fake_fit)
+    monkeypatch.setattr(runner_module, "predict_hacsurv_joint_survival", fake_joint)
+    cfg = {
+        "models": {"enabled": ["hacsurv_2d"], "hacsurv_2d": {}},
+        "evaluation": {
+            "n_time_points": 5,
+            "time_grid": "uniform_train_observed_max",
+            "max_time_factor": 1.0,
+            "joint_model_samples": 2,
+            "joint_model_batch_size": 2,
+        },
+    }
+    rows, _ = _fit_one_split(
+        train, validation, test, cfg, torch.device("cpu"),
+        {"Dataset": "unit", "Dataset Type": "semi-synthetic"},
+        joint_evaluation=joint,
+    )
+
+    assert rows[0]["oracle_joint_survival_ise"] == 0.0
 
 
 def test_dvfm_forward_prediction_and_metrics():
@@ -38,3 +234,437 @@ def test_dvfm_forward_prediction_and_metrics():
     _, ipcw, _ = compute_ipcw_brier_ibs(curves, grid, time[:8], event[:8])
     assert np.isfinite(oracle)
     assert np.isfinite(ipcw)
+
+
+def test_censored_metrics_are_survivaleval_based_and_exclude_ibs_dep():
+    rng = np.random.default_rng(18)
+    train_time = rng.uniform(0.2, 4.0, size=80)
+    train_event = rng.integers(0, 2, size=80)
+    test_time = rng.uniform(0.2, 4.0, size=30)
+    test_event = rng.integers(0, 2, size=30)
+    grid = np.linspace(0.0, 4.0, 30)
+    curves = np.exp(-grid[None, :] / (1.0 + test_time[:, None]))
+    medians = np.full(len(test_time), np.log(2.0) * 2.0)
+    metrics = collect_metrics(
+        "Model", medians, curves, test_time, test_event, None, grid,
+        t_train=train_time, e_train=train_event,
+    )
+    assert np.isfinite(metrics["Model C-Idx"])
+    assert np.isfinite(metrics["Model CI IPCW"])
+    assert np.isfinite(metrics["Model IBS IPCW"])
+    assert np.isfinite(metrics["Model MAE Margin"])
+    assert not any("DEP" in name for name in metrics)
+
+
+def test_dvfm_post_warmup_elbo_checkpoint_respects_minimum_epoch():
+    X, time, event, _, _ = generate_copula_data(
+        n_samples=96, n_features=3, copula_type="clayton", theta=1.0, seed=31
+    )
+    loader = DataLoader(SurvivalDataset(X, time, event), batch_size=32, shuffle=False)
+    model = DVFM(input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8])
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=3, warmup_epochs=2,
+        checkpoint_min_epoch=2, return_artifacts=True,
+    )
+    assert len(artifacts["history"]) == 3
+    assert artifacts["best_validation_elbo_epoch"] in {2, 3}
+    assert set(artifacts["final_state"]) == set(artifacts["best_validation_elbo_state"])
+
+
+def test_dvfm_rejects_all_numerically_invalid_checkpoint_epochs():
+    X, time, event, _, _ = generate_copula_data(
+        n_samples=96, n_features=3, copula_type="clayton", theta=1.0, seed=32
+    )
+    loader = DataLoader(SurvivalDataset(X, time, event), batch_size=32, shuffle=False)
+    model = DVFM(input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8])
+    with np.testing.assert_raises_regex(RuntimeError, "No finite validation ELBO"):
+        train_dvfm(
+            model, loader, loader, n_epochs=2, warmup_epochs=1,
+            checkpoint_min_epoch=1, numerical_failure_threshold=1e-12,
+            return_artifacts=True,
+        )
+
+
+def test_dvfm_supports_dropout_and_adam_weight_decay():
+    rng = np.random.default_rng(23)
+    X = rng.normal(size=(96, 3)).astype(np.float32)
+    time = rng.uniform(0.2, 2.0, size=96).astype(np.float32)
+    event = rng.integers(0, 2, size=96).astype(np.float32)
+    loader = DataLoader(
+        SurvivalDataset(X, time, event), batch_size=32, shuffle=False
+    )
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        dropout=0.1,
+    )
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=2, warmup_epochs=1,
+        checkpoint_min_epoch=1, numerical_failure_threshold=100.0,
+        weight_decay=1e-4, return_artifacts=True,
+    )
+    assert any(isinstance(layer, torch.nn.Dropout) for layer in model.encoder.network)
+    assert any(isinstance(layer, torch.nn.Dropout) for layer in model.decoder.network)
+    assert artifacts["best_validation_elbo_epoch"] in {1, 2}
+
+
+def test_dvfm_bounds_posterior_log_variance_before_sampling():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        logvar_min=-12.0, logvar_max=8.0,
+    )
+    model.eval()
+    with torch.no_grad():
+        model.encoder.fc_logvar.weight.zero_()
+        model.encoder.fc_logvar.bias.fill_(100.0)
+    _, logvar = model.encoder(
+        torch.zeros(4, 3), torch.ones(4), torch.zeros(4)
+    )
+    assert torch.all(logvar == 8.0)
+    samples = model.reparameterize(torch.zeros_like(logvar), logvar)
+    assert torch.isfinite(samples).all()
+
+
+def test_dvfm_hard_concrete_gate_and_loading_l1_are_reported():
+    torch.manual_seed(27)
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_gate="hard_concrete",
+        gate_initial_value=0.9, gate_temperature=0.67,
+    )
+    model.eval()
+    initial_gate = float(model.decoder.gate_value().detach())
+    assert abs(initial_gate - 0.9) < 1e-5
+    penalty, loading, group_norm, gate = model.regularization_terms(
+        latent_loading_l1=0.01, gate_l1=0.01
+    )
+    assert penalty.requires_grad
+    assert loading > 0
+    assert group_norm > 0
+    assert 0 < gate < 1
+
+    # A closed deterministic gate makes the decoder invariant to z.
+    with torch.no_grad():
+        model.decoder.gate_log_alpha.fill_(-20.0)
+    x = torch.randn(12, 3)
+    first = model.decoder(x, torch.zeros(12, 1))
+    second = model.decoder(x, torch.ones(12, 1) * 10.0)
+    assert float(model.decoder.gate_value().detach()) == 0.0
+    for left, right in zip(first, second):
+        assert torch.allclose(left, right)
+
+    loader = DataLoader(
+        SurvivalDataset(x.numpy(), np.linspace(0.2, 2.0, 12), np.arange(12) % 2),
+        batch_size=6, shuffle=False,
+    )
+    with torch.no_grad():
+        model.decoder.gate_log_alpha.fill_(0.0)
+    artifacts = train_dvfm(
+        model, loader, loader, n_epochs=1, warmup_epochs=1,
+        checkpoint_min_epoch=1, return_artifacts=True,
+        latent_loading_l1=0.01, gate_l1=0.01,
+    )
+    history = artifacts["history"][0]
+    assert np.isfinite(history["latent_loading_l1_magnitude"])
+    assert 0.0 <= history["learned_gate"] <= 1.0
+    assert isinstance(history["gate_is_open"], bool)
+
+
+def test_dvfm_loading_l1_is_enabled_by_default_and_can_be_disabled():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8]
+    )
+    default_penalty, loading, _, _ = model.regularization_terms()
+    disabled_penalty, _, _, _ = model.regularization_terms(
+        latent_loading_l1=0.0
+    )
+    assert model.latent_loading_l1_alpha == 0.1
+    assert torch.allclose(default_penalty, 0.1 * loading)
+    assert float(disabled_penalty.detach()) == 0.0
+
+
+def test_dvfm_smooth_gate_and_group_lasso_have_gradients():
+    model = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_gate="sigmoid", gate_initial_value=0.9,
+    )
+    model.train()
+    gate = model.decoder.gate_value()
+    assert abs(float(gate.detach()) - 0.9) < 1e-5
+    penalty, _, group_norm, reported_gate = model.regularization_terms(
+        latent_group_lasso=0.1, gate_l1=0.1
+    )
+    penalty.backward()
+    assert group_norm > 0
+    assert 0 < reported_gate < 1
+    assert model.decoder.gate_log_alpha.grad is not None
+    assert torch.isfinite(model.decoder.gate_log_alpha.grad)
+    first_linear = next(
+        layer for layer in model.decoder.network
+        if isinstance(layer, torch.nn.Linear)
+    )
+    assert first_linear.weight.grad is not None
+    assert torch.isfinite(first_linear.weight.grad).all()
+
+
+def test_dvfm_decoder_calibration_variants_are_finite_and_structured():
+    torch.manual_seed(29)
+    x = torch.randn(24, 3)
+    time = torch.rand(24) + 0.2
+    event = torch.arange(24).remainder(2).float()
+    variants = [
+        {},
+        {"scale_link": "exp"},
+        {"scale_link": "exp", "latent_path": "additive_scale"},
+        {
+            "scale_link": "exp",
+            "latent_path": "additive_scale",
+            "shape_mode": "global",
+        },
+    ]
+    for options in variants:
+        model = DVFM(
+            input_dim=3, latent_dim=1,
+            encoder_hidden=[8], decoder_hidden=[8], **options,
+        )
+        outputs = model(x, time, event)
+        assert all(torch.isfinite(value).all() for value in outputs)
+        assert all((value > 0).all() for value in outputs[:4])
+        loss, _, _ = model.loss_function(*outputs, time, event)
+        loss.backward()
+        assert torch.isfinite(loss)
+
+    additive = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_path="additive_scale",
+    )
+    first_linear = next(
+        layer for layer in additive.decoder.network if isinstance(layer, torch.nn.Linear)
+    )
+    assert first_linear.in_features == 3
+    assert additive.decoder.latent_scale_loadings.shape == (1, 2)
+
+    global_shape = DVFM(
+        input_dim=3, latent_dim=1, encoder_hidden=[8], decoder_hidden=[8],
+        scale_link="exp", latent_path="additive_scale", shape_mode="global",
+    )
+    global_shape.eval()
+    shape_t, _, shape_c, _ = global_shape.decoder(x, torch.randn(24, 1))
+    assert torch.allclose(shape_t, shape_t[0].expand_as(shape_t))
+    assert torch.allclose(shape_c, shape_c[0].expand_as(shape_c))
+
+
+def test_hacsurv_2d_has_finite_likelihood_gradients_and_monotone_survival():
+    torch.manual_seed(41)
+    model = HACSurv2D(
+        input_dim=3, hidden_size=8, hidden_survival=8,
+        generator_samples=20, inverse_iterations=100, inverse_tolerance=1e-6,
+    ).double()
+    x = torch.randn(32, 3, dtype=torch.float64)
+    time = torch.linspace(0.2, 2.0, 32, dtype=torch.float64)
+    event = torch.arange(32).remainder(2).double()
+    model.generator.resample(20)
+    loss = -model.log_likelihood(x, time, event)
+    loss.backward()
+    generator_gradients = [
+        parameter.grad for parameter in model.generator.parameters()
+        if parameter.grad is not None
+    ]
+    assert torch.isfinite(loss)
+    assert generator_gradients
+    assert all(torch.isfinite(value).all() for value in generator_gradients)
+    with torch.no_grad():
+        early = model.event_survival(x, torch.full((32,), 0.25, dtype=torch.float64))
+        late = model.event_survival(x, torch.full((32,), 2.5, dtype=torch.float64))
+    assert torch.all(early >= late)
+
+
+def test_oracle_joint_survival_ise_is_zero_for_truth():
+    event_grid = np.linspace(0.0, 2.0, 5)
+    censor_grid = np.linspace(0.0, 3.0, 6)
+    truth = np.linspace(1.0, 0.0, 30).reshape(1, 5, 6)
+    evaluation = JointSurvivalEvaluation(
+        X=np.zeros((1, 2)), event_grid=event_grid,
+        censor_grid=censor_grid, truth=truth,
+    )
+    assert oracle_joint_survival_ise(truth, evaluation) == 0.0
+
+
+def test_clayton_prediction_uses_model_device():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ClaytonWeibullAFT(n_features=3).to(device)
+    curves = model.predict_survival(
+        np.zeros((4, 3), dtype=np.float32),
+        np.linspace(0.0, 2.0, 5),
+    )
+    assert curves.shape == (4, 5)
+    assert np.all(np.isfinite(curves))
+
+
+def test_gaussian_frailty_generator_is_reproducible_and_hits_targets():
+    kwargs = dict(n_samples=4000, n_features=3, kendall_tau=0.5, censoring_rate=0.25,
+                  dgp_seed=11, sampling_seed=12, calibration_samples=20_000)
+    first = generate_gaussian_shared_frailty(**kwargs)
+    second = generate_gaussian_shared_frailty(**kwargs)
+    np.testing.assert_array_equal(first.observed_time, second.observed_time)
+    np.testing.assert_array_equal(first.event, second.event)
+    assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
+    assert abs(first.achieved_censoring_rate - 0.25) < 1 / len(first.event) + 1e-12
+
+
+def test_bayesian_cox_gamma_frailty_posterior_and_predictions():
+    generated = generate_gaussian_shared_frailty(
+        n_samples=300, n_features=3, kendall_tau=0.5,
+        censoring_rate=0.5, dgp_seed=41, sampling_seed=42,
+        calibration_samples=5_000,
+    )
+    train, validation, test = (
+        slice(0, 200), slice(200, 250), slice(250, 300)
+    )
+    grid = np.linspace(0.0, np.quantile(generated.event_time[:200], 0.95), 30)
+    curves, info, history, model = fit_bayesian_cox_gamma_frailty(
+        generated.X[train], generated.observed_time[train], generated.event[train],
+        generated.X[validation], generated.observed_time[validation], generated.event[validation],
+        generated.X[test], grid,
+        {
+            "n_intervals": 5, "epochs": 40, "minimum_epochs": 10,
+            "early_stopping_patience": 10, "learning_rate": 0.03,
+            "dtype": "float64",
+        },
+        device="cpu",
+    )
+    assert curves.shape == (50, 30)
+    assert np.all(np.isfinite(curves))
+    assert np.all((curves >= 0.0) & (curves <= 1.0))
+    assert np.all(np.diff(curves, axis=1) <= 1e-10)
+    shape, rate = model.posterior_parameters(
+        generated.X[test], generated.observed_time[test], generated.event[test]
+    )
+    np.testing.assert_allclose(
+        model.posterior_frailty_mean(
+            generated.X[test], generated.observed_time[test], generated.event[test]
+        ),
+        (shape / rate).detach().cpu().numpy(),
+    )
+    assert info["frailty_distribution"] == "gamma"
+    assert info["frailty_variance"] > 0.0
+    assert len(history) >= 10
+
+
+def test_clayton_gamma_generator_exposes_true_frailty_and_hits_targets():
+    kwargs = dict(n_samples=5000, n_features=3, kendall_tau=0.5, censoring_rate=0.5,
+                  dgp_seed=21, sampling_seed=22)
+    first = generate_clayton_gamma_frailty(**kwargs)
+    second = generate_clayton_gamma_frailty(**kwargs)
+    np.testing.assert_array_equal(first.true_z, second.true_z)
+    np.testing.assert_array_equal(first.event, second.event)
+    assert abs(first.empirical_conditional_kendall_tau - 0.5) < 0.03
+    assert abs(first.achieved_censoring_rate - 0.5) < 1 / len(first.event) + 1e-12
+    assert abs(float(first.true_z.mean())) < 1e-6
+    assert abs(float(first.true_z.std()) - 1.0) < 1e-6
+
+
+def test_clayton_aft_likelihood_matches_its_exact_generator():
+    sample = generate_clayton_aft_data(n_samples=10_000, n_features=3,
+                                       clayton_theta=2.0, seed=19)
+    model = ClaytonWeibullAFT(n_features=3)
+    with torch.no_grad():
+        model.beta_t.copy_(torch.as_tensor(sample.beta_event, dtype=torch.float32))
+        model.beta_c.copy_(torch.as_tensor(sample.beta_censor, dtype=torch.float32))
+        model.log_shape_t.fill_(np.log(sample.shape_event))
+        model.log_shape_c.fill_(np.log(sample.shape_censor))
+        model.raw_theta.fill_(np.log(np.expm1(sample.clayton_theta - 1e-4)))
+    x_aug = np.column_stack([sample.X, np.ones(len(sample.X), dtype=np.float32)])
+    true_nll = model.neg_log_lik(torch.as_tensor(x_aug, dtype=torch.float32),
+                                 torch.as_tensor(sample.observed_time, dtype=torch.float32),
+                                 torch.as_tensor(sample.event, dtype=torch.float32))
+    with torch.no_grad():
+        model.beta_t.add_(0.75)
+        model.beta_c.sub_(0.75)
+        wrong_nll = model.neg_log_lik(torch.as_tensor(x_aug, dtype=torch.float32),
+                                      torch.as_tensor(sample.observed_time, dtype=torch.float32),
+                                      torch.as_tensor(sample.event, dtype=torch.float32))
+    assert torch.isfinite(true_nll)
+    assert true_nll < wrong_nll
+
+
+def test_median_survival_time_clips_non_crossing_curves_to_the_grid():
+    """Pin the median definition against a silent switch to extrapolation.
+
+    Delegating this to an extrapolating median moves ``oracle_ci`` and
+    ``oracle_mae`` by whole ranks while leaving ``oracle_ibs`` untouched, so
+    the definition is pinned here rather than left to the metric library.
+    """
+    grid = np.linspace(0.0, 100.0, 51)
+    crossing = np.linspace(1.0, 0.0, 51)
+    never = np.linspace(1.0, 0.7, 51)
+    flat = np.ones(51)
+
+    medians = median_survival_time(np.stack([crossing, never, flat]), grid)
+
+    assert medians[0] == grid[np.argmax(crossing <= 0.5)]
+    assert medians[1] == grid[-1]
+    assert medians[2] == grid[-1]
+    assert np.isfinite(medians).all()
+    assert (medians <= grid[-1]).all()
+
+
+def test_true_event_quantile_grid_outreaches_the_observed_anchors():
+    """Under censoring the observed anchors stop short of the true events.
+
+    The oracle metrics score against ``true_event_time``, so a horizon built
+    from observed times is truncated by exactly the censoring those metrics
+    are defined to see past.
+    """
+    rng = np.random.default_rng(3)
+    true_event = rng.exponential(scale=100.0, size=2000)
+    censor = rng.exponential(scale=25.0, size=2000)          # ~80% censoring
+    observed = np.minimum(true_event, censor)
+    event = (true_event <= censor).astype(int)
+    train = SurvivalData(
+        X=np.zeros((2000, 1)), time=observed, event=event,
+        feature_names=["x"], true_event_time=true_event,
+    )
+    settings = {"n_time_points": 100, "grid_max_quantile": 0.95,
+                "max_time_factor": 1.2}
+
+    truth_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_true_event_quantile"})
+    event_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_event_quantile"})
+    max_grid = evaluation_time_grid(
+        train, {**settings, "time_grid": "uniform_train_observed_max"})
+
+    assert truth_grid[-1] == pytest.approx(np.quantile(true_event, 0.95))
+    assert truth_grid[-1] > event_grid[-1]
+    assert truth_grid[-1] > max_grid[-1]
+    assert len(truth_grid) == 100
+
+
+def test_true_event_quantile_grid_requires_a_generating_truth():
+    train = SurvivalData(
+        X=np.zeros((5, 1)), time=np.arange(1.0, 6.0),
+        event=np.ones(5, dtype=int), feature_names=["x"],
+    )
+    with pytest.raises(ValueError, match="true event times"):
+        evaluation_time_grid(train, {
+            "n_time_points": 10, "grid_max_quantile": 0.95,
+            "time_grid": "uniform_train_true_event_quantile"})
+
+
+def test_clipped_fraction_matches_the_curves_that_never_reach_half():
+    """The reported diagnostic must agree with what the median actually clips.
+
+    ``save_predictions`` is off, so this column is the only record of how often
+    the median was not identified within the horizon.
+    """
+    grid = np.linspace(0.0, 10.0, 51)
+    crossing = np.exp(-np.linspace(0.3, 0.8, 7)[:, None] * grid[None, :])
+    never = np.tile(np.linspace(1.0, 0.8, 51), (3, 1))
+    curves = np.vstack([crossing, never])
+    truth = np.full(len(curves), 3.0)
+
+    result = compute_oracle_metrics(curves, grid, truth)
+    predicted = median_survival_time(curves, grid)
+
+    assert result["oracle_median_clipped_fraction"] == pytest.approx(3 / 10)
+    assert np.mean(predicted == grid[-1]) == pytest.approx(3 / 10)

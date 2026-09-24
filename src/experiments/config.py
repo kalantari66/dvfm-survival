@@ -1,0 +1,695 @@
+"""Load and validate the canonical experiment specification."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from itertools import product
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+DEFAULTS: dict[str, Any] = {
+    "schema_version": 1,
+    "study": {"stage": "exploratory", "output_dir": "results/experiment"},
+    "compute": {"device": "auto", "torch_num_threads": 1},
+    "split": {"strategy": "holdout", "validation_fraction": 0.15, "test_fraction": 0.30, "folds": 5},
+    "preprocessing": {"zscore_x": False},
+    "models": {
+        "enabled": ["dvfm"],
+        "coxph": {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9},
+        "dvfm": {"latent_dim": 20, "epochs": 200, "learning_rate": 1e-3, "batch_size": 64, "beta_max": 1.0, "warmup_epochs": 50, "free_bits": 0.0, "mc_samples": 100, "latent_loading_l1": 0.1, "logvar_min": -12.0, "logvar_max": 8.0},
+        "deepsurv": {"epochs": 200, "learning_rate": 1e-3, "batch_size": None},
+        "mtlr": {
+            "epochs": 200, "learning_rate": 5e-3, "bins": 200,
+            "batch_size": 64, "early_stopping_patience": None,
+            "hidden_dims": [64, 32], "dropout": 0.0, "weight_decay": 0.0,
+        },
+        "clayton_aft": {"epochs": 100, "learning_rate": 5e-3},
+        "gbsa": {
+            "n_estimators": 100, "learning_rate": 0.1, "max_depth": 3,
+            "loss": "coxph", "min_samples_split": 2, "min_samples_leaf": 1,
+            "max_features": "sqrt", "subsample": 0.8, "random_state": 0,
+        },
+        "rsf": {
+            "n_estimators": 100, "max_depth": 3, "min_samples_split": 2,
+            "min_samples_leaf": 1, "max_features": "sqrt",
+            "random_state": 0, "n_jobs": 1,
+        },
+        "weibull_aft": {"penalizer": 0.0, "l1_ratio": 0.0},
+        "bayesian_cox_gamma_frailty": {
+            "n_intervals": 10, "epochs": 500, "minimum_epochs": 100,
+            "early_stopping_patience": 50, "learning_rate": 0.03,
+            "minimum_delta": 1e-6, "gradient_clip": 10.0,
+            "beta_prior_sd": 2.5, "log_hazard_prior_sd": 5.0,
+            "log_alpha_prior_sd": 2.0, "baseline_smoothness": 1.0,
+            "dtype": "float64",
+        },
+        "hacsurv_2d": {
+            "epochs": 1000, "batch_size": 512, "learning_rate": 1e-4,
+            "copula_learning_rate": 1e-4, "copula_start_epoch": 200,
+            "minimum_epochs": 400, "checkpoint_min_epoch": 201,
+            "early_stopping_patience": 200,
+            "generator_samples": 200, "validation_generator_samples": 500,
+            "hidden_size": 32, "hidden_survival": 32,
+            "inverse_iterations": 200, "inverse_tolerance": 1e-8,
+            "scale_regularization": 1.0, "numerical_failure_threshold": 100.0,
+            "dtype": "float64",
+        },
+    },
+    "evaluation": {
+        "n_time_points": 200, "max_time_factor": 1.2,
+        "time_grid": "uniform_train_observed_max", "grid_max_quantile": 0.95,
+        "save_predictions": False, "primary_metrics": ["ibs_oracle", "mae_oracle"],
+    },
+}
+
+
+def _deep_update(base: dict, update: dict) -> dict:
+    result = deepcopy(base)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_update(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _require(mapping: dict, key: str, location: str) -> Any:
+    if key not in mapping:
+        raise ValueError(f"Missing required key '{location}.{key}'")
+    return mapping[key]
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
+
+
+def expand_seed_streams(seed_spec: list[int] | dict) -> list[dict[str, int]]:
+    """Resolve repeat seeds from the canonical list or legacy stream mapping."""
+    if isinstance(seed_spec, list):
+        if not seed_spec or not all(isinstance(seed, int) for seed in seed_spec):
+            raise ValueError("seeds must be a non-empty list of integers")
+        return [
+            {"dgp": seed, "sampling": seed, "split": seed, "model": seed}
+            for seed in seed_spec
+        ]
+    if not isinstance(seed_spec, dict):
+        raise ValueError("seeds must be a list of integers or a seed-stream mapping")
+    for key in ("dgp", "sampling", "split", "model"):
+        _require(seed_spec, key, "seeds")
+    if not isinstance(seed_spec["dgp"], int):
+        raise ValueError("seeds.dgp must be one integer")
+    for key in ("sampling", "split", "model"):
+        values = seed_spec[key]
+        if not values or not all(isinstance(seed, int) for seed in values):
+            raise ValueError(f"seeds.{key} must be a non-empty list of integers")
+    if len({len(seed_spec[key]) for key in ("sampling", "split", "model")}) != 1:
+        raise ValueError(
+            "seeds.sampling, seeds.split, and seeds.model must have equal length"
+        )
+    return [
+        {
+            "dgp": int(seed_spec["dgp"]),
+            "sampling": int(sampling),
+            "split": int(split),
+            "model": int(model),
+        }
+        for sampling, split, model in zip(
+            seed_spec["sampling"], seed_spec["split"], seed_spec["model"]
+        )
+    ]
+
+
+def expand_scenarios(data_cfg: dict) -> list[dict]:
+    """Expand explicit scenarios or a Cartesian ``data.grid`` into atomic scenarios."""
+    if "scenarios" in data_cfg:
+        return [deepcopy(item) for item in data_cfg["scenarios"]]
+    grid = data_cfg.get("grid")
+    if not grid:
+        return [{}]
+    keys = list(grid)
+    return [dict(zip(keys, values)) for values in product(*[_as_list(grid[k]) for k in keys])]
+
+
+def semisynthetic_datasets(data: dict) -> list[dict]:
+    """Resolve named datasets, retaining compatibility with the SUPPORT schema."""
+    if data["source"] == "support_cox_clayton_semisynthetic":
+        return [dict(name=data.get("name", "support"), path=data["path"],
+                     time_column="duration", event_column="event",
+                     numeric_features=["x0", "x7", "x8", "x9", "x10", "x11", "x12", "x13"],
+                     categorical_features=["x1", "x2", "x3", "x4", "x5", "x6"])]
+    datasets = _require(data, "datasets", "data")
+    if not isinstance(datasets, list) or not datasets:
+        raise ValueError("data.datasets must be a non-empty list")
+    names = set()
+    for spec in datasets:
+        if not isinstance(spec, dict):
+            raise ValueError("Each dataset must be a mapping")
+        for key in ("name", "time_column", "event_column"):
+            if not isinstance(_require(spec, key, "dataset"), str) or not spec[key]:
+                raise ValueError(f"dataset.{key} must be a non-empty string")
+        source_count = int(bool(spec.get("path"))) + int(bool(spec.get("loader")))
+        if source_count != 1:
+            raise ValueError("Each dataset must define exactly one of path or loader")
+        if spec.get("path") and not isinstance(spec["path"], str):
+            raise ValueError("dataset.path must be a non-empty string")
+        if spec.get("loader") and not isinstance(spec["loader"], str):
+            raise ValueError("dataset.loader must be a non-empty string")
+        name = spec["name"]
+        if not all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in name):
+            raise ValueError("Dataset names must contain only ASCII letters, digits, '-' or '_'")
+        if name.lower() in names:
+            raise ValueError(f"Duplicate dataset name: {name}")
+        names.add(name.lower())
+        for key in ("numeric_features", "categorical_features"):
+            values = _require(spec, key, "dataset")
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
+                raise ValueError(f"dataset.{key} must be a list of column names")
+        features = spec["numeric_features"] + spec["categorical_features"]
+        if not features or len(set(features)) != len(features):
+            raise ValueError("Dataset features must be non-empty and unique")
+        if set(features) & {spec["time_column"], spec["event_column"]}:
+            raise ValueError("Dataset outcome columns cannot also be features")
+        subsample = spec.get("subsample")
+        if subsample is not None:
+            if not isinstance(subsample, dict):
+                raise ValueError("dataset.subsample must be a mapping")
+            if int(_require(subsample, "target_size", "dataset.subsample")) < 1:
+                raise ValueError("dataset.subsample.target_size must be positive")
+            if int(subsample.get("time_bins", 10)) < 2:
+                raise ValueError("dataset.subsample.time_bins must be at least 2")
+        dropped = spec.get("drop_encoded_features", [])
+        if not isinstance(dropped, list) or any(
+            not isinstance(feature, str) or not feature for feature in dropped
+        ):
+            raise ValueError("dataset.drop_encoded_features must be a list of names")
+        if str(spec.get("numeric_imputation", "mean")) not in {
+            "mean", "median", "most_frequent"
+        }:
+            raise ValueError(
+                "dataset.numeric_imputation must be mean, median, or most_frequent"
+            )
+    return datasets
+
+
+def load_config(path: str | Path) -> dict:
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    cfg = _deep_update(DEFAULTS, raw)
+    # The no-frailty ablation is a separate model sharing DVFM's defaults; the
+    # configuration supplies only what differs from the model it ablates.
+    if "dvfm_z0" in cfg.get("models", {}):
+        cfg["models"]["dvfm_z0"] = _deep_update(
+            DEFAULTS["models"]["dvfm"], cfg["models"]["dvfm_z0"]
+        )
+    cfg["_config_path"] = str(path.resolve())
+    validate_config(cfg)
+    return cfg
+
+
+def validate_config(cfg: dict) -> None:
+    if int(cfg.get("schema_version", 0)) != 1:
+        raise ValueError("schema_version must be 1")
+
+    if "workflow" in cfg:
+        _require(cfg["workflow"], "target_name", "workflow")
+    if "resources" in cfg:
+        resources = cfg["resources"]
+        for key in ("cores", "memory", "walltime", "partition", "account"):
+            _require(resources, key, "resources")
+        if int(resources["cores"]) < 1:
+            raise ValueError("resources.cores must be at least 1")
+    study = _require(cfg, "study", "config")
+    _require(study, "name", "study")
+    if "standardize_x" in cfg["preprocessing"]:
+        raise ValueError("preprocessing.standardize_x was renamed to preprocessing.zscore_x")
+
+    data = _require(cfg, "data", "config")
+    source = str(_require(data, "source", "data")).lower()
+    if source == "synthetic_copula":
+        study_seeds = _require(study, "seeds", "study")
+        if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):
+            raise ValueError("study.seeds must be a non-empty list of integers")
+        _require(data, "n_samples", "data")
+        _require(data, "n_features", "data")
+        scenarios = expand_scenarios(data)
+        if not scenarios:
+            raise ValueError("Synthetic data requires at least one scenario")
+        for scenario in scenarios:
+            _require(scenario, "copula", "data scenario")
+            if "theta" not in scenario:
+                raise ValueError("Each current synthetic_copula scenario requires theta; do not substitute Kendall's tau without explicit calibration")
+    elif source in {"gaussian_shared_frailty", "frailty_recovery_diagnostic"}:
+        _require(data, "n_features", "data")
+        scenarios = expand_scenarios(data) if source == "gaussian_shared_frailty" else [data]
+        for scenario in scenarios:
+            n_samples = scenario.get("n_samples", data.get("n_samples"))
+            if n_samples is None or int(n_samples) < 10:
+                raise ValueError("Each Gaussian frailty scenario requires n_samples >= 10")
+            kendall_tau = float(_require(scenario, "kendall_tau", "data scenario"))
+            censoring_rate = float(_require(scenario, "censoring_rate", "data scenario"))
+            if not 0.0 <= kendall_tau < 1.0:
+                raise ValueError("data scenario kendall_tau must be in [0, 1)")
+            if not 0.0 < censoring_rate < 1.0:
+                raise ValueError("data scenario censoring_rate must be between 0 and 1")
+            mechanism = str(
+                scenario.get("mechanism", "gaussian_shared_frailty")
+            ).lower()
+            if mechanism not in {
+                "gaussian_shared_frailty", "clayton_gamma_frailty"
+            }:
+                raise ValueError(f"Unsupported data scenario mechanism: {mechanism}")
+            if mechanism == "clayton_gamma_frailty" and kendall_tau <= 0.0:
+                raise ValueError(
+                    "Clayton Gamma-frailty scenarios require kendall_tau > 0"
+                )
+        expand_seed_streams(_require(cfg, "seeds", "config"))
+        _require(cfg["split"], "validation_fraction", "split")
+        if source == "gaussian_shared_frailty":
+            dvfm = cfg["models"]["dvfm"]
+            variants = []
+            if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+                latent_dims = _require(dvfm, "latent_dims", "models.dvfm")
+                if not latent_dims or any(int(value) < 0 for value in latent_dims):
+                    raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+                checkpoint_min_epoch = int(_require(
+                    dvfm, "checkpoint_min_epoch", "models.dvfm"
+                ))
+                if checkpoint_min_epoch < int(dvfm["warmup_epochs"]):
+                    raise ValueError(
+                        "models.dvfm.checkpoint_min_epoch must be at or after warmup_epochs"
+                    )
+                if checkpoint_min_epoch > int(dvfm["epochs"]):
+                    raise ValueError(
+                        "models.dvfm.checkpoint_min_epoch cannot exceed epochs"
+                    )
+                if _require(dvfm, "primary_checkpoint", "models.dvfm") not in {
+                    "final", "best_validation_elbo_post_warmup"
+                }:
+                    raise ValueError("Invalid models.dvfm.primary_checkpoint")
+                if float(_require(
+                    dvfm, "numerical_failure_threshold", "models.dvfm"
+                )) <= 0:
+                    raise ValueError(
+                        "models.dvfm.numerical_failure_threshold must be positive"
+                    )
+                variants = dvfm.get("variants", [])
+            if variants:
+                names = [item.get("name") for item in variants]
+                if any(not name for name in names) or len(set(names)) != len(names):
+                    raise ValueError("models.dvfm.variants must have unique names")
+                for variant in variants:
+                    resolved = _deep_update(dvfm, variant)
+                    epochs = int(resolved["epochs"])
+                    minimum = int(resolved["checkpoint_min_epoch"])
+                    warmup = int(resolved["warmup_epochs"])
+                    if epochs < 1 or not warmup <= minimum <= epochs:
+                        raise ValueError(
+                            f"Invalid epoch/checkpoint settings for DVFM variant {variant['name']}"
+                        )
+                    dropout = float(resolved.get("dropout", 0.0))
+                    if not 0.0 <= dropout < 1.0:
+                        raise ValueError("DVFM variant dropout must be in [0, 1)")
+                    if float(resolved.get("weight_decay", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant weight_decay cannot be negative")
+                    if resolved.get("scale_link", "softplus") not in {"softplus", "exp"}:
+                        raise ValueError("DVFM variant scale_link must be softplus or exp")
+                    if resolved.get("latent_path", "nonlinear") not in {
+                        "nonlinear", "additive_scale"
+                    }:
+                        raise ValueError(
+                            "DVFM variant latent_path must be nonlinear or additive_scale"
+                        )
+                    if resolved.get("shape_mode", "conditional") not in {
+                        "conditional", "global"
+                    }:
+                        raise ValueError(
+                            "DVFM variant shape_mode must be conditional or global"
+                        )
+                    if float(resolved.get("latent_loading_l1", 0.1)) < 0.0:
+                        raise ValueError("DVFM variant latent_loading_l1 cannot be negative")
+                    if float(resolved.get("latent_group_lasso", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant latent_group_lasso cannot be negative")
+                    if float(resolved.get("gate_l1", 0.0)) < 0.0:
+                        raise ValueError("DVFM variant gate_l1 cannot be negative")
+                    latent_gate = resolved.get("latent_gate", "none")
+                    if latent_gate not in {"none", "hard_concrete", "sigmoid"}:
+                        raise ValueError(
+                            "DVFM variant latent_gate must be none, hard_concrete, or sigmoid"
+                        )
+                    if float(resolved.get("gate_l1", 0.0)) > 0.0 and latent_gate == "none":
+                        raise ValueError("DVFM gate_l1 requires an enabled latent_gate")
+                    if not 0.0 < float(resolved.get("gate_initial_value", 0.9)) < 1.0:
+                        raise ValueError("DVFM variant gate_initial_value must be in (0, 1)")
+                    if float(resolved.get("gate_temperature", 0.67)) <= 0.0:
+                        raise ValueError("DVFM variant gate_temperature must be positive")
+                    for key in ("encoder_hidden", "decoder_hidden"):
+                        widths = resolved.get(key, [])
+                        if not widths or any(int(width) < 1 for width in widths):
+                            raise ValueError(
+                                f"DVFM variant {key} must contain positive widths"
+                            )
+                reference = str(
+                    cfg.get("hyperparameter_sweep", {}).get(
+                        "reference_variant", "reference"
+                    )
+                )
+                if reference not in names:
+                    raise ValueError(
+                        "hyperparameter_sweep.reference_variant must name a DVFM variant"
+                    )
+                sweep_cfg = cfg.get("hyperparameter_sweep", {})
+                if sweep_cfg.get("selection_partition", "validation") != "validation":
+                    raise ValueError("Hyperparameters must be selected on validation")
+                if sweep_cfg.get("selection_prediction_mode", "prior") not in cfg["evaluation"].get("prediction_modes", []):
+                    raise ValueError(
+                        "hyperparameter_sweep.selection_prediction_mode must be evaluated"
+                    )
+                if float(sweep_cfg.get("frailty_spearman_tolerance", 0.03)) < 0:
+                    raise ValueError("frailty_spearman_tolerance cannot be negative")
+                partitions = cfg["evaluation"].get("evaluate_partitions", [])
+                if "validation" not in partitions or "test" not in partitions:
+                    raise ValueError(
+                        "DVFM sweeps must evaluate both validation and test partitions"
+                    )
+            if "hacsurv_2d" in {
+                str(name).lower() for name in cfg["models"]["enabled"]
+            }:
+                hac = cfg["models"]["hacsurv_2d"]
+                required = {
+                    "epochs", "batch_size", "learning_rate",
+                    "copula_learning_rate", "copula_start_epoch",
+                    "minimum_epochs", "checkpoint_min_epoch",
+                    "early_stopping_patience",
+                    "generator_samples", "validation_generator_samples",
+                    "hidden_size", "hidden_survival", "inverse_iterations",
+                    "inverse_tolerance", "scale_regularization",
+                    "numerical_failure_threshold", "dtype",
+                }
+                missing = required - set(hac)
+                if missing:
+                    raise ValueError(
+                        f"models.hacsurv_2d is missing keys: {sorted(missing)}"
+                    )
+                if int(hac["epochs"]) < 1 or int(hac["batch_size"]) < 2:
+                    raise ValueError("HACSurv epochs and batch_size must be positive")
+                if not 0 <= int(hac["copula_start_epoch"]) < int(hac["epochs"]):
+                    raise ValueError("HACSurv copula_start_epoch must precede epochs")
+                if not 0 <= int(hac["minimum_epochs"]) <= int(hac["epochs"]):
+                    raise ValueError("HACSurv minimum_epochs must be within training")
+                if not int(hac["copula_start_epoch"]) < int(hac["checkpoint_min_epoch"]) <= int(hac["epochs"]):
+                    raise ValueError(
+                        "HACSurv checkpoint_min_epoch must follow copula_start_epoch"
+                    )
+                if str(hac["dtype"]) not in {"float32", "float64"}:
+                    raise ValueError("HACSurv dtype must be float32 or float64")
+            if "bayesian_cox_gamma_frailty" in {
+                str(name).lower() for name in cfg["models"]["enabled"]
+            }:
+                frailty = cfg["models"]["bayesian_cox_gamma_frailty"]
+                for key in (
+                    "n_intervals", "epochs", "minimum_epochs",
+                    "early_stopping_patience", "learning_rate",
+                ):
+                    _require(frailty, key, "models.bayesian_cox_gamma_frailty")
+                if int(frailty["n_intervals"]) < 1:
+                    raise ValueError("Cox--Gamma frailty n_intervals must be positive")
+                if not 1 <= int(frailty["minimum_epochs"]) <= int(frailty["epochs"]):
+                    raise ValueError(
+                        "Cox--Gamma frailty minimum_epochs must be within training"
+                    )
+                if int(frailty["early_stopping_patience"]) < 1:
+                    raise ValueError(
+                        "Cox--Gamma frailty early_stopping_patience must be positive"
+                    )
+                if float(frailty["learning_rate"]) <= 0:
+                    raise ValueError("Cox--Gamma frailty learning_rate must be positive")
+                if str(frailty.get("dtype", "float64")) not in {"float32", "float64"}:
+                    raise ValueError("Cox--Gamma frailty dtype must be float32 or float64")
+        else:
+            mechanisms = _require(data, "mechanisms", "data")
+            allowed_mechanisms = {"gaussian_shared_frailty", "clayton_gamma_frailty"}
+            if not mechanisms or set(mechanisms) - allowed_mechanisms:
+                raise ValueError(f"data.mechanisms must contain only {sorted(allowed_mechanisms)}")
+            if int(_require(cfg["models"]["dvfm"], "latent_dim", "models.dvfm")) != 1:
+                raise ValueError("Frailty recovery diagnostic requires models.dvfm.latent_dim = 1")
+            variants = _require(cfg, "training_variants", "config")
+            required_variant_keys = {
+                "name", "maximum_epochs", "learning_rate", "beta_max", "warmup_epochs",
+                "lr_patience", "minimum_learning_rate", "scheduler_metric", "checkpoint_selection",
+            }
+            if not variants or len({item.get("name") for item in variants}) != len(variants):
+                raise ValueError("training_variants must have unique names")
+            for variant in variants:
+                missing = required_variant_keys - set(variant)
+                if missing:
+                    raise ValueError(f"Training variant is missing keys: {sorted(missing)}")
+                if variant["scheduler_metric"] not in {"validation_elbo", "validation_reconstruction_nll"}:
+                    raise ValueError("Invalid training variant scheduler_metric")
+                if variant["checkpoint_selection"] not in {"final", "best_validation_reconstruction_nll"}:
+                    raise ValueError("Invalid training variant checkpoint_selection")
+            _require(cfg["models"], "oracle_z_decoder", "models")
+            for key in ("dependence_samples_per_epoch", "dependence_samples_checkpoint"):
+                if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
+                    raise ValueError(f"evaluation.{key} must be at least 2")
+    elif source in {"support_cox_clayton_semisynthetic", "cox_clayton_semisynthetic"}:
+        semisynthetic_datasets(data)
+        copulas = data.get("copulas", [data.get("copula", "clayton")])
+        copulas = [str(copula).lower() for copula in copulas]
+        supported_copulas = {"gaussian", "clayton", "frank", "gumbel"}
+        if not copulas or set(copulas) - supported_copulas:
+            raise ValueError(f"data.copulas must contain only {sorted(supported_copulas)}")
+        tau_values = _require(data, "kendall_tau", "data")
+        tau_values = tau_values if isinstance(tau_values, list) else [tau_values]
+        if not tau_values or any(not 0.0 <= float(tau) < 1.0 for tau in tau_values):
+            raise ValueError("data.kendall_tau must contain values in [0, 1)")
+        rates = _require(data, "censoring_rates", "data")
+        if isinstance(rates, str):
+            if rates.lower() != "original":
+                raise ValueError("data.censoring_rates must be 'original' or values in (0, 1)")
+        elif not rates or any(not 0.0 < float(rate) < 1.0 for rate in rates):
+            raise ValueError("data.censoring_rates must contain values in (0, 1)")
+        expand_seed_streams(_require(cfg, "seeds", "config"))
+        if str(cfg["split"].get("stratify", "")).lower() != "time_event":
+            raise ValueError("SUPPORT semi-synthetic splits require split.stratify: time_event")
+        enabled_models = {str(name).lower() for name in cfg["models"]["enabled"]}
+        for variant in ("dvfm", "dvfm_z0"):
+            if variant in enabled_models:
+                if int(_require(cfg["models"][variant], "latent_dim", f"models.{variant}")) < 0:
+                    raise ValueError(f"models.{variant}.latent_dim must be nonnegative")
+        if "dvfm_z0" in enabled_models:
+            if int(cfg["models"]["dvfm_z0"]["latent_dim"]) != 0:
+                raise ValueError("models.dvfm_z0.latent_dim must be 0")
+            differing = {
+                key for key in cfg["models"]["dvfm_z0"]
+                if key != "latent_dim"
+                and cfg["models"]["dvfm_z0"][key] != cfg["models"]["dvfm"].get(key)
+            }
+            if differing:
+                raise ValueError(
+                    "models.dvfm_z0 is the matched ablation and may differ from "
+                    f"models.dvfm only in latent_dim, not in {sorted(differing)}"
+                )
+        # Only the tau is checked here. Dataset membership and the models the
+        # cross-check needs are properties of the whole study, and single
+        # dataset/model jobs revalidate a sliced copy of this configuration, so
+        # those belong to the recovery entry point and its GWF targets.
+        if cfg["evaluation"].get("recovery_baseline_datasets"):
+            recovery_tau = float(_require(
+                cfg["evaluation"], "recovery_baseline_kendall_tau", "evaluation"
+            ))
+            if not any(
+                abs(recovery_tau - float(value)) < 1e-12 for value in tau_values
+            ):
+                raise ValueError(
+                    "evaluation.recovery_baseline_kendall_tau must be one of "
+                    "data.kendall_tau"
+                )
+            if recovery_tau <= 0.0:
+                raise ValueError(
+                    "Shared-latent recovery is undefined at tau=0; "
+                    "evaluation.recovery_baseline_kendall_tau must be positive"
+                )
+    elif source == "real_latent_ablation":
+        for spec in semisynthetic_datasets(data):
+            reserved = set(spec["numeric_features"] + spec["categorical_features"]) | {
+                spec["time_column"], spec["event_column"],
+            }
+            external = spec.get("external_columns", [])
+            if not isinstance(external, list) or any(
+                not isinstance(column, str) or not column for column in external
+            ):
+                raise ValueError("dataset.external_columns must be a list of column names")
+            id_column = spec.get("id_column")
+            if id_column is not None and (not isinstance(id_column, str) or not id_column):
+                raise ValueError("dataset.id_column must be a non-empty string")
+            if (set(external) | ({id_column} - {None})) & reserved:
+                raise ValueError(
+                    "dataset.id_column and external_columns cannot be features or outcomes"
+                )
+            limit = spec.get("max_missing_fraction")
+            if limit is not None and (
+                isinstance(limit, bool) or not isinstance(limit, (int, float))
+                or not 0.0 <= float(limit) <= 1.0
+            ):
+                raise ValueError("dataset.max_missing_fraction must be null or in [0, 1]")
+            if not isinstance(spec.get("missing_indicators", False), bool):
+                raise ValueError("dataset.missing_indicators must be true or false")
+            if spec.get("subsample") or spec.get("drop_encoded_features"):
+                raise ValueError(
+                    "real_latent_ablation does not support subsample or drop_encoded_features"
+                )
+        expand_seed_streams(_require(cfg, "seeds", "config"))
+        if str(cfg["split"].get("stratify", "")).lower() != "time_event":
+            raise ValueError("real_latent_ablation splits require split.stratify: time_event")
+        if [str(name).lower() for name in cfg["models"]["enabled"]] != ["dvfm"]:
+            raise ValueError("real_latent_ablation requires models.enabled: [dvfm]")
+        dims = _require(cfg["models"]["dvfm"], "latent_dims", "models.dvfm")
+        if not isinstance(dims, list) or any(
+            not isinstance(dim, int) or dim < 0 for dim in dims
+        ) or len(set(dims)) != len(dims):
+            raise ValueError("models.dvfm.latent_dims must be unique nonnegative integers")
+        if 0 not in dims or len(dims) < 2:
+            raise ValueError(
+                "models.dvfm.latent_dims must include the latent-free reference 0 "
+                "and at least one latent dimension"
+            )
+        if int(_require(cfg["evaluation"], "likelihood_samples", "evaluation")) < 1:
+            raise ValueError("evaluation.likelihood_samples must be positive")
+        horizon = cfg["evaluation"].get("likelihood_horizon")
+        if horizon is not None and (
+            isinstance(horizon, bool) or not isinstance(horizon, (int, float)) or horizon <= 0
+        ):
+            raise ValueError("evaluation.likelihood_horizon must be null or a positive time")
+        if cfg["evaluation"].get("time_grid") == "uniform_train_true_event_quantile":
+            raise ValueError(
+                "real_latent_ablation has no true event times; choose an observed-data time_grid"
+            )
+    elif source in {"real_file", "semi_synthetic_file"}:
+        study_seeds = _require(study, "seeds", "study")
+        if not study_seeds or not all(isinstance(seed, int) for seed in study_seeds):
+            raise ValueError("study.seeds must be a non-empty list of integers")
+        _require(data, "path", "data")
+        if source == "real_file":
+            _require(data, "time_column", "data")
+            _require(data, "event_column", "data")
+        else:
+            _require(data, "true_event_time_column", "data")
+            _require(data, "true_censor_time_column", "data")
+    else:
+        raise ValueError(f"Unsupported data.source: {source}")
+
+    split = cfg["split"]
+    validation_fraction = float(split["validation_fraction"])
+    if not 0 < validation_fraction < 1:
+        raise ValueError("split.validation_fraction must be between 0 and 1")
+    if split["strategy"] == "holdout":
+        if not 0 < float(split["test_fraction"]) < 1:
+            raise ValueError("split.test_fraction must be between 0 and 1")
+        if validation_fraction + float(split["test_fraction"]) >= 1:
+            raise ValueError("validation and test fractions must sum to less than 1")
+    elif split["strategy"] != "kfold":
+        raise ValueError("split.strategy must be holdout or kfold")
+
+    supported = {
+        "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm",
+        # The matched no-frailty ablation, run as its own model.
+        "dvfm_z0",
+        "gbsa", "rsf", "weibull_aft",
+        "bayesian_cox_gamma_frailty",
+    }
+    unknown = set(cfg["models"]["enabled"]) - supported
+    if unknown:
+        raise ValueError(f"Unsupported models: {sorted(unknown)}")
+    if "coxph" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        coxph = cfg["models"]["coxph"]
+        if float(coxph["alpha"]) < 0.0:
+            raise ValueError("models.coxph.alpha cannot be negative")
+        if str(coxph["ties"]) not in {"breslow", "efron"}:
+            raise ValueError("models.coxph.ties must be breslow or efron")
+        if int(coxph["n_iter"]) < 1:
+            raise ValueError("models.coxph.n_iter must be positive")
+        if float(coxph["tol"]) <= 0.0:
+            raise ValueError("models.coxph.tol must be positive")
+    if "mtlr" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        base_mtlr = cfg["models"]["mtlr"]
+        mtlr_configs = [("models.mtlr", base_mtlr)]
+        for dataset, overrides in cfg["models"].get("tuned_by_dataset", {}).items():
+            if "mtlr" in overrides:
+                mtlr_configs.append((
+                    f"models.tuned_by_dataset.{dataset}.mtlr",
+                    _deep_update(base_mtlr, overrides["mtlr"]),
+                ))
+        for location, mtlr in mtlr_configs:
+            for key in (
+                "epochs", "batch_size", "learning_rate", "bins", "dropout",
+                "weight_decay", "hidden_dims", "early_stopping_patience",
+            ):
+                _require(mtlr, key, location)
+            if int(mtlr["epochs"]) < 1 or int(mtlr["batch_size"]) < 1:
+                raise ValueError(f"{location} epochs and batch_size must be positive")
+            if int(mtlr["bins"]) < 1 or float(mtlr["learning_rate"]) <= 0.0:
+                raise ValueError(f"{location} bins and learning_rate must be positive")
+            if not 0.0 <= float(mtlr["dropout"]) < 1.0:
+                raise ValueError(f"{location}.dropout must be in [0, 1)")
+            if float(mtlr["weight_decay"]) < 0.0:
+                raise ValueError(f"{location}.weight_decay cannot be negative")
+            if not isinstance(mtlr["hidden_dims"], list) or any(
+                int(width) < 1 for width in mtlr["hidden_dims"]
+            ):
+                raise ValueError(
+                    f"{location}.hidden_dims must be a list of positive widths"
+                )
+            patience = mtlr["early_stopping_patience"]
+            if patience is not None and int(patience) < 1:
+                raise ValueError(
+                    f"{location}.early_stopping_patience must be null or positive"
+                )
+    if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
+        dvfm = cfg["models"]["dvfm"]
+        scale_link = str(dvfm.get("scale_link", "softplus"))
+        if scale_link not in {"softplus", "exp"}:
+            raise ValueError("models.dvfm.scale_link must be softplus or exp")
+        if float(dvfm.get("latent_loading_l1", 0.1)) < 0.0:
+            raise ValueError("models.dvfm.latent_loading_l1 cannot be negative")
+        if float(dvfm.get("latent_group_lasso", 0.0)) < 0.0:
+            raise ValueError("models.dvfm.latent_group_lasso cannot be negative")
+        if float(dvfm.get("gate_l1", 0.0)) < 0.0:
+            raise ValueError("models.dvfm.gate_l1 cannot be negative")
+        if float(dvfm.get("logvar_min", -12.0)) >= float(dvfm.get("logvar_max", 8.0)):
+            raise ValueError("models.dvfm.logvar_min must be smaller than logvar_max")
+        if str(dvfm.get("latent_gate", "none")) not in {
+            "none", "hard_concrete", "sigmoid"
+        }:
+            raise ValueError(
+                "models.dvfm.latent_gate must be none, hard_concrete, or sigmoid"
+            )
+    if cfg["evaluation"].get("compute_oracle_joint_survival_ise", False):
+        for key in (
+            "joint_n_time_points", "joint_n_subjects", "joint_dgp_samples",
+            "joint_model_samples", "joint_model_batch_size",
+        ):
+            if int(_require(cfg["evaluation"], key, "evaluation")) < 2:
+                raise ValueError(f"evaluation.{key} must be at least 2")
+        quantile = float(_require(
+            cfg["evaluation"], "joint_grid_max_quantile", "evaluation"
+        ))
+        if not 0.0 < quantile <= 1.0:
+            raise ValueError("evaluation.joint_grid_max_quantile must be in (0, 1]")
+    time_grid = str(cfg["evaluation"].get("time_grid", "uniform_train_observed_max"))
+    if time_grid not in {
+        "uniform_train_observed_max", "uniform_train_event_quantile",
+        "uniform_train_true_event_quantile",
+    }:
+        raise ValueError("evaluation.time_grid is unsupported")
+    if time_grid in {
+        "uniform_train_event_quantile", "uniform_train_true_event_quantile",
+    }:
+        quantile = float(_require(
+            cfg["evaluation"], "grid_max_quantile", "evaluation"
+        ))
+        if not 0.0 < quantile <= 1.0:
+            raise ValueError("evaluation.grid_max_quantile must be in (0, 1]")

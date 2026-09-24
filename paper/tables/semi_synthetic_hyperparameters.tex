@@ -1,0 +1,103 @@
+% Requires: booktabs and multirow.
+\subsection{Hyperparameter tuning}
+\label{app:hyperparameter_settings}
+
+We tuned hyperparameters separately for each source dataset on a
+development-only semi-synthetic cohort. The cohort was generated with seed 99,
+a Gaussian copula, Kendall's $\tau=0.50$, and the source dataset's observed
+censoring rate. It was split once into 70\% training and 30\% validation data,
+stratified jointly by event status and observed-time bin. No test partition was
+used during tuning, and the development cohort was not reused in the final
+ten-seed evaluation.
+
+CoxPH was retained at its unpenalized implementation defaults. For every other
+learner, we independently sampled $R=10$ configurations from the
+model-specific discrete candidate set $\mathcal{C}_m$ in Table
+\ref{tab:semi_synthetic_search_spaces}. Each candidate was fitted on the
+development training partition and scored by its oracle integrated Brier score
+(IBS) on the validation partition. The selected configuration was
+\[
+  c_m^* = \arg\min_{c \in \{c_1,\ldots,c_R\} \subset \mathcal{C}_m}
+  \operatorname{IBS}_{\mathrm{oracle}}^{\mathrm{val}}(c; m).
+\]
+Oracle IBS is available because the semi-synthetic DGP supplies the true
+event-time survival distribution; it was used instead of an IPCW criterion,
+which would require an independent-censoring assumption. Failed configurations
+were treated as infeasible and excluded from selection. The selected settings
+were then fixed for all final scenarios and repeats. DVFM was tuned with a
+one-dimensional latent variable ($z=1$), and the resulting architecture and
+optimization settings were shared with its $z=0$ ablation.
+
+All candidates used the implementation's remaining fixed settings. In
+particular, DeepSurv, MTLR, and Clayton--Weibull AFT used their configured
+fixed epoch budgets; HACSurv-2D and Bayesian Cox--Gamma frailty used
+validation-based early stopping; and DVFM trained for its fixed epoch budget
+while retaining the best eligible post-warm-up validation-ELBO checkpoint.
+
+\begin{table*}[!ht]
+\centering
+\small
+\caption{Discrete hyperparameter search spaces for the semi-synthetic study.
+Each listed choice is sampled independently, except that a DVFM architecture
+is sampled as an encoder--decoder pair and HACSurv's copula learning rate is
+the sampled multiplier times the sampled learning rate.}
+\label{tab:semi_synthetic_search_spaces}
+\begin{tabular}{@{}llp{0.62\textwidth}@{}}
+\toprule
+Model & Hyperparameter & Candidate values \\
+\midrule
+\multirow{4}{*}{DeepSurv}
+& learning rate & $\{10^{-4},3\!\times\!10^{-4},10^{-3},3\!\times\!10^{-3}\}$ \\
+& weight decay & $\{0,10^{-5},10^{-4},10^{-3}\}$ \\
+& hidden layers & $\{[16],[32,16],[64],[64,32],[64,64,16]\}$ \\
+& dropout & $\{0,0.1,0.25\}$ \\
+\midrule
+\multirow{5}{*}{MTLR}
+& learning rate & $\{3\!\times\!10^{-4},10^{-3},3\!\times\!10^{-3},10^{-2}\}$ \\
+& weight decay & $\{0,10^{-5},10^{-4},10^{-3}\}$ \\
+& hidden layers & $\{[16],[32,16],[64],[64,32]\}$ \\
+& dropout & $\{0,0.1,0.25\}$ \\
+& time bins & $\{50,100,200\}$ \\
+\midrule
+\multirow{5}{*}{RSF}
+& number of trees & $\{100,300,500\}$ \\
+& maximum depth & $\{3,5,8\}$ \\
+& minimum split size & $\{2,10,25\}$ \\
+& minimum leaf size & $\{1,5,10\}$ \\
+& maximum features & $\{\texttt{sqrt},\texttt{log2},0.5\}$ \\
+\midrule
+\multirow{7}{*}{GBSA}
+& number of estimators & $\{100,300,500\}$ \\
+& learning rate & $\{0.01,0.05,0.1\}$ \\
+& maximum depth & $\{1,2,3\}$ \\
+& minimum split size & $\{2,10,25\}$ \\
+& minimum leaf size & $\{1,5,10\}$ \\
+& maximum features & $\{\texttt{sqrt},\texttt{log2},0.5\}$ \\
+& subsample fraction & $\{0.6,0.8,1.0\}$ \\
+\midrule
+Clayton--Weibull AFT & learning rate & $\{10^{-4},5\!\times\!10^{-4},10^{-3},5\!\times\!10^{-3},10^{-2}\}$ \\
+\midrule
+\multirow{6}{*}{HACSurv-2D}
+& learning rate & $\{3\!\times\!10^{-5},10^{-4},3\!\times\!10^{-4}\}$ \\
+& copula learning-rate multiplier & $\{0.3,1,3\}$ \\
+& marginal-network width & $\{16,32,64\}$ \\
+& survival-network width & $\{16,32,64\}$ \\
+& scale regularization & $\{0.1,1,10\}$ \\
+& weight decay & $\{0,10^{-5},10^{-4},10^{-3}\}$ \\
+\midrule
+\multirow{4}{*}{Bayesian Cox--Gamma frailty}
+& learning rate & $\{0.003,0.01,0.03,0.1\}$ \\
+& baseline-hazard intervals & $\{5,10,20\}$ \\
+& baseline smoothness & $\{0.1,1,10\}$ \\
+& regression-coefficient prior SD & $\{1,2.5,5\}$ \\
+\midrule
+\multirow{6}{*}{DVFM}
+& learning rate & $\{3\!\times\!10^{-4},10^{-3},3\!\times\!10^{-3}\}$ \\
+& weight decay & $\{0,10^{-5},10^{-4},10^{-3}\}$ \\
+& \multirow{3}{*}{encoder--decoder layers} & $([32,16],[16,32])$ \\
+& & $([64,32],[32,64])$ \\
+& & $([64,64,16],[16,64,64])$ \\
+& dropout & $\{0,0.1,0.25\}$ \\
+\bottomrule
+\end{tabular}
+\end{table*}

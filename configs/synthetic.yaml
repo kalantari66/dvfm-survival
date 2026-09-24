@@ -1,0 +1,75 @@
+schema_version: 1
+workflow: {target_name: synthetic}
+resources: {cores: 4, memory: 25g, walltime: "24:00:00", partition: gpu-l40s, account: c2i-colon}
+study:
+  name: synthetic
+  stage: primary
+  output_dir: results/synthetic
+# Repeat i independently initializes the DGP, cohort sampler, split, and model
+# with seed i. All model variants within a repeat remain paired.
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+compute: {device: cuda, torch_num_threads: 4}
+data:
+  source: gaussian_shared_frailty
+  n_samples: 10000
+  n_features: 10
+  calibration_samples: 50000
+  grid:
+    kendall_tau: [0.0, 0.25, 0.5, 0.75]
+    censoring_rate: [0.25, 0.50, 0.75]
+split:
+  strategy: holdout
+  validation_fraction: 0.10
+  test_fraction: 0.20
+preprocessing: {zscore_x: false}
+models:
+  enabled: [dvfm]
+  dvfm:
+    # z=1 matches the scalar shared-Gaussian frailty DGP. z=0 is the matched
+    # no-frailty/conditional-independence DVFM ablation. This is an internal
+    # mechanistic control, not a competing-method benchmark.
+    latent_dims: [0, 1]
+    encoder_hidden: [64, 32]
+    decoder_hidden: [32, 64]
+    # Selected by the dependence-calibration ablation; remains an explicit
+    # hyperparameter so it can be changed without touching model code.
+    scale_link: exp
+    dropout: 0.0
+    weight_decay: 0.0001
+    # Default-on L1 shrinkage of the decoder weights carrying z into both
+    # event and censoring margins. Alpha selected by the paired ablation.
+    latent_loading_l1: 0.1
+    epochs: 200
+    learning_rate: 0.001
+    batch_size: 64
+    beta_max: 1.0
+    warmup_epochs: 50
+    checkpoint_min_epoch: 50
+    primary_checkpoint: best_validation_elbo_post_warmup
+    numerical_failure_threshold: 100.0
+    # Bounds posterior std = exp(0.5 * logvar) during training and prediction.
+    logvar_min: -12.0
+    logvar_max: 8.0
+    free_bits: 0.0
+    mc_samples: 100
+evaluation:
+  # Matches the semi-synthetic study so the two share one grid resolution.
+  n_time_points: 100
+  # Anchored on the true event times the oracle metrics score against, so the
+  # horizon is not truncated by the censoring the oracle metrics see past.
+  time_grid: uniform_train_true_event_quantile
+  grid_max_quantile: 0.95
+  primary_metrics: [oracle_ibs, oracle_ci, oracle_mae, oracle_joint_survival_ise]
+  prediction_modes: [prior, aggregate_posterior]
+  save_predictions: false
+  save_training_history: true
+  save_calibration_curves: true
+  active_kl_threshold: 0.01
+  dependence_samples: 2000
+  compute_oracle_joint_survival_ise: true
+  joint_n_time_points: 15
+  joint_grid_max_quantile: 0.95
+  joint_n_subjects: 128
+  joint_dgp_samples: 2000
+  joint_model_samples: 500
+  joint_model_batch_size: 32
