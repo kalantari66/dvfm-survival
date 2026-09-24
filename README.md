@@ -141,6 +141,9 @@ results/<study>/
   resolved_config.yaml      the fully expanded configuration actually used
   dvfm_diagnostics.csv      latent diagnostics (DVFM studies)
   latent_recovery_test.csv  per-subject recovered vs true latent, where defined
+  recovery_baselines/       CoxPH and Cox--Gamma frailty recovery, with the
+                            oracle-IBS cross-check proving the refit cohorts
+                            match the benchmark ones
 ```
 
 `results/`, `data/` and `figures/` are git-ignored. They are outputs — never hand-edit them, and
@@ -196,6 +199,24 @@ evaluation:     # time grid, primary metrics, saved artifacts
 | `uniform_train_observed_max` | `max_time_factor` x the longest observed training time | the default; a single order statistic, so one long follow-up sets the horizon |
 
 The first requires a data source that supplies true event times and raises otherwise.
+
+`evaluation.recovery_baseline_datasets` and `evaluation.recovery_baseline_kendall_tau` scope the
+scalar-frailty recovery baselines. For each named dataset the `recovery_baselines` targets refit
+CoxPH and Cox--Gamma on the regenerated cohort, score their frailty proxies against the true
+latent, and cross-check each refit against the benchmark fit's oracle IBS. They require `coxph` and
+`bayesian_cox_gamma_frailty` in `models.enabled`, and a positive tau, since shared-latent recovery
+is undefined under independence.
+
+`dvfm_z0` is DVFM's matched no-frailty ablation and is enabled as its own model, so it gets its own
+jobs, result directory and rows under the name `DVFM-z0`. It is defined by a YAML merge of the
+`dvfm` block with `latent_dim: 0`, in `models` and again in each dataset's `tuned_by_dataset` entry,
+and validation rejects any other difference between the two: the ablation must share the
+architecture and tuned settings of the model it ablates. It sees the same cohorts and splits
+because generation and splitting run from the same seed streams, independently of the model.
+
+Being a model rather than a variant, it appears in every model-keyed artifact. Analysis code must
+exclude it from rankings that compare methods, since it is an internal control rather than a
+competing model; the notebooks and `make_rank_shift_table.py` filter it by name.
 
 `data.source: real_latent_ablation` fits DVFM on a real cohort once per entry of
 `models.dvfm.latent_dims`, which must include the latent-free reference `0`; every dimension shares

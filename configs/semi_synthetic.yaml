@@ -1,6 +1,8 @@
 schema_version: 1
 workflow: {target_name: semi_synthetic}
-resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: anonymous}
+# CPU models run on the default partition and may take up to 12h. HACSurv and
+# both DVFM variants run on gpu-short, which caps a job at 2h.
+resources: {cores: 4, memory: 25g, walltime: "06:00:00", gpu_walltime: "02:00:00", partition: gpu-short, account: c2i-colon}
 study:
   name: semi-synthetic
   stage: pilot
@@ -127,7 +129,7 @@ preprocessing:
 models:
   # One representative independent learner per class plus dependent-censoring
   # comparators. Tree and Weibull-AFT sensitivity runs are appendix-only.
-  enabled: [coxph, deepsurv, mtlr, rsf, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm]
+  enabled: [coxph, deepsurv, mtlr, rsf, clayton_aft, hacsurv_2d, bayesian_cox_gamma_frailty, dvfm, dvfm_z0]
   coxph:
     alpha: 0.0001
     ties: breslow
@@ -158,10 +160,8 @@ models:
     dropout: 0.0
     learning_rate: 0.005
     weight_decay: 0.0
-  dvfm:
-    # The earlier synthetic study supplies the z=0 ablation; semi-synthetic
-    # evaluates the final scalar-frailty model only.
-    latent_dims: [1]
+  dvfm: &dvfm
+    latent_dim: 1
     encoder_hidden: [64, 32]
     decoder_hidden: [32, 64]
     # Enabled from the dependence-calibration ablation, while remaining an
@@ -183,6 +183,13 @@ models:
     logvar_max: 8.0
     free_bits: 0.0
     mc_samples: 100
+  # The matched no-frailty ablation: the same architecture, the same tuned
+  # settings and the same cohorts and splits, with the shared latent removed.
+  # It is a separate model so it gets its own jobs, result directory and rows,
+  # and it never enters a ranking that compares methods.
+  dvfm_z0:
+    <<: *dvfm
+    latent_dim: 0
   # Development-seed-99 oracle-IBS winners. HACSurv multipliers are resolved
   # to absolute copula learning rates so this mapping can be applied directly
   # at fit time. The DeepSurv rows come from a rerun of the same tuning
@@ -193,7 +200,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.003, n_intervals: 10}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.1, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.00001}
-      dvfm: {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &whas_dvfm {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *whas_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 3, max_features: 0.5, min_samples_leaf: 5, min_samples_split: 10, n_estimators: 100, subsample: 0.6}
       hacsurv_2d: {hidden_size: 16, hidden_survival: 16, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 10.0, weight_decay: 0.001}
       mtlr: {bins: 200, dropout: 0.1, hidden_dims: [64, 32], learning_rate: 0.0003, weight_decay: 0.0001}
@@ -202,7 +210,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.03, n_intervals: 10}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.1, hidden_dims: [64], learning_rate: 0.03, weight_decay: 0.0}
-      dvfm: {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm: &gbsg_dvfm {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm_z0: {<<: *gbsg_dvfm}
       gbsa: {learning_rate: 0.1, max_depth: 1, max_features: sqrt, min_samples_leaf: 5, min_samples_split: 25, n_estimators: 500, subsample: 1.0}
       hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 1.0, weight_decay: 0.001}
       mtlr: {bins: 50, dropout: 0.25, hidden_dims: [64], learning_rate: 0.0003, weight_decay: 0.001}
@@ -211,7 +220,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 1.0, learning_rate: 0.1, n_intervals: 10}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.0, hidden_dims: [64], learning_rate: 0.03, weight_decay: 0.001}
-      dvfm: {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.0, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm: &metabric_dvfm {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.0, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm_z0: {<<: *metabric_dvfm}
       gbsa: {learning_rate: 0.1, max_depth: 1, max_features: sqrt, min_samples_leaf: 1, min_samples_split: 10, n_estimators: 300, subsample: 0.6}
       hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0003, scale_regularization: 10.0, weight_decay: 0.0001}
       mtlr: {bins: 100, dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.00001}
@@ -220,7 +230,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 2.5, learning_rate: 0.03, n_intervals: 5}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.0, hidden_dims: [64, 64, 16], learning_rate: 0.03, weight_decay: 0.001}
-      dvfm: {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.0001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &churn_dvfm {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.0001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *churn_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 2, max_features: log2, min_samples_leaf: 1, min_samples_split: 2, n_estimators: 500, subsample: 0.6}
       hacsurv_2d: {hidden_size: 32, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0003, scale_regularization: 1.0, weight_decay: 0.0}
       mtlr: {bins: 200, dropout: 0.25, hidden_dims: [16], learning_rate: 0.003, weight_decay: 0.001}
@@ -229,7 +240,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 1.0, learning_rate: 0.1, n_intervals: 20}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.00001}
-      dvfm: {dropout: 0.1, learning_rate: 0.003, weight_decay: 0.001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm: &nacd_dvfm {dropout: 0.1, learning_rate: 0.003, weight_decay: 0.001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm_z0: {<<: *nacd_dvfm}
       gbsa: {learning_rate: 0.1, max_depth: 1, max_features: sqrt, min_samples_leaf: 10, min_samples_split: 25, n_estimators: 500, subsample: 1.0}
       hacsurv_2d: {hidden_size: 64, hidden_survival: 32, learning_rate: 0.0001, copula_learning_rate: 0.0003, scale_regularization: 0.1, weight_decay: 0.00001}
       mtlr: {bins: 50, dropout: 0.1, hidden_dims: [64], learning_rate: 0.0003, weight_decay: 0.0}
@@ -238,7 +250,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 1.0, learning_rate: 0.03, n_intervals: 20}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.1, hidden_dims: [64], learning_rate: 0.01, weight_decay: 0.0001}
-      dvfm: {dropout: 0.0, learning_rate: 0.001, weight_decay: 0.001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm: &flchain_dvfm {dropout: 0.0, learning_rate: 0.001, weight_decay: 0.001, encoder_hidden: [32, 16], decoder_hidden: [16, 32]}
+      dvfm_z0: {<<: *flchain_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 2, max_features: 0.5, min_samples_leaf: 10, min_samples_split: 10, n_estimators: 500, subsample: 1.0}
       hacsurv_2d: {hidden_size: 32, hidden_survival: 16, learning_rate: 0.0001, copula_learning_rate: 0.00003, scale_regularization: 1.0, weight_decay: 0.00001}
       mtlr: {bins: 100, dropout: 0.0, hidden_dims: [32, 16], learning_rate: 0.003, weight_decay: 0.001}
@@ -247,7 +260,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.1, n_intervals: 10}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.25, hidden_dims: [64, 32], learning_rate: 0.03, weight_decay: 0.0001}
-      dvfm: {dropout: 0.1, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &support_dvfm {dropout: 0.1, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *support_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 3, max_features: 0.5, min_samples_leaf: 5, min_samples_split: 10, n_estimators: 100, subsample: 0.6}
       hacsurv_2d: {hidden_size: 64, hidden_survival: 32, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 1.0, weight_decay: 0.001}
       mtlr: {bins: 50, dropout: 0.25, hidden_dims: [64], learning_rate: 0.003, weight_decay: 0.001}
@@ -256,7 +270,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 5.0, learning_rate: 0.003, n_intervals: 5}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.0, hidden_dims: [64], learning_rate: 0.003, weight_decay: 0.001}
-      dvfm: {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &employee_dvfm {dropout: 0.25, learning_rate: 0.003, weight_decay: 0.001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *employee_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 3, max_features: log2, min_samples_leaf: 10, min_samples_split: 25, n_estimators: 100, subsample: 1.0}
       hacsurv_2d: {hidden_size: 16, hidden_survival: 64, learning_rate: 0.0003, copula_learning_rate: 0.0009, scale_regularization: 0.1, weight_decay: 0.001}
       mtlr: {bins: 200, dropout: 0.25, hidden_dims: [16], learning_rate: 0.0003, weight_decay: 0.0}
@@ -265,7 +280,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 10.0, beta_prior_sd: 5.0, learning_rate: 0.03, n_intervals: 5}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.25, hidden_dims: [64, 32], learning_rate: 0.1, weight_decay: 0.00001}
-      dvfm: {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      dvfm: &mimic_iv_dvfm {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      dvfm_z0: {<<: *mimic_iv_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 2, max_features: sqrt, min_samples_leaf: 10, min_samples_split: 2, n_estimators: 100, subsample: 1.0}
       hacsurv_2d: {hidden_size: 64, hidden_survival: 16, learning_rate: 0.00003, copula_learning_rate: 0.00009, scale_regularization: 1.0, weight_decay: 0.0}
       mtlr: {bins: 200, dropout: 0.1, hidden_dims: [64, 32], learning_rate: 0.0003, weight_decay: 0.0001}
@@ -274,7 +290,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.1, n_intervals: 20}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.1, hidden_dims: [64], learning_rate: 0.03, weight_decay: 0.0}
-      dvfm: {dropout: 0.0, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &seer_brain_dvfm {dropout: 0.0, learning_rate: 0.0003, weight_decay: 0.00001, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *seer_brain_dvfm}
       gbsa: {learning_rate: 0.1, max_depth: 1, max_features: 0.5, min_samples_leaf: 1, min_samples_split: 2, n_estimators: 300, subsample: 1.0}
       hacsurv_2d: {hidden_size: 32, hidden_survival: 16, learning_rate: 0.00003, copula_learning_rate: 0.00009, scale_regularization: 0.1, weight_decay: 0.0001}
       mtlr: {bins: 200, dropout: 0.1, hidden_dims: [16], learning_rate: 0.01, weight_decay: 0.00001}
@@ -283,7 +300,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 1.0, beta_prior_sd: 5.0, learning_rate: 0.03, n_intervals: 20}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.0, hidden_dims: [64], learning_rate: 0.003, weight_decay: 0.00001}
-      dvfm: {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      dvfm: &seer_liver_dvfm {dropout: 0.1, learning_rate: 0.001, weight_decay: 0.0001, encoder_hidden: [64, 64, 16], decoder_hidden: [16, 64, 64]}
+      dvfm_z0: {<<: *seer_liver_dvfm}
       gbsa: {learning_rate: 0.05, max_depth: 2, max_features: log2, min_samples_leaf: 5, min_samples_split: 10, n_estimators: 500, subsample: 1.0}
       hacsurv_2d: {hidden_size: 64, hidden_survival: 64, learning_rate: 0.0001, copula_learning_rate: 0.0003, scale_regularization: 1.0, weight_decay: 0.001}
       mtlr: {bins: 200, dropout: 0.25, hidden_dims: [32, 16], learning_rate: 0.001, weight_decay: 0.00001}
@@ -292,7 +310,8 @@ models:
       bayesian_cox_gamma_frailty: {baseline_smoothness: 0.1, beta_prior_sd: 5.0, learning_rate: 0.03, n_intervals: 20}
       clayton_aft: {learning_rate: 0.01}
       deepsurv: {dropout: 0.0, hidden_dims: [16], learning_rate: 0.03, weight_decay: 0.00001}
-      dvfm: {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.0, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm: &seer_stomach_dvfm {dropout: 0.25, learning_rate: 0.001, weight_decay: 0.0, encoder_hidden: [64, 32], decoder_hidden: [32, 64]}
+      dvfm_z0: {<<: *seer_stomach_dvfm}
       gbsa: {learning_rate: 0.1, max_depth: 3, max_features: 0.5, min_samples_leaf: 1, min_samples_split: 25, n_estimators: 100, subsample: 1.0}
       hacsurv_2d: {hidden_size: 16, hidden_survival: 16, learning_rate: 0.0001, copula_learning_rate: 0.00003, scale_regularization: 1.0, weight_decay: 0.0}
       mtlr: {bins: 200, dropout: 0.25, hidden_dims: [64, 32], learning_rate: 0.003, weight_decay: 0.001}
@@ -414,3 +433,8 @@ evaluation:
   joint_dgp_samples: 2000
   joint_model_samples: 500
   joint_model_batch_size: 32
+  # Scalar-frailty recovery baselines for the shared-latent comparison: refit
+  # CoxPH and Cox--Gamma on the same cohorts and score their frailty proxies
+  # against the true latent, on the datasets carrying subject-level figures.
+  recovery_baseline_datasets: [support, seer_brain]
+  recovery_baseline_kendall_tau: 0.5

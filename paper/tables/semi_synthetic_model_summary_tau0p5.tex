@@ -1,18 +1,19 @@
 \begin{table}
-\caption{Semi-synthetic performance at Kendall's $\tau=0.5$. Each entry is the median across the 12 datasets of a model's mean seed-level rank, the same quantity plotted in the corresponding figure panel; lower is better. Wins, ties and losses compare paired oracle-IBS seeds against DVFM from each comparator's perspective.}
+\caption{Semi-synthetic performance at Kendall's $\tau=0.5$. Each entry is the median across the 12 datasets of a model's mean seed-level rank, the same quantity plotted in the corresponding figure panel; lower is better. Wins, ties and losses compare paired oracle-IBS seeds against DVFM from each comparator's perspective. DVFM with $d_z=0$ is the matched no-frailty ablation, not a competing method; it is ranked in the same pool so that its gap to DVFM is read in the same units as every other gap in the table.}
 \label{tab:semi_synthetic_models_tau0p5}
 \begin{tabular}{lrrrr}
 \toprule
 Model & IBS rank & CI rank & MAE rank & W/T/L vs DVFM \\
 \midrule
-BayesianCoxGammaFrailty & 2.79 & 3.88 & 3.33 & 260/14/206 \\
-CoxPH & 2.89 & 4.56 & 3.24 & 259/19/202 \\
-HACSurv & 3.19 & 2.59 & 3.30 & 273/18/189 \\
-DVFM & 3.23 & 2.85 & 3.06 & -- \\
-DeepSurv & 4.66 & 5.61 & 4.54 & 142/15/323 \\
-ClaytonAFT & 5.61 & 2.98 & 5.16 & 113/8/359 \\
-RSF & 5.81 & 6.39 & 6.22 & 100/6/374 \\
-MTLR & 7.71 & 6.49 & 6.61 & 18/0/462 \\
+HACSurv & 2.80 & 3.41 & 2.62 & 278/4/198 \\
+DVFM & 2.94 & 4.40 & 2.80 & -- \\
+BayesianCoxGammaFrailty & 3.78 & 2.25 & 4.04 & 241/3/236 \\
+DVFM, $d_z{=}0$ & 4.04 & 4.31 & 4.62 & 189/8/283 \\
+ClaytonAFT & 4.28 & 6.78 & 3.60 & 171/4/305 \\
+MTLR & 6.68 & 6.97 & 6.47 & 8/1/471 \\
+CoxPH & 6.91 & 3.81 & 7.01 & 45/5/430 \\
+DeepSurv & 7.70 & 5.89 & 7.26 & 31/2/447 \\
+RSF & 8.26 & 7.71 & 8.11 & 31/0/449 \\
 \bottomrule
 \end{tabular}
 \end{table}

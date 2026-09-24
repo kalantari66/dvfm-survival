@@ -108,8 +108,21 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["coxph"] == {
         "alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9,
     }
-    assert cfg["models"]["dvfm"]["latent_dims"] == [1]
+    assert cfg["models"]["dvfm"]["latent_dim"] == 1
+    # The ablation differs from the model it ablates only in latent_dim.
+    assert cfg["models"]["dvfm_z0"]["latent_dim"] == 0
+    assert {
+        key: value for key, value in cfg["models"]["dvfm_z0"].items()
+        if key != "latent_dim"
+    } == {
+        key: value for key, value in cfg["models"]["dvfm"].items()
+        if key != "latent_dim"
+    }
+    for dataset, overrides in cfg["models"]["tuned_by_dataset"].items():
+        assert overrides["dvfm_z0"] == overrides["dvfm"], dataset
     assert cfg["evaluation"]["n_time_points"] == 100
+    assert cfg["evaluation"]["recovery_baseline_datasets"] == ["support", "seer_brain"]
+    assert cfg["evaluation"]["recovery_baseline_kendall_tau"] == 0.5
     assert cfg["evaluation"]["save_latent_recovery"] is True
     assert cfg["evaluation"]["save_event_distribution_plots"] is False
     assert cfg["evaluation"]["compute_oracle_joint_survival_ise"] is True
@@ -130,7 +143,7 @@ def test_support_semisynthetic_config_has_paired_generator_and_split():
     assert cfg["models"]["dvfm"]["scale_link"] == "exp"
     assert set(cfg["models"]["enabled"]) == {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d",
-        "bayesian_cox_gamma_frailty", "dvfm", "rsf",
+        "bayesian_cox_gamma_frailty", "dvfm", "dvfm_z0", "rsf",
     }
 
 

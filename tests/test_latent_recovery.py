@@ -169,12 +169,18 @@ def test_semisynthetic_runner_exports_each_tau_and_repeat(tmp_path, monkeypatch)
     cfg["data"]["datasets"].append({**cfg["data"]["datasets"][0], "name": "second"})
     for spec in cfg["data"]["datasets"]:
         spec.update(numeric_features=["x", "y"], categorical_features=[])
-    cfg["models"]["enabled"] = ["dvfm"]
-    cfg["models"]["dvfm"].update(epochs=1, warmup_epochs=0, checkpoint_min_epoch=1, mc_samples=2)
+    cfg["models"]["enabled"] = ["dvfm", "dvfm_z0"]
+    for variant in ("dvfm", "dvfm_z0"):
+        cfg["models"][variant].update(
+            epochs=1, warmup_epochs=0, checkpoint_min_epoch=1, mc_samples=2
+        )
     cfg["evaluation"]["n_time_points"] = 10
     results = run(cfg)
-    assert len(results) == 8 * len(cfg["models"]["dvfm"]["latent_dims"])
-    assert set(results["latent_dim"]) == set(cfg["models"]["dvfm"]["latent_dims"])
+    # The ablation is a separate model, so it doubles the rows and carries its
+    # own name and latent dimension.
+    assert len(results) == 8 * len(cfg["models"]["enabled"])
+    assert set(results["Model"]) == {"DVFM", "DVFM-z0"}
+    assert set(results["latent_dim"]) == {0, 1}
     assert results.Scenario.nunique() == 4
     assert set(results.Dataset) == {"whas", "second"}
     assert fitted_datasets == ["whas", "second"]

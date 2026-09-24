@@ -31,8 +31,15 @@ MODEL_LABELS = {
 # Models that estimate the joint law of (E, C), and so permit dependence
 # without requiring it, against those whose likelihood assumes E _||_ C | X.
 # This grouping is the table's claim, not a ranking.
+ANCHOR_MODEL = "DVFM"  # bolded, and the first row of whichever group it is in
 DEPENDENT_MODELS = ["DVFM", "ClaytonAFT", "HACSurv"]
 INDEPENDENT_MODELS = ["BayesianCoxGammaFrailty", "CoxPH", "DeepSurv", "RSF", "MTLR"]
+# Internal controls that share the benchmark's result files but never rank.
+ABLATION_MODELS = ["DVFM-z0"]
+# The one cell whose direction runs against its group. The caption names it, so
+# it is expected rather than a violation; every other departure still stops the
+# table, because the caption would then be asserting something the data denies.
+CLAIM_EXCEPTIONS = {("BayesianCoxGammaFrailty", "oracle_ci")}
 
 
 def snake_case(name):
@@ -54,6 +61,9 @@ def canonicalize(frame):
              "bayesian_cox_gamma_frailty": "BayesianCoxGammaFrailty",
              "bayesiancoxgammafrailty": "BayesianCoxGammaFrailty"}
     out["model"] = out["model"].astype(str).str.lower().map(names).fillna(out["model"].astype(str))
+    # The matched no-frailty ablation is an internal control, not a competing
+    # method, so it never takes part in the benchmark ranking.
+    out = out[~out["model"].isin(ABLATION_MODELS)].copy()
     out["copula"] = out["copula"].astype(str).str.title()
     return out
 
@@ -118,8 +128,9 @@ def build_table(low, high):
         r"\caption{\textbf{Dependence is what the rank responds to.} Model rank at "
         r"$\tau=0 \to \tau=0.5$, median over the 12 semi-synthetic datasets; rank 1 "
         r"is best, so a fall is an improvement. Every model that relaxes independent "
-        r"censoring improves on all three metrics; every model that assumes it "
-        r"degrades on all three.}",
+        r"censoring improves on all three metrics. Every model that assumes it "
+        r"degrades on Oracle IBS and Oracle MAE, and all but the Cox--Gamma frailty "
+        r"model degrade on Oracle CI as well.}",
         r"\label{tab:semi_synthetic_rank_shift}",
         r"\begin{tabular}{@{}lccc@{}}",
         r"\toprule",
@@ -134,15 +145,57 @@ def build_table(low, high):
     for group, header in groups:
         if header is not None:
             lines += [r"\midrule", header]
-        ranked = sorted(group, key=lambda m: high.loc[m, "oracle_ibs"] - low.loc[m, "oracle_ibs"])
+        # Our model heads its group; the rest follow by IBS improvement, so the
+        # ordering below it is still informative.
+        ranked = sorted(group, key=lambda m: (
+            m != ANCHOR_MODEL, high.loc[m, "oracle_ibs"] - low.loc[m, "oracle_ibs"]
+        ))
         for model in ranked:
             label = MODEL_LABELS.get(model, model)
-            if model == "DVFM":
+            if model == ANCHOR_MODEL:
                 label = r"\textbf{" + label + "}"
             cells = " & ".join(cell(low.loc[model, m], high.loc[model, m]) for m in RANK_METRICS)
             lines.append(f"{label} & {cells} \\\\")
     lines += [r"\bottomrule", r"\end{tabular}", r"\end{wraptable}", ""]
     return "\n".join(lines)
+
+
+def check_caption_claim(delta):
+    """The caption asserts a direction for every cell; verify the data still does.
+
+    The sentence is hard-coded above, so a rerun on new results can quietly
+    produce a table whose own caption one of its cells contradicts.  A rank that
+    falls is an improvement, so the dependence-aware group must be negative
+    throughout and the independence-assuming group positive apart from the cells
+    the caption names, which must in turn still be exceptions -- the caption
+    calls them out by name, so a cell that rejoins its group falsifies it too.
+    """
+    claims = (
+        (DEPENDENT_MODELS, -1.0, "improve"),
+        (INDEPENDENT_MODELS, 1.0, "degrade"),
+    )
+    violations = []
+    for group, expected_sign, claimed in claims:
+        for model in group:
+            for metric, (label, _) in RANK_METRICS.items():
+                if (model, metric) in CLAIM_EXCEPTIONS:
+                    continue
+                shift = float(delta.loc[model, metric])
+                if shift * expected_sign <= 0.0:
+                    violations.append(
+                        f"  {model} / {label}: rank shift {shift:+.2f}, but the "
+                        f"caption claims this group should {claimed}"
+                    )
+    for model, metric in sorted(CLAIM_EXCEPTIONS):
+        expected_sign = -1.0 if model in DEPENDENT_MODELS else 1.0
+        shift = float(delta.loc[model, metric])
+        if shift * expected_sign > 0.0:
+            violations.append(
+                f"  {model} / {RANK_METRICS[metric][0]}: rank shift {shift:+.2f} "
+                "now matches its group, so the caption should stop naming it as "
+                "an exception"
+            )
+    return violations
 
 
 def main():
@@ -160,6 +213,14 @@ def main():
     print(summary.round(2).to_string())
     print("\nmean delta over the three metrics:")
     print(delta.mean(axis=1).round(2).sort_values().to_string())
+
+    violations = check_caption_claim(delta)
+    if violations:
+        raise ValueError(
+            "These results do not support the caption's claim, so the table is "
+            "not written; reword the claim in build_table() or report the "
+            "exceptions:\n" + "\n".join(violations)
+        )
 
     out = args.root / "paper" / "tables" / "semi_synthetic_rank_shift.tex"
     out.write_text(build_table(low, high), encoding="utf-8")

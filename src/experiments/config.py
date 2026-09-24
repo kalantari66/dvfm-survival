@@ -199,6 +199,12 @@ def load_config(path: str | Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     cfg = _deep_update(DEFAULTS, raw)
+    # The no-frailty ablation is a separate model sharing DVFM's defaults; the
+    # configuration supplies only what differs from the model it ablates.
+    if "dvfm_z0" in cfg.get("models", {}):
+        cfg["models"]["dvfm_z0"] = _deep_update(
+            DEFAULTS["models"]["dvfm"], cfg["models"]["dvfm_z0"]
+        )
     cfg["_config_path"] = str(path.resolve())
     validate_config(cfg)
     return cfg
@@ -469,10 +475,44 @@ def validate_config(cfg: dict) -> None:
         expand_seed_streams(_require(cfg, "seeds", "config"))
         if str(cfg["split"].get("stratify", "")).lower() != "time_event":
             raise ValueError("SUPPORT semi-synthetic splits require split.stratify: time_event")
-        if "dvfm" in {str(name).lower() for name in cfg["models"]["enabled"]}:
-            dims = cfg["models"]["dvfm"].get("latent_dims", [cfg["models"]["dvfm"].get("latent_dim")])
-            if not dims or any(int(dim) < 0 for dim in dims):
-                raise ValueError("models.dvfm.latent_dims must contain nonnegative integers")
+        enabled_models = {str(name).lower() for name in cfg["models"]["enabled"]}
+        for variant in ("dvfm", "dvfm_z0"):
+            if variant in enabled_models:
+                if int(_require(cfg["models"][variant], "latent_dim", f"models.{variant}")) < 0:
+                    raise ValueError(f"models.{variant}.latent_dim must be nonnegative")
+        if "dvfm_z0" in enabled_models:
+            if int(cfg["models"]["dvfm_z0"]["latent_dim"]) != 0:
+                raise ValueError("models.dvfm_z0.latent_dim must be 0")
+            differing = {
+                key for key in cfg["models"]["dvfm_z0"]
+                if key != "latent_dim"
+                and cfg["models"]["dvfm_z0"][key] != cfg["models"]["dvfm"].get(key)
+            }
+            if differing:
+                raise ValueError(
+                    "models.dvfm_z0 is the matched ablation and may differ from "
+                    f"models.dvfm only in latent_dim, not in {sorted(differing)}"
+                )
+        # Only the tau is checked here. Dataset membership and the models the
+        # cross-check needs are properties of the whole study, and single
+        # dataset/model jobs revalidate a sliced copy of this configuration, so
+        # those belong to the recovery entry point and its GWF targets.
+        if cfg["evaluation"].get("recovery_baseline_datasets"):
+            recovery_tau = float(_require(
+                cfg["evaluation"], "recovery_baseline_kendall_tau", "evaluation"
+            ))
+            if not any(
+                abs(recovery_tau - float(value)) < 1e-12 for value in tau_values
+            ):
+                raise ValueError(
+                    "evaluation.recovery_baseline_kendall_tau must be one of "
+                    "data.kendall_tau"
+                )
+            if recovery_tau <= 0.0:
+                raise ValueError(
+                    "Shared-latent recovery is undefined at tau=0; "
+                    "evaluation.recovery_baseline_kendall_tau must be positive"
+                )
     elif source == "real_latent_ablation":
         for spec in semisynthetic_datasets(data):
             reserved = set(spec["numeric_features"] + spec["categorical_features"]) | {
@@ -556,6 +596,8 @@ def validate_config(cfg: dict) -> None:
 
     supported = {
         "coxph", "deepsurv", "mtlr", "clayton_aft", "hacsurv_2d", "dvfm",
+        # The matched no-frailty ablation, run as its own model.
+        "dvfm_z0",
         "gbsa", "rsf", "weibull_aft",
         "bayesian_cox_gamma_frailty",
     }
