@@ -3,7 +3,7 @@ schema_version: 1
 # git-ignored data/ directory and must be populated on the cluster by hand.
 workflow: {target_name: proact_latent_ablation, raw_dir: data/proact}
 # 20 DVFM fits take about an hour on one consumer GPU.
-resources: {cores: 4, memory: 25g, walltime: "04:00:00", partition: gpu-l40s, account: "c2i-colon"}
+resources: {cores: 4, memory: 25g, walltime: "04:00:00", partition: gpu-l40s, account: "anonymous"}
 study:
   name: proact-latent-ablation
   stage: pilot
