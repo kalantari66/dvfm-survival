@@ -171,6 +171,95 @@ class Decoder(nn.Module):
         )
 
 
+class TwoTrunkDecoder(nn.Module):
+    """Separate event and censoring trunks, each ending in (shape, scale).
+
+    ``latent_routing="shared"`` feeds the whole latent to both trunks.
+    ``"independent"`` requires two latent dimensions and feeds the first only
+    to the event trunk and the second only to the censoring trunk. Under the
+    factorized N(0, I) prior the decoded event and censoring times are then
+    conditionally independent given x, while each margin stays a continuous
+    Weibull mixture: the control separates marginal flexibility from sharing.
+    """
+
+    def __init__(self, input_dim, latent_dim, hidden_dims=(32, 64), dropout=0.0,
+                 scale_link="softplus", latent_routing="shared"):
+        super().__init__()
+        if scale_link not in {"softplus", "exp"}:
+            raise ValueError("scale_link must be 'softplus' or 'exp'")
+        if latent_routing not in {"shared", "independent"}:
+            raise ValueError("latent_routing must be 'shared' or 'independent'")
+        if latent_dim < 1:
+            raise ValueError("TwoTrunkDecoder requires latent_dim >= 1")
+        if latent_routing == "independent" and latent_dim != 2:
+            raise ValueError("Independent latent routing requires latent_dim = 2")
+        self.input_dim = int(input_dim)
+        self.latent_dim = int(latent_dim)
+        self.scale_link = scale_link
+        self.latent_routing = latent_routing
+        if latent_routing == "independent":
+            self.event_latent, self.censor_latent = slice(0, 1), slice(1, 2)
+        else:
+            self.event_latent = self.censor_latent = slice(0, latent_dim)
+        width = len(range(latent_dim)[self.event_latent])
+        self.event_trunk = self._trunk(input_dim + width, hidden_dims, dropout)
+        self.censor_trunk = self._trunk(input_dim + width, hidden_dims, dropout)
+        previous = int(hidden_dims[-1]) if len(hidden_dims) else input_dim + width
+        self.event_head = nn.Linear(previous, 2)
+        self.censor_head = nn.Linear(previous, 2)
+
+    @staticmethod
+    def _trunk(input_width, hidden_dims, dropout):
+        layers, previous = [], input_width
+        for width in hidden_dims:
+            layers.extend((nn.Linear(previous, width), nn.ReLU(), nn.BatchNorm1d(width)))
+            if float(dropout) > 0:
+                layers.append(nn.Dropout(float(dropout)))
+            previous = width
+        return nn.Sequential(*layers)
+
+    def _positive_scale(self, value):
+        if self.scale_link == "exp":
+            return torch.exp(value.clamp(min=-12.0, max=12.0)) + 1e-6
+        return nn.functional.softplus(value) + 1e-6
+
+    def _latent_blocks(self):
+        blocks = []
+        for trunk in (self.event_trunk, self.censor_trunk):
+            first = next((layer for layer in trunk if isinstance(layer, nn.Linear)), None)
+            if first is None:
+                raise ValueError("TwoTrunkDecoder needs at least one hidden layer")
+            blocks.append(first.weight[:, self.input_dim:])
+        return blocks
+
+    def gate_value(self, stochastic=False):
+        return self.event_head.weight.new_tensor(1.0)
+
+    def latent_loading_l1(self):
+        """Per-trunk mean |latent weights|, averaged over the two trunks.
+
+        With equal trunks this equals the single-trunk penalty, so the
+        configured alpha keeps its meaning.
+        """
+        return torch.stack([block.abs().mean() for block in self._latent_blocks()]).mean()
+
+    def latent_loading_group_norm(self):
+        return torch.cat([block.reshape(-1) for block in self._latent_blocks()]).square().mean().sqrt()
+
+    def forward(self, x, z):
+        event = self.event_head(self.event_trunk(torch.cat((x, z[:, self.event_latent]), dim=1)))
+        censor = self.censor_head(self.censor_trunk(torch.cat((x, z[:, self.censor_latent]), dim=1)))
+        return (
+            nn.functional.softplus(event[:, 0]) + 1e-6,
+            self._positive_scale(event[:, 1]),
+            nn.functional.softplus(censor[:, 0]) + 1e-6,
+            self._positive_scale(censor[:, 1]),
+        )
+
+
+DECODER_ARCHITECTURES = {"single", "two_trunk_shared", "two_trunk_independent"}
+
+
 class DVFM(nn.Module):
     def __init__(self, input_dim, latent_dim=8, encoder_hidden=(64, 32),
                  decoder_hidden=(32, 64), dropout=0.0,
@@ -178,25 +267,41 @@ class DVFM(nn.Module):
                  scale_link="softplus", latent_path="nonlinear",
                  shape_mode="conditional", latent_gate="none",
                  gate_initial_value=0.9, gate_temperature=0.67,
-                 latent_loading_l1=0.1, logvar_min=-12.0, logvar_max=8.0):
+                 latent_loading_l1=0.1, logvar_min=-12.0, logvar_max=8.0,
+                 decoder_architecture="single"):
         super().__init__()
         if latent_dim < 0:
             raise ValueError("latent_dim must be nonnegative")
         if float(latent_loading_l1) < 0.0:
             raise ValueError("latent_loading_l1 must be nonnegative")
+        if decoder_architecture not in DECODER_ARCHITECTURES:
+            raise ValueError(f"decoder_architecture must be one of {sorted(DECODER_ARCHITECTURES)}")
         encoder_dropout = dropout if encoder_dropout is None else encoder_dropout
         decoder_dropout = dropout if decoder_dropout is None else decoder_dropout
         self.encoder = None if latent_dim == 0 else Encoder(
             input_dim, latent_dim, encoder_hidden, encoder_dropout,
             logvar_min=logvar_min, logvar_max=logvar_max,
         )
-        self.decoder = Decoder(
-            input_dim, latent_dim, decoder_hidden, decoder_dropout,
-            scale_link=scale_link, latent_path=latent_path,
-            shape_mode=shape_mode,
-            latent_gate=latent_gate, gate_initial_value=gate_initial_value,
-            gate_temperature=gate_temperature,
-        )
+        if decoder_architecture == "single":
+            self.decoder = Decoder(
+                input_dim, latent_dim, decoder_hidden, decoder_dropout,
+                scale_link=scale_link, latent_path=latent_path,
+                shape_mode=shape_mode,
+                latent_gate=latent_gate, gate_initial_value=gate_initial_value,
+                gate_temperature=gate_temperature,
+            )
+        else:
+            if (latent_path, shape_mode, latent_gate) != ("nonlinear", "conditional", "none"):
+                raise ValueError(
+                    "Two-trunk decoders support only latent_path=nonlinear, "
+                    "shape_mode=conditional and latent_gate=none"
+                )
+            self.decoder = TwoTrunkDecoder(
+                input_dim, latent_dim, decoder_hidden, decoder_dropout,
+                scale_link=scale_link,
+                latent_routing=decoder_architecture.removeprefix("two_trunk_"),
+            )
+        self.decoder_architecture = decoder_architecture
         self.latent_dim = latent_dim
         # Alpha for the L1 penalty on decoder weights that carry the shared
         # latent into the event and censoring margins.  It lives on the model
@@ -269,4 +374,4 @@ class DVFM(nn.Module):
         return -reconstruction + beta * free_kl, -reconstruction, raw_kl
 
 
-__all__ = ["Encoder", "Decoder", "DVFM"]
+__all__ = ["DECODER_ARCHITECTURES", "Encoder", "Decoder", "TwoTrunkDecoder", "DVFM"]

@@ -1,0 +1,20 @@
+# SLURM resources and job lists for workflows/rebuttal/workflow.py.
+# Scientific settings are not here: every job reads the paper configs
+# (synthetic.yaml, semi_synthetic.yaml, proact_latent_ablation.yaml) or
+# configs/rebuttal/stratified_dependence.yaml.
+#
+# Set `account` before submitting; the committed paper configs were anonymized.
+account: anonymous
+resources:
+  # One dataset x seed (5 DVFM fits) or one synthetic cell (10 fits) per job.
+  gpu: {partition: gpu-short, cores: 4, memory: 25g, walltime: "02:00:00"}
+  # Task 2 timings (CPU HACSurv at N = 10,000 dominates) and Task 6.
+  # Task 2: set the partition to the GPU node type the timings should report.
+  gpu_long: {partition: gpu-l40s, cores: 4, memory: 25g, walltime: "12:00:00"}
+  # Task 3 CoxPH and Cox--Gamma refits run on CPU, as in the benchmark.
+  cpu: {cores: 4, memory: 25g, walltime: "06:00:00"}
+seed_count: 10
+synthetic_scenarios: 12
+task2_datasets: [gbsg, support, seer_liver]
+task5_datasets: [gbsg, seer_liver, support, metabric]
+task5_variants: [two_trunk_independent, two_trunk_shared]

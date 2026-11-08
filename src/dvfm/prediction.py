@@ -5,8 +5,13 @@ import torch
 from utility.metrics import median_survival_time as get_median_survival_time
 
 
-def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, device="cpu"):
-    """Predict by Monte Carlo integration over the aggregate training posterior."""
+def aggregate_posterior_mixture(model, train_loader, device="cpu"):
+    """Encode the training set once: the components of the aggregate posterior.
+
+    Returns per-subject posterior means and standard deviations as tensors on
+    ``device``. Iterating a shuffled loader consumes the torch RNG exactly as
+    ``predict_survival_curves`` always has.
+    """
     model.eval().to(device)
     mus, logvars = [], []
     with torch.no_grad():
@@ -21,8 +26,16 @@ def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, 
                 mu, logvar = model.encoder(x_batch, t_batch, event_batch)
             mus.append(mu)
             logvars.append(logvar)
-    all_mus = torch.cat(mus)
-    all_stds = torch.exp(0.5 * torch.cat(logvars))
+    return torch.cat(mus), torch.exp(0.5 * torch.cat(logvars))
+
+
+def predict_survival_from_mixture(
+    model, X, time_points, mixture_mu, mixture_std, n_samples=100, device="cpu"
+):
+    """Monte Carlo survival curves with z drawn from a precomputed mixture."""
+    model.eval().to(device)
+    all_mus = torch.as_tensor(mixture_mu, dtype=torch.float32, device=device)
+    all_stds = torch.as_tensor(mixture_std, dtype=torch.float32, device=device)
     x_tensor = torch.as_tensor(X, dtype=torch.float32, device=device)
     grid = torch.as_tensor(time_points, dtype=torch.float32, device=device)
     result = torch.zeros((len(X), len(time_points)), device=device)
@@ -33,6 +46,14 @@ def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, 
             shape, scale, _, _ = model.decoder(x_tensor, z)
             result += torch.exp(-((grid[None, :] / scale[:, None]) ** shape[:, None]))
     return (result / n_samples).cpu().numpy()
+
+
+def predict_survival_curves(model, X, time_points, train_loader, n_samples=100, device="cpu"):
+    """Predict by Monte Carlo integration over the aggregate training posterior."""
+    mixture_mu, mixture_std = aggregate_posterior_mixture(model, train_loader, device)
+    return predict_survival_from_mixture(
+        model, X, time_points, mixture_mu, mixture_std, n_samples, device
+    )
 
 
 def predict_survival_from_prior(model, X, time_points, n_samples=100, device="cpu"):
@@ -49,6 +70,7 @@ def predict_survival_from_prior(model, X, time_points, n_samples=100, device="cp
 
 
 __all__ = [
-    "predict_survival_curves", "predict_survival_from_prior",
+    "aggregate_posterior_mixture", "predict_survival_curves",
+    "predict_survival_from_mixture", "predict_survival_from_prior",
     "get_median_survival_time",
 ]

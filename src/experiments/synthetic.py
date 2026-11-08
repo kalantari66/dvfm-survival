@@ -799,6 +799,24 @@ def run_synthetic_pilot(cfg: dict, out_dir: Path, device: torch.device) -> pd.Da
                                         joint_prediction, joint_evaluation
                                     )
                                 )
+                                # Off by default. The column above always mixes over the prior;
+                                # this adds the same ISE under the aggregate posterior.
+                                if evaluation.get("joint_survival_aggregate_posterior", False):
+                                    train_mu, train_logvar = _encode(
+                                        model, train, int(settings["batch_size"]), device
+                                    )
+                                    checkpoint_context[
+                                        "oracle_joint_survival_ise_aggregate_posterior"
+                                    ] = oracle_joint_survival_ise(
+                                        predict_dvfm_joint_survival(
+                                            model, joint_evaluation,
+                                            mc_samples=int(evaluation["joint_model_samples"]),
+                                            batch_size=int(evaluation["joint_model_batch_size"]),
+                                            seed=int(model_seed) + 90_000, device=device,
+                                            mixture=(train_mu, np.exp(0.5 * train_logvar)),
+                                        ),
+                                        joint_evaluation,
+                                    )
                             else:
                                 checkpoint_context["oracle_joint_survival_ise"] = np.nan
                             diagnostics.extend([{

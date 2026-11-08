@@ -415,12 +415,21 @@ def prepare_joint_survival_evaluation(
 
 def predict_dvfm_joint_survival(
     model, evaluation: JointSurvivalEvaluation, *, mc_samples: int,
-    batch_size: int, seed: int, device: torch.device,
+    batch_size: int, seed: int, device: torch.device, mixture=None,
 ) -> np.ndarray:
-    """Compute E_z[S_T(t|x,z) S_C(c|x,z)] under the DVFM prior."""
+    """Compute E_z[S_T(t|x,z) S_C(c|x,z)] under the DVFM prior.
+
+    ``mixture`` = (means, stds) of per-subject Gaussians replaces the prior
+    with that mixture, e.g. the aggregate training posterior.
+    """
     predictions = []
     dtype = next(model.parameters()).dtype
     generator = torch.Generator(device=device.type).manual_seed(int(seed))
+    if mixture is not None:
+        mixture_mu, mixture_std = (
+            torch.as_tensor(np.asarray(part), dtype=dtype, device=device)
+            for part in mixture
+        )
     model.eval()
     with torch.no_grad():
         for start in range(0, len(evaluation.X), int(batch_size)):
@@ -430,10 +439,20 @@ def predict_dvfm_joint_survival(
             )
             batch = len(x)
             repeated_x = x.repeat_interleave(int(mc_samples), dim=0)
-            z = torch.randn(
-                (batch * int(mc_samples), model.latent_dim),
-                dtype=dtype, device=device, generator=generator,
-            )
+            if mixture is None:
+                z = torch.randn(
+                    (batch * int(mc_samples), model.latent_dim),
+                    dtype=dtype, device=device, generator=generator,
+                )
+            else:
+                index = torch.randint(
+                    0, len(mixture_mu), (batch * int(mc_samples),),
+                    device=device, generator=generator,
+                )
+                z = mixture_mu[index] + mixture_std[index] * torch.randn(
+                    (batch * int(mc_samples), model.latent_dim),
+                    dtype=dtype, device=device, generator=generator,
+                )
             shape_t, scale_t, shape_c, scale_c = model.decoder(repeated_x, z)
             event_grid = torch.as_tensor(
                 evaluation.event_grid, dtype=dtype, device=device

@@ -175,6 +175,7 @@ def fit_dvfm(model_train: SurvivalData, model_validation: SurvivalData, c: dict,
         latent_loading_l1=float(c.get("latent_loading_l1", 0.1)),
         logvar_min=float(c.get("logvar_min", -12.0)),
         logvar_max=float(c.get("logvar_max", 8.0)),
+        decoder_architecture=str(c.get("decoder_architecture", "single")),
     ).to(device)
     artifacts = train_dvfm(
         model,

@@ -232,7 +232,85 @@ def generate_gaussian_shared_frailty(*, n_samples: int, n_features: int, kendall
     )
 
 
+@dataclass
+class StratifiedGaussianFrailtySample(GaussianFrailtySample):
+    """Gaussian shared frailty whose loading is switched on by a covariate.
+
+    ``frailty_loading`` is the loading in the dependent stratum; every subject's
+    own loading is ``subject_loading``.
+    """
+
+    subject_loading: np.ndarray
+    dependent_stratum: np.ndarray
+    stratify_feature: int
+    threshold: float
+    stratum_conditional_kendall_tau: dict
+    stratum_censoring_rate: dict
+
+
+def generate_stratified_gaussian_shared_frailty(
+    *, n_samples: int, n_features: int, kendall_tau: float, censoring_rate: float,
+    dgp_seed: int, sampling_seed: int, calibration_samples: int = 50_000,
+    stratify_feature: int = 0, threshold: float = 0.0,
+) -> StratifiedGaussianFrailtySample:
+    """Covariate-varying dependence: loading 0 below the threshold, calibrated above.
+
+    Subjects with ``X[:, stratify_feature] >= threshold`` get the loading
+    calibrated to conditional Kendall's ``kendall_tau``; the rest get loading 0,
+    so their event and censoring times are conditionally independent. Draws
+    follow ``generate_gaussian_shared_frailty`` in the same order, so at equal
+    seeds the two cohorts share X, z and noise and differ only in the loading.
+    Censoring is calibrated on the whole cohort, as there.
+    """
+    if not 0.0 < float(censoring_rate) < 1.0:
+        raise ValueError("censoring_rate must be between 0 and 1")
+    if not 0 <= int(stratify_feature) < int(n_features):
+        raise ValueError("stratify_feature must index a covariate")
+    loading = calibrate_gaussian_frailty_loading(kendall_tau, seed=dgp_seed + 17, n_samples=calibration_samples)
+    parameter_rng = np.random.default_rng(dgp_seed)
+    beta_event = parameter_rng.normal(0.0, 0.25, size=n_features)
+    beta_censor = parameter_rng.normal(0.0, 0.25, size=n_features)
+    rng = np.random.default_rng(sampling_seed)
+    X = rng.normal(size=(n_samples, n_features))
+    z = rng.normal(size=n_samples)
+    u_event = np.clip(rng.uniform(size=n_samples), 1e-8, 1.0 - 1e-8)
+    u_censor = np.clip(rng.uniform(size=n_samples), 1e-8, 1.0 - 1e-8)
+    dependent = X[:, int(stratify_feature)] >= float(threshold)
+    subject_loading = np.where(dependent, loading, 0.0)
+    event_time = np.exp(X @ beta_event + subject_loading * z) * (-np.log(u_event)) ** (1.0 / 1.5)
+    censor_base = np.exp(X @ beta_censor + subject_loading * z) * (-np.log(u_censor)) ** (1.0 / 1.3)
+    censor_intercept = float(np.quantile(
+        np.log(event_time) - np.log(censor_base), 1.0 - float(censoring_rate)
+    ))
+    censor_time = np.exp(censor_intercept) * censor_base
+    event = (event_time <= censor_time).astype(int)
+    event_residual = np.log(event_time) - X @ beta_event
+    censor_residual = np.log(censor_time) - X @ beta_censor - censor_intercept
+    strata = {"independent": ~dependent, "dependent": dependent}
+    return StratifiedGaussianFrailtySample(
+        X=X.astype(np.float32), observed_time=np.minimum(event_time, censor_time), event=event,
+        event_time=event_time, censor_time=censor_time, true_z=z,
+        frailty_loading=loading, censor_intercept=censor_intercept,
+        empirical_conditional_kendall_tau=float(kendalltau(event_residual, censor_residual).statistic),
+        empirical_marginal_kendall_tau=float(kendalltau(event_time, censor_time).statistic),
+        achieved_censoring_rate=float(1.0 - event.mean()),
+        beta_event=beta_event, beta_censor=beta_censor,
+        shape_event=1.5, shape_censor=1.3,
+        subject_loading=subject_loading, dependent_stratum=dependent,
+        stratify_feature=int(stratify_feature), threshold=float(threshold),
+        stratum_conditional_kendall_tau={
+            name: float(kendalltau(event_residual[mask], censor_residual[mask]).statistic)
+            for name, mask in strata.items()
+        },
+        stratum_censoring_rate={
+            name: float(1.0 - event[mask].mean()) for name, mask in strata.items()
+        },
+    )
+
+
 __all__ = ["ClaytonAFTSample", "ClaytonGammaFrailtySample", "GaussianFrailtySample",
+           "StratifiedGaussianFrailtySample",
            "generate_clayton_aft_data", "generate_clayton_gamma_frailty",
            "calibrate_gaussian_frailty_loading", "generate_gaussian_shared_frailty",
+           "generate_stratified_gaussian_shared_frailty",
            "generate_copula_data"]

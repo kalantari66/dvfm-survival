@@ -44,3 +44,10 @@ results/
 figures/
 docs/dvfm_draft_21-09-2026.tex
 paper/dvfm.pdf
+
+# Rebuttal outputs are artifacts (checkpoints, per-subject exports); only the
+# hand-written summaries are tracked.
+rebuttal/**
+!rebuttal/**/
+!rebuttal/**/SUMMARY.md
+!rebuttal/OVERVIEW.md
