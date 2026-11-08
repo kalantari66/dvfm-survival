@@ -4,12 +4,19 @@ DVFM (fp32), HACSurv-2D (fp64) and the Cox--Gamma frailty model (fp64) are
 fitted with each dataset's tuned settings on the benchmark's cohorts and
 splits (Clayton copula, tau = 0.5) and timed on whatever node runs the script.
 
-One of two settings is timed per call (``--setting``), each as its own job:
+Every comparison is on an equal footing: one setting per call (``--setting``),
+each its own job, and within a job all three models run on the same device of
+the same node with the same thread count, on the same cells and seeds:
 
-* ``pipeline``: each model on the device the benchmark used (DVFM and HACSurv
-  on the GPU, Cox--Gamma on the CPU);
-* ``cpu``: all three on the same CPU with the same thread count, the
-  like-for-like comparison.
+* ``gpu``: all three on one GPU;
+* ``cpu``: all three on the CPU.
+
+Each model keeps its configured precision (recorded on every row), and its
+configured training budget: DVFM trains a fixed number of epochs while HACSurv
+and Cox--Gamma stop early, so seconds per epoch are reported next to the total.
+Before anything is timed on a GPU, an untimed warm-up initializes the CUDA
+context and the fp32 and fp64 matrix-multiply kernels, so that start-up cost
+does not land on whichever model happens to be timed first.
 
 Prediction is timed on 1,000 test subjects (resampled with replacement when
 the test split is smaller) on the shared 100-point grid. For DVFM, building
@@ -44,6 +51,17 @@ from rebuttal_common import PROJECT_ROOT, environment_record, semisynthetic_cell
 
 PREDICTION_SUBJECTS = 1000
 Q_AGG_SUBJECTS = 10_000
+
+
+def warm_up(device) -> None:
+    """Pay one-off CUDA start-up costs before any model is timed."""
+    if torch.device(device).type != "cuda":
+        return
+    for dtype in (torch.float32, torch.float64):
+        a = torch.randn(512, 512, device=device, dtype=dtype, requires_grad=True)
+        (a @ a).sum().backward()
+        torch.nn.functional.softplus(a).exp().log1p().sum().item()
+    torch.cuda.synchronize()
 
 
 class Clock:
@@ -170,30 +188,30 @@ def time_cell(cell, model_cfg, evaluation, setting, devices, per_patient):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--setting", choices=("pipeline", "cpu"), required=True,
-                        help="pipeline: the benchmark's devices (needs a GPU); cpu: all models on the CPU")
+    parser.add_argument("--setting", choices=("gpu", "cpu"), required=True,
+                        help="Device for all three models")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs" / "semi_synthetic.yaml")
     parser.add_argument("--datasets", nargs="+", default=["gbsg", "support", "seer_liver"])
     parser.add_argument("--copula", default="clayton")
     parser.add_argument("--kendall-tau", type=float, default=0.5)
-    parser.add_argument("--seeds", type=int, nargs="+",
-                        help="Seed indices (default: 0 1 2 for pipeline, 0 for cpu)")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2], help="Seed indices")
     parser.add_argument("--per-patient", type=int, default=50,
                         help="Single-subject DVFM predictions timed per cell with the cache (a fifth without)")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    if args.setting == "pipeline" and not torch.cuda.is_available():
-        raise SystemExit("The pipeline setting times DVFM and HACSurv on a GPU, and none is visible")
-    gpu_or_cpu = "cuda" if args.setting == "pipeline" else "cpu"
-    devices = {"dvfm": gpu_or_cpu, "hacsurv_2d": gpu_or_cpu, "bayesian_cox_gamma_frailty": "cpu"}
-    seeds = args.seeds or ([0, 1, 2] if args.setting == "pipeline" else [0])
+    if args.setting == "gpu" and not torch.cuda.is_available():
+        raise SystemExit("The gpu setting needs a visible GPU")
+    device = "cuda" if args.setting == "gpu" else "cpu"
+    devices = {"dvfm": device, "hacsurv_2d": device, "bayesian_cox_gamma_frailty": device}
+    seeds = args.seeds
     cfg = load_config(args.config)
     torch.set_num_threads(args.threads)
+    warm_up(device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_json(args.output_dir / "environment.json", {
-        **environment_record(gpu_or_cpu), "setting": args.setting, "devices": devices, "threads": args.threads,
+        **environment_record(device), "setting": args.setting, "devices": devices, "threads": args.threads,
         "precision": {"DVFM": "fp32", "HACSurv": "fp64", "CG Frailty": "fp64"},
     })
     rows = []
@@ -202,6 +220,8 @@ def main() -> None:
         for seed_index in seeds:
             for cell in semisynthetic_cells(cfg, name, seed_index, scenarios=[(args.copula, args.kendall_tau)]):
                 new_rows = time_cell(cell, model_cfg, cfg["evaluation"], args.setting, devices, args.per_patient)
+                for row in new_rows:
+                    row["fit_seconds_per_epoch"] = row["fit_seconds"] / max(row["epochs_run"], 1)
                 rows.extend(new_rows)
                 for row in new_rows:
                     print(f"{name:>11} seed {seed_index} {row['model']:<10} {row['device']:<5} "

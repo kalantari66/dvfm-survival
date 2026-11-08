@@ -95,9 +95,9 @@ for dataset in SEMI_DATASETS:
             ["results_raw.csv"], [SEMI_CONFIG], kind,
         ))
 
-# Task 2: timings with the benchmark's devices (GPU job) and all three models on
-# one CPU (CPU job, the like-for-like row).
-for setting, kind in (("pipeline", "gpu"), ("cpu", "cpu")):
+# Task 2: timings on an equal footing. All three models on one GPU (GPU job) and
+# all three on one CPU node (CPU job), same cells, seeds and thread count.
+for setting, kind in (("gpu", "gpu"), ("cpu", "cpu")):
     gwf.target_from_template(f"task2_timings_{setting}", _job(
         "timings.py", f"--setting {setting} --datasets {' '.join(SETTINGS['task2_datasets'])} "
                       f"--threads {SETTINGS['resources'][kind]['cores']}",
