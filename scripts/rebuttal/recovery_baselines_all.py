@@ -34,7 +34,6 @@ def main() -> None:
     dataset = select_dataset(cfg, args.dataset)
     seeds = expand_seed_streams(cfg["seeds"])[args.seed_index]
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    (args.output_dir / "_SUCCESS").unlink(missing_ok=True)
     write_json(args.output_dir / "environment.json", environment_record("cpu"))
     rows, crosscheck = run_recovery_baselines(cfg, dataset, args.seed_index, seeds)
     rows.to_csv(args.output_dir / "recovery_rows.csv", index=False)
@@ -43,7 +42,6 @@ def main() -> None:
         json.dumps({**cfg, "data": {**cfg["data"], "datasets": [dataset]}}, indent=2, default=str),
         encoding="utf-8",
     )
-    (args.output_dir / "_SUCCESS").write_text("", encoding="utf-8")
 
 
 if __name__ == "__main__":

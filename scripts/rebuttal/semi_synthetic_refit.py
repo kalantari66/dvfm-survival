@@ -105,16 +105,18 @@ def refit_cell(cell, cfg, settings, display, device, output_dir):
         model, model_test.X, model_time_points, int(settings["mc_samples"]), device
     )
 
+    # Validation (sign alignment and calibration) and test (scoring) are what the
+    # recovery analysis reads; training posteriors are recoverable from the checkpoint.
     subject_frames = []
-    for split, part, indices in (("train", model_train, cell["train_idx"]),
-                                 ("validation", model_validation, cell["validation_idx"]),
+    for split, part, indices in (("validation", model_validation, cell["validation_idx"]),
                                  ("test", model_test, cell["test_idx"])):
         mu, std = encode_posterior(model, part.X, part.time, part.event,
                                    batch_size=int(settings["batch_size"]), device=device)
         frame = pd.DataFrame({"split": split, "row_index": indices, "event": part.event,
                               "true_z": part.true_z if part.true_z is not None else np.nan})
         for dim in range(mu.shape[1]):
-            frame[f"mu_{dim}"], frame[f"std_{dim}"] = mu[:, dim], std[:, dim]
+            frame[f"mu_{dim}"] = mu[:, dim].astype(np.float32)
+            frame[f"std_{dim}"] = std[:, dim].astype(np.float32)
         subject_frames.append(frame)
     stem = f"{cell['scenario']}_repeat_{cell['repeat']}"
     (output_dir / "subjects").mkdir(parents=True, exist_ok=True)
@@ -179,7 +181,6 @@ def main() -> None:
     variant = VARIANTS[args.variant]
     settings = {**_models_for_dataset(cfg, args.dataset)["dvfm"], **variant["overrides"]}
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    (args.output_dir / "_SUCCESS").unlink(missing_ok=True)
     write_json(args.output_dir / "environment.json", environment_record(device))
     write_json(args.output_dir / "resolved_settings.json", {
         "variant": args.variant, "dataset": args.dataset, "seed_index": args.seed_index, "dvfm": settings,
@@ -197,8 +198,7 @@ def main() -> None:
         print(f"{cell['scenario']} repeat {cell['repeat']}: "
               + ", ".join(f"{r.get('prediction_mode', 'failed')} IBS={r.get('oracle_ibs', np.nan):.4f}" for r in cell_rows),
               flush=True)
-        pd.DataFrame(rows).to_csv(args.output_dir / "results_raw.csv", index=False)
-    (args.output_dir / "_SUCCESS").write_text("", encoding="utf-8")
+    pd.DataFrame(rows).to_csv(args.output_dir / "results_raw.csv", index=False)
 
 
 if __name__ == "__main__":

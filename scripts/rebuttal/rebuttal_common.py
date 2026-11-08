@@ -31,17 +31,6 @@ def _cpu_name() -> str:
                     return line.split(":", 1)[1].strip()
         except OSError:
             pass
-    if sys.platform == "win32":
-        try:
-            output = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_Processor).Name"],
-                capture_output=True, text=True, timeout=20,
-            ).stdout.strip()
-            if output:
-                return output
-        except (OSError, subprocess.SubprocessError):
-            pass
     return platform.processor() or "unknown"
 
 
@@ -159,18 +148,3 @@ def semisynthetic_cells(cfg: dict, dataset_name: str, seed_index: int, scenarios
             "train_idx": train_idx, "validation_idx": validation_idx, "test_idx": test_idx,
             "joint_evaluation": joint_evaluation, "generated": generated, "dgp": dgp,
         }
-
-
-def markdown_table(frame, floatfmt: str = ".4f") -> str:
-    """Render a DataFrame as a GitHub table without the optional tabulate package."""
-    columns = [str(column) for column in frame.columns]
-    lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
-    for _, row in frame.iterrows():
-        cells = []
-        for value in row:
-            if isinstance(value, (float, np.floating)):
-                cells.append("" if np.isnan(value) else format(value, floatfmt))
-            else:
-                cells.append(str(value))
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)

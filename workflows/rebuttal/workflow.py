@@ -3,11 +3,12 @@
 From the repository root:
 
     gwf -f workflows/rebuttal/workflow.py status
-    gwf -f workflows/rebuttal/workflow.py run task1_*          # one task at a time
+    gwf -f workflows/rebuttal/workflow.py run 'task1_*'      # one task at a time
     gwf -f workflows/rebuttal/workflow.py run
 
-Target names start with the task number. Every job writes _SUCCESS last, so
-GWF reruns only what is missing or failed. Resources: configs/rebuttal/workflow.yaml.
+Target names start with the task number. A job removes its _SUCCESS marker
+first and writes it only after its command and output checks pass, so GWF
+reruns exactly what is missing or failed. Resources: configs/rebuttal/workflow.yaml.
 """
 
 from __future__ import annotations
@@ -19,58 +20,48 @@ from gwf import AnonymousTarget, Workflow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = PROJECT_ROOT / "scripts" / "rebuttal"
+CONFIGS = PROJECT_ROOT / "configs"
 OUT = PROJECT_ROOT / "rebuttal"
-SETTINGS = yaml.safe_load((PROJECT_ROOT / "configs" / "rebuttal" / "workflow.yaml").read_text(encoding="utf-8"))
-SEMI_CONFIG = PROJECT_ROOT / "configs" / "semi_synthetic.yaml"
+SETTINGS = yaml.safe_load((CONFIGS / "rebuttal" / "workflow.yaml").read_text(encoding="utf-8"))
+SEMI_CONFIG = CONFIGS / "semi_synthetic.yaml"
+SEMI_DATASETS = [str(item["name"]) for item in yaml.safe_load(SEMI_CONFIG.read_text(encoding="utf-8"))["data"]["datasets"]]
+SOURCES = [
+    *sorted(str(path) for package in ("dvfm", "experiments", "sota", "utility")
+            for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
+    str(SCRIPTS / "rebuttal_common.py"),
+]
 
 
-def _semi_datasets() -> list[str]:
-    config = yaml.safe_load(SEMI_CONFIG.read_text(encoding="utf-8"))
-    return [str(item["name"]) for item in config["data"]["datasets"]]
-
-
-def _sources(*extra: Path) -> list[str]:
-    files = [
-        *(path for package in ("dvfm", "experiments", "sota", "utility")
-          for path in (PROJECT_ROOT / "src" / package).glob("*.py")),
-        SCRIPTS / "rebuttal_common.py", *extra,
-    ]
-    return sorted(str(path) for path in files)
-
-
-def _options(kind: str) -> dict[str, str]:
+def _job(script: str, args: str, result_dir: Path, outputs: list[str], inputs: list[Path], kind: str) -> AnonymousTarget:
     resources = SETTINGS["resources"][kind]
-    options = {
-        "cores": str(resources["cores"]), "memory": str(resources["memory"]),
-        "walltime": str(resources["walltime"]), "account": str(SETTINGS["account"]),
-    }
-    if kind.startswith("gpu"):
-        # Same partition hand-off as workflows/semi_synthetic/workflow.py.
-        options["gres"] = f"gpu:1 -p {resources['partition']}"
-    return options
-
-
-def _job(command: str, result_dir: Path, outputs: list[str], inputs: list[str], kind: str) -> AnonymousTarget:
-    cores = SETTINGS["resources"][kind]["cores"]
+    cores = resources["cores"]
     checks = "\n    ".join(f'test -s "{result_dir / name}"' for name in outputs)
     spec = f"""
     set -euo pipefail
     cd "{PROJECT_ROOT}"
     mkdir -p "{result_dir}"
+    rm -f "{result_dir / '_SUCCESS'}"
     echo "[GWF] $(date) host=$(hostname) {result_dir}"
     export PYTHONUNBUFFERED=1
     export OMP_NUM_THREADS="{cores}" MKL_NUM_THREADS="{cores}" OPENBLAS_NUM_THREADS="{cores}" NUMEXPR_NUM_THREADS="{cores}"
     source "$HOME/miniconda3/etc/profile.d/conda.sh"
     conda activate dvfm
-    {command}
+    python "{SCRIPTS / script}" {args} --output-dir "{result_dir}"
     {checks}
-    test -e "{result_dir / '_SUCCESS'}"
+    touch "{result_dir / '_SUCCESS'}"
     echo "[GWF] $(date) done"
     """
+    options = {
+        "cores": str(cores), "memory": str(resources["memory"]),
+        "walltime": str(resources["walltime"]), "account": str(SETTINGS["account"]),
+    }
+    if kind == "gpu":
+        # Same partition hand-off as workflows/semi_synthetic/workflow.py.
+        options["gres"] = f"gpu:1 -p {resources['partition']}"
     return AnonymousTarget(
-        inputs=inputs,
+        inputs=[*SOURCES, str(SCRIPTS / script), *(str(path) for path in inputs)],
         outputs=[str(result_dir / name) for name in (*outputs, "_SUCCESS")],
-        options=_options(kind), spec=spec,
+        options=options, spec=spec,
     )
 
 
@@ -78,74 +69,63 @@ gwf = Workflow()
 seeds = range(int(SETTINGS["seed_count"]))
 
 # Task 1: prior vs aggregate posterior. Synthetic grid (d_z = 1), one job per cell.
-script = SCRIPTS / "synthetic_cell.py"
 for index in range(int(SETTINGS["synthetic_scenarios"])):
-    result_dir = OUT / "task1_prior_vs_aggregate" / "synthetic" / f"scenario_{index:02d}"
     gwf.target_from_template(f"task1_synthetic_{index:02d}", _job(
-        f'python "{script}" --scenario-index {index} --output-dir "{result_dir}"',
-        result_dir, ["results_raw.csv", "run_manifest.csv", "dvfm_diagnostics.csv"],
-        _sources(script, PROJECT_ROOT / "configs" / "synthetic.yaml"), "gpu",
+        "synthetic_cell.py", f"--scenario-index {index}",
+        OUT / "task1_prior_vs_aggregate" / "synthetic" / f"scenario_{index:02d}",
+        ["results_raw.csv", "run_manifest.csv", "dvfm_diagnostics.csv"], [CONFIGS / "synthetic.yaml"], "gpu",
     ))
 
-# Task 1: semi-synthetic DVFM d_z = 1 refits (also the DVFM side of Task 3 and
-# the d_z = 1 reference of Task 5). One job per dataset x seed, 5 scenarios each.
-script = SCRIPTS / "semi_synthetic_refit.py"
-for dataset in _semi_datasets():
+# Task 1: semi-synthetic DVFM d_z = 1 refits, also the DVFM side of Task 3 and
+# the d_z = 1 reference of Task 5. One job per dataset x seed, 5 scenarios each.
+for dataset in SEMI_DATASETS:
     for seed in seeds:
-        result_dir = OUT / "task1_prior_vs_aggregate" / "semi_synthetic" / dataset / f"seed_{seed}"
         gwf.target_from_template(f"task1_semi_{dataset}_{seed}", _job(
-            f'python "{script}" --variant dvfm --dataset {dataset} --seed-index {seed} --output-dir "{result_dir}"',
-            result_dir, ["results_raw.csv"], _sources(script, SEMI_CONFIG), "gpu",
+            "semi_synthetic_refit.py", f"--variant dvfm --dataset {dataset} --seed-index {seed}",
+            OUT / "task1_prior_vs_aggregate" / "semi_synthetic" / dataset / f"seed_{seed}",
+            ["results_raw.csv"], [SEMI_CONFIG], "gpu",
         ))
 
-# Task 2: timings on one GPU node (pipeline devices) and its CPU (like-for-like).
-script = SCRIPTS / "timings.py"
-result_dir = OUT / "task2_timings"
-gwf.target_from_template("task2_timings", _job(
-    f'python "{script}" --datasets {" ".join(SETTINGS["task2_datasets"])} --output-dir "{result_dir}" '
-    f'--threads {SETTINGS["resources"]["gpu_long"]["cores"]} && touch "{result_dir / "_SUCCESS"}"',
-    result_dir, ["timing_rows.csv", "environment.json"], _sources(script, SEMI_CONFIG), "gpu_long",
-))
+# Task 2: timings with the benchmark's devices (GPU job) and all three models on
+# one CPU (CPU job, the like-for-like row).
+for setting, kind in (("pipeline", "gpu"), ("cpu", "cpu")):
+    gwf.target_from_template(f"task2_timings_{setting}", _job(
+        "timings.py", f"--setting {setting} --datasets {' '.join(SETTINGS['task2_datasets'])} "
+                      f"--threads {SETTINGS['resources'][kind]['cores']}",
+        OUT / "task2_timings" / setting, ["timing_rows.csv", "environment.json"], [SEMI_CONFIG], kind,
+    ))
 
 # Task 3: CoxPH and Cox--Gamma recovery baselines on all 12 datasets (CPU).
-script = SCRIPTS / "recovery_baselines_all.py"
-for dataset in _semi_datasets():
+for dataset in SEMI_DATASETS:
     for seed in seeds:
-        result_dir = OUT / "task3_recovery_all_datasets" / "baselines" / dataset / f"seed_{seed}"
         gwf.target_from_template(f"task3_baselines_{dataset}_{seed}", _job(
-            f'python "{script}" --dataset {dataset} --seed-index {seed} --output-dir "{result_dir}"',
-            result_dir, ["recovery_rows.csv", "ibs_crosscheck.csv"], _sources(script, SEMI_CONFIG), "cpu",
+            "recovery_baselines_all.py", f"--dataset {dataset} --seed-index {seed}",
+            OUT / "task3_recovery_all_datasets" / "baselines" / dataset / f"seed_{seed}",
+            ["recovery_rows.csv", "ibs_crosscheck.csv"], [SEMI_CONFIG], "cpu",
         ))
 
 # Task 4: PRO-ACT D- and KM-calibration, 10 seeds x d_z in {0, 1}.
-script = SCRIPTS / "proact_calibration.py"
-result_dir = OUT / "task4_proact_calibration"
 gwf.target_from_template("task4_proact_calibration", _job(
-    f'python "{script}" --output-dir "{result_dir}" && touch "{result_dir / "_SUCCESS"}"',
-    result_dir, ["calibration_rows.csv", "d_calibration_histograms.csv"],
-    _sources(script, PROJECT_ROOT / "configs" / "proact_latent_ablation.yaml",
-             PROJECT_ROOT / "data" / "proact_death.csv"), "gpu",
+    "proact_calibration.py", "", OUT / "task4_proact_calibration",
+    ["calibration_rows.csv", "d_calibration_histograms.csv"],
+    [CONFIGS / "proact_latent_ablation.yaml", PROJECT_ROOT / "data" / "proact_death.csv"], "gpu",
 ))
 
 # Task 5: independent-latent control and shared two-trunk reference, d_z = 2.
-script = SCRIPTS / "semi_synthetic_refit.py"
 for variant in SETTINGS["task5_variants"]:
     for dataset in SETTINGS["task5_datasets"]:
         for seed in seeds:
-            result_dir = OUT / "task5_independent_latent" / variant / dataset / f"seed_{seed}"
             gwf.target_from_template(f"task5_{variant}_{dataset}_{seed}", _job(
-                f'python "{script}" --variant {variant} --dataset {dataset} --seed-index {seed} --output-dir "{result_dir}"',
-                result_dir, ["results_raw.csv"], _sources(script, SEMI_CONFIG), "gpu",
+                "semi_synthetic_refit.py", f"--variant {variant} --dataset {dataset} --seed-index {seed}",
+                OUT / "task5_independent_latent" / variant / dataset / f"seed_{seed}",
+                ["results_raw.csv"], [SEMI_CONFIG], "gpu",
             ))
 
-# Task 6: covariate-varying dependence, DVFM and untuned HACSurv, 10 repeats,
-# with a step loading (stratified) and a smooth sigmoid loading.
-script = SCRIPTS / "stratified_dependence.py"
+# Task 6: covariate-varying dependence (step and smooth loading), DVFM and
+# untuned HACSurv, 10 repeats each.
 for variant in ("stratified", "smooth"):
-    config = PROJECT_ROOT / "configs" / "rebuttal" / f"{variant}_dependence.yaml"
-    result_dir = OUT / f"task6_{variant}_dependence"
+    config = CONFIGS / "rebuttal" / f"{variant}_dependence.yaml"
     gwf.target_from_template(f"task6_{variant}_dependence", _job(
-        f'python "{script}" --config "{config}" --output-dir "{result_dir}" && touch "{result_dir / "_SUCCESS"}"',
-        result_dir, ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv"],
-        _sources(script, config, PROJECT_ROOT / "configs" / "synthetic.yaml"), "gpu_long",
+        "stratified_dependence.py", f'--config "{config}"', OUT / f"task6_{variant}_dependence",
+        ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv"], [config, CONFIGS / "synthetic.yaml"], "gpu",
     ))

@@ -58,7 +58,6 @@ def main() -> None:
     device = resolve_device(args.device or str(cfg["compute"].get("device", "auto")))
     torch.set_num_threads(max(1, int(cfg["compute"].get("torch_num_threads", 1))))
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    (args.output_dir / "_SUCCESS").unlink(missing_ok=True)
     write_json(args.output_dir / "environment.json", environment_record(device))
     write_json(args.output_dir / "resolved_config.json", cfg)
     results = run_synthetic_pilot(cfg, args.output_dir, device)
@@ -66,9 +65,9 @@ def main() -> None:
     manifest = pd.read_csv(args.output_dir / "run_manifest.csv")
     failed = manifest.loc[manifest["status"].ne("success")]
     if not failed.empty:
-        # No _SUCCESS: GWF then shows the cell as incomplete instead of hiding it.
+        # run_synthetic_pilot records failures instead of raising; a non-zero exit
+        # keeps GWF from marking the cell complete.
         raise SystemExit(f"{len(failed)} fit(s) failed; see {args.output_dir / 'failure_summary.csv'}")
-    (args.output_dir / "_SUCCESS").write_text("", encoding="utf-8")
 
 
 if __name__ == "__main__":
