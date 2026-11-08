@@ -160,6 +160,12 @@ for profile in ("stratified", "smooth"):
         "stratified_dependence.py", f'--config "{config}"{device}', OUT / f"task6_{profile}_dependence",
         TASK6_OUTPUTS, [config, CONFIGS / "synthetic.yaml"], kind,
     ))
+    # DVFM only, on the same device as the job above, so the fits match it: adds
+    # prior-mode prediction rows; HACSurv's rows come from the job above.
+    gwf.target_from_template(f"task6prior_{profile}_dependence", _job(
+        "stratified_dependence.py", f'--config "{config}" --models dvfm{device}', OUT / "task6_prior" / profile,
+        TASK6_OUTPUTS, [config, CONFIGS / "synthetic.yaml"], kind,
+    ))
     # Diagnostics of DVFM's tau, DVFM only; the paper variant is the job above.
     for variant in yaml.safe_load(config.read_text(encoding="utf-8"))["diagnostic_variants"]:
         kind, device = _placement("task6diag")

@@ -13,7 +13,9 @@ HACSurv-2D on the same cohort and split per repeat, and reports:
 * HACSurv's single global tau, which cannot vary with x;
 * DVFM latent recovery per stratum or x1 bin (Spearman of the posterior mean
   with the true z, sign aligned on all validation subjects, as in the paper);
-* oracle IBS, C-index and MAE per stratum or bin for both models.
+* oracle IBS, C-index and MAE per stratum or bin for both models; DVFM's are
+  given with z from the aggregate posterior and from the prior
+  (``prediction_mode``).
 
 Because the paper computes tau with z from the N(0, 1) prior, DVFM's tau is
 also reported with z from the aggregate training posterior and from the
@@ -42,7 +44,7 @@ from torch.utils.data import DataLoader
 
 from dvfm.likelihood import encode_posterior, heldout_log_likelihood
 from dvfm.model import DVFM
-from dvfm.prediction import predict_survival_curves
+from dvfm.prediction import predict_survival_curves, predict_survival_from_prior
 from dvfm.training import train_dvfm
 from experiments.config import expand_seed_streams, load_config
 from sota.hacsurv import fit_hacsurv_2d
@@ -209,12 +211,13 @@ def main() -> None:
         points = reference_points(train.X, feature, data_cfg, evaluation, generated.frailty_loading, target_tau)
         x_mean = np.mean(train.X, axis=0)
 
-        def prediction_metrics(model_name, survival):
+        def prediction_metrics(model_name, survival, mode=None):
             for name, mask in {"all": np.ones(len(test.time), bool), **test_masks}.items():
                 if mask.sum() < 2:
                     continue
                 metrics = compute_oracle_metrics(survival[mask], grid, test.true_event_time[mask])
-                prediction_rows.append({**base, "model": model_name, "stratum": name, "n": int(mask.sum()),
+                prediction_rows.append({**base, "model": model_name, "prediction_mode": mode, "stratum": name,
+                                        "n": int(mask.sum()),
                                         **{key: metrics[key] for key in ("oracle_ibs", "oracle_ci", "oracle_mae")}})
 
         if "dvfm" in args.models:
@@ -226,7 +229,7 @@ def main() -> None:
             fit_seconds = timer.perf_counter() - started
             seed_everything(int(seeds["model"]) + 50_000)
             survival = predict_survival_curves(model, test.X, grid, train_loader, int(settings["mc_samples"]), device)
-            prediction_metrics(dvfm_label, survival)
+            prediction_metrics(dvfm_label, survival, "aggregate_posterior")
             batch = int(settings["batch_size"])
             train_mu, train_std = encode_posterior(model, train.X, train.time, train.event, batch_size=batch, device=device)
             samples = int(evaluation["dependence_samples"])
@@ -260,9 +263,10 @@ def main() -> None:
                                                 batch_size=batch, device=device)
             test_mu, _ = encode_posterior(model, test.X, test.time, test.event, batch_size=batch, device=device)
             # As the paper's diagnostics: the dimension and sign best aligned on validation.
-            correlations = [pearson_correlation(validation_mu[:, dim], validation.true_z)
-                            for dim in range(validation_mu.shape[1])]
-            selected = int(np.nanargmax(np.abs(correlations)))
+            correlations = np.asarray([pearson_correlation(validation_mu[:, dim], validation.true_z)
+                                       for dim in range(validation_mu.shape[1])])
+            # A fully collapsed encoder gives only NaN correlations; recovery is then NaN.
+            selected = int(np.nanargmax(np.abs(correlations))) if np.isfinite(correlations).any() else 0
             sign = -1.0 if correlations[selected] < 0 else 1.0
             for stratum, mask in {"all": np.ones(len(test.time), bool), **test_masks}.items():
                 for subgroup, sub in (("All", mask), ("Event observed", mask & (test.event == 1)),
@@ -286,6 +290,10 @@ def main() -> None:
                              "test_joint_elbo": float(np.mean(likelihood["joint_elbo"])),
                              "test_event_margin_loglik": float(np.mean(likelihood["event_margin"])),
                              "latent_loading_l1_magnitude": float(model.decoder.latent_loading_l1().detach().cpu())})
+            # Prior-sampled curves last, so no earlier output's random stream moves.
+            seed_everything(int(seeds["model"]) + 60_000)
+            prediction_metrics(dvfm_label, predict_survival_from_prior(
+                model, test.X, grid, int(settings["mc_samples"]), device), "prior")
             print(f"repeat {repeat} {dvfm_label} done in {fit_seconds:.0f}s", flush=True)
 
         if "hacsurv_2d" in args.models:
