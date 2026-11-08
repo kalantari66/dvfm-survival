@@ -15,6 +15,15 @@ HACSurv-2D on the same cohort and split per repeat, and reports:
   with the true z, sign aligned on all validation subjects, as in the paper);
 * oracle IBS, C-index and MAE per stratum or bin for both models.
 
+Because the paper computes tau with z from the N(0, 1) prior, DVFM's tau is
+also reported with z from the aggregate training posterior and from the
+posterior of training subjects in the reference point's stratum or bin, with
+per-group posterior summaries against x1. ``--dvfm-variant`` refits DVFM with
+one of the config's ``diagnostic_variants``: diagnostics of why tau is or is
+not recovered, never a replacement for the paper's settings. Held-out joint
+IWAE and the checkpoint's validation ELBO are recorded so variants with
+different tau can be compared on how well they fit the observed data.
+
 DVFM training mirrors ``experiments.synthetic.run_synthetic_pilot``: seeded
 loader, best post-warmup validation ELBO checkpoint, no time rescaling.
 """
@@ -31,6 +40,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
+from dvfm.likelihood import encode_posterior, heldout_log_likelihood
 from dvfm.model import DVFM
 from dvfm.prediction import predict_survival_curves
 from dvfm.training import train_dvfm
@@ -76,6 +86,7 @@ def fit_synthetic_dvfm(settings, train, validation, model_seed, device):
         dropout=float(settings["dropout"]), scale_link=str(settings["scale_link"]),
         latent_loading_l1=float(settings["latent_loading_l1"]),
         logvar_min=float(settings["logvar_min"]), logvar_max=float(settings["logvar_max"]),
+        decoder_architecture=str(settings.get("decoder_architecture", "single")),
     ).to(device)
     artifacts = train_dvfm(
         model, train_loader, validation_loader,
@@ -89,17 +100,6 @@ def fit_synthetic_dvfm(settings, train, validation, model_seed, device):
     model.load_state_dict(artifacts["best_validation_elbo_state"])
     model.to(device)
     return model, artifacts, train_loader
-
-
-def encode_mean(model, data, device):
-    model.eval()
-    with torch.no_grad():
-        mu, _ = model.encoder(
-            torch.as_tensor(data.X, dtype=torch.float32, device=device),
-            torch.as_tensor(data.time, dtype=torch.float32, device=device),
-            torch.as_tensor(data.event, dtype=torch.float32, device=device),
-        )
-    return mu[:, 0].cpu().numpy()
 
 
 def group_masks(X, feature, data_cfg, evaluation):
@@ -143,10 +143,15 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--hacsurv-device", default=None,
                         help="Device for HACSurv only (default: same as DVFM)")
+    parser.add_argument("--dvfm-variant", default="paper",
+                        help="paper, or a name under diagnostic_variants in the config")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     check_dvfm_matches_synthetic_study(cfg["models"]["dvfm"])
+    if args.dvfm_variant != "paper":
+        cfg["models"]["dvfm"] = {**cfg["models"]["dvfm"], **cfg["diagnostic_variants"][args.dvfm_variant]}
+    dvfm_label = "DVFM" if args.dvfm_variant == "paper" else f"DVFM [{args.dvfm_variant}]"
     data_cfg, evaluation = cfg["data"], cfg["evaluation"]
     output_dir = args.output_dir or PROJECT_ROOT / cfg["study"]["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +164,7 @@ def main() -> None:
     feature, threshold = int(data_cfg["stratify_feature"]), float(data_cfg["threshold"])
     target_tau = float(data_cfg["kendall_tau"])
 
-    dgp_rows, tau_rows, recovery_rows, prediction_rows, manifest = [], [], [], [], []
+    dgp_rows, tau_rows, recovery_rows, prediction_rows, posterior_rows, manifest = [], [], [], [], [], []
     for repeat, seeds in enumerate(expand_seed_streams(cfg["seeds"])):
         if args.repeats and repeat not in args.repeats:
             continue
@@ -182,7 +187,7 @@ def main() -> None:
             0.0, float(np.quantile(train.true_event_time, evaluation["grid_max_quantile"])),
             int(evaluation["n_time_points"]),
         )
-        base = {"repeat": repeat, "seed": int(seeds["model"]),
+        base = {"repeat": repeat, "seed": int(seeds["model"]), "dvfm_variant": args.dvfm_variant,
                 "loading_profile": str(data_cfg.get("loading_profile", "step"))}
         event_residual = np.log(generated.event_time) - generated.X @ generated.beta_event
         censor_residual = (np.log(generated.censor_time) - generated.X @ generated.beta_censor
@@ -200,6 +205,7 @@ def main() -> None:
                 "overall_censoring_rate": generated.achieved_censoring_rate,
             })
         test_masks = group_masks(test.X, feature, data_cfg, evaluation)
+        train_masks = group_masks(train.X, feature, data_cfg, evaluation)
         points = reference_points(train.X, feature, data_cfg, evaluation, generated.frailty_loading, target_tau)
         x_mean = np.mean(train.X, axis=0)
 
@@ -220,35 +226,67 @@ def main() -> None:
             fit_seconds = timer.perf_counter() - started
             seed_everything(int(seeds["model"]) + 50_000)
             survival = predict_survival_curves(model, test.X, grid, train_loader, int(settings["mc_samples"]), device)
-            prediction_metrics("DVFM", survival)
+            prediction_metrics(dvfm_label, survival)
+            batch = int(settings["batch_size"])
+            train_mu, train_std = encode_posterior(model, train.X, train.time, train.event, batch_size=batch, device=device)
+            samples = int(evaluation["dependence_samples"])
             for index, (group, x1, true_tau) in enumerate(points):
                 reference = x_mean.copy()
                 reference[feature] = x1
-                tau = learned_conditional_kendall_tau(
-                    model, reference, int(evaluation["dependence_samples"]), device,
-                    int(seeds["model"]) + 1000 + index,
-                )
+                tau_seed = int(seeds["model"]) + 1000 + index
+                local = train_masks[group]
                 tau_rows.append({
-                    **base, "model": "DVFM", "stratum": group, "reference_x1": x1,
-                    "learned_kendall_tau": tau, "true_kendall_tau": true_tau,
+                    **base, "model": dvfm_label, "stratum": group, "reference_x1": x1, "true_kendall_tau": true_tau,
+                    # The paper's estimator: z from the N(0, 1) prior.
+                    "learned_kendall_tau": learned_conditional_kendall_tau(model, reference, samples, device, tau_seed),
+                    "learned_kendall_tau_aggregate_posterior": learned_conditional_kendall_tau(
+                        model, reference, samples, device, tau_seed, mixture=(train_mu, train_std)),
+                    "learned_kendall_tau_local_posterior": learned_conditional_kendall_tau(
+                        model, reference, samples, device, tau_seed, mixture=(train_mu[local], train_std[local])),
                 })
-            validation_mu, test_mu = encode_mean(model, validation, device), encode_mean(model, test, device)
-            correlation = pearson_correlation(validation_mu, validation.true_z)
-            sign = -1.0 if correlation < 0 else 1.0
+            x1_train = train.X[:, feature]
+            for group, mask in {"all": np.ones(len(train.time), bool), **train_masks}.items():
+                for dim in range(train_mu.shape[1]):
+                    mu, std = train_mu[mask, dim], train_std[mask, dim]
+                    posterior_rows.append({
+                        **base, "model": dvfm_label, "split": "train", "stratum": group, "latent_dimension": dim,
+                        "n": int(mask.sum()), "mean_posterior_mean": float(mu.mean()),
+                        "sd_posterior_mean": float(mu.std()), "mean_posterior_sd": float(std.mean()),
+                        "mean_kl_to_prior": float(np.mean(-0.5 * (1 + 2 * np.log(std) - mu ** 2 - std ** 2))),
+                        "spearman_posterior_mean_x1": spearman_correlation(mu, x1_train[mask]),
+                        "spearman_posterior_mean_true_z": spearman_correlation(mu, train.true_z[mask]),
+                    })
+            validation_mu, _ = encode_posterior(model, validation.X, validation.time, validation.event,
+                                                batch_size=batch, device=device)
+            test_mu, _ = encode_posterior(model, test.X, test.time, test.event, batch_size=batch, device=device)
+            # As the paper's diagnostics: the dimension and sign best aligned on validation.
+            correlations = [pearson_correlation(validation_mu[:, dim], validation.true_z)
+                            for dim in range(validation_mu.shape[1])]
+            selected = int(np.nanargmax(np.abs(correlations)))
+            sign = -1.0 if correlations[selected] < 0 else 1.0
             for stratum, mask in {"all": np.ones(len(test.time), bool), **test_masks}.items():
                 for subgroup, sub in (("All", mask), ("Event observed", mask & (test.event == 1)),
                                       ("Censored", mask & (test.event == 0))):
                     if sub.sum() < 3:
                         continue
                     recovery_rows.append({
-                        **base, "model": "DVFM", "stratum": stratum, "subgroup": subgroup, "n": int(sub.sum()),
-                        "alignment_sign": sign,
-                        "spearman": spearman_correlation(sign * test_mu[sub], test.true_z[sub]),
+                        **base, "model": dvfm_label, "stratum": stratum, "subgroup": subgroup, "n": int(sub.sum()),
+                        "selected_latent_dimension": selected, "alignment_sign": sign,
+                        "spearman": spearman_correlation(sign * test_mu[sub, selected], test.true_z[sub]),
                     })
-            manifest.append({**base, "model": "DVFM", "fit_seconds": fit_seconds,
+            likelihood = heldout_log_likelihood(
+                model, test.X, test.time, test.event, mixing_mu=train_mu, mixing_std=train_std,
+                n_samples=int(evaluation.get("likelihood_samples", 200)), seed=int(seeds["model"]), device=device,
+            )
+            manifest.append({**base, "model": dvfm_label, "fit_seconds": fit_seconds,
+                             "latent_dim": int(settings["latent_dim"]),
                              "best_validation_elbo_epoch": artifacts["best_validation_elbo_epoch"],
+                             "best_validation_negative_elbo": artifacts["best_validation_elbo"],
+                             "test_joint_iwae": float(np.mean(likelihood["joint_iwae"])),
+                             "test_joint_elbo": float(np.mean(likelihood["joint_elbo"])),
+                             "test_event_margin_loglik": float(np.mean(likelihood["event_margin"])),
                              "latent_loading_l1_magnitude": float(model.decoder.latent_loading_l1().detach().cpu())})
-            print(f"repeat {repeat} DVFM done in {fit_seconds:.0f}s", flush=True)
+            print(f"repeat {repeat} {dvfm_label} done in {fit_seconds:.0f}s", flush=True)
 
         if "hacsurv_2d" in args.models:
             settings = cfg["models"]["hacsurv_2d"]
@@ -275,6 +313,7 @@ def main() -> None:
         # Rewritten after every repeat so an interrupted run keeps what finished.
         for filename, rows in (("dgp_rows.csv", dgp_rows), ("tau_rows.csv", tau_rows),
                                ("recovery_rows.csv", recovery_rows), ("prediction_rows.csv", prediction_rows),
+                               ("posterior_rows.csv", posterior_rows),
                                ("run_manifest.csv", manifest)):
             pd.DataFrame(rows).to_csv(output_dir / filename, index=False)
     print(f"Wrote {output_dir}")

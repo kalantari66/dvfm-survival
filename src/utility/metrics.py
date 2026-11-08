@@ -204,9 +204,13 @@ def concordance_index(event_times, predicted_times, event_indicators=None):
 
 
 def learned_conditional_kendall_tau(
-    model, x_reference, n_samples=2000, device="cpu", seed=0
+    model, x_reference, n_samples=2000, device="cpu", seed=0, mixture=None
 ):
-    """Estimate event/censoring Kendall's tau from a fitted DVFM decoder."""
+    """Estimate event/censoring Kendall's tau from a fitted DVFM decoder.
+
+    z is drawn from the N(0, I) prior, or from ``mixture`` = (means, stds) of
+    per-subject Gaussians, e.g. the aggregate training posterior.
+    """
     rng = np.random.default_rng(seed)
     x = torch.as_tensor(
         np.repeat(np.asarray(x_reference)[None, :], n_samples, axis=0),
@@ -214,9 +218,21 @@ def learned_conditional_kendall_tau(
     )
     generator = torch.Generator(device=torch.device(device).type).manual_seed(seed)
     with torch.no_grad():
-        z = torch.randn(
-            (n_samples, model.latent_dim), generator=generator, device=device
-        )
+        if mixture is None:
+            z = torch.randn(
+                (n_samples, model.latent_dim), generator=generator, device=device
+            )
+        else:
+            mixture_mu, mixture_std = (
+                torch.as_tensor(np.asarray(part), dtype=torch.float32, device=device)
+                for part in mixture
+            )
+            index = torch.randint(
+                0, len(mixture_mu), (n_samples,), generator=generator, device=device
+            )
+            z = mixture_mu[index] + mixture_std[index] * torch.randn(
+                (n_samples, model.latent_dim), generator=generator, device=device
+            )
         shape_e, scale_e, shape_c, scale_c = model.decoder(x, z)
         ue = torch.as_tensor(rng.uniform(size=n_samples), dtype=torch.float32, device=device)
         uc = torch.as_tensor(rng.uniform(size=n_samples), dtype=torch.float32, device=device)

@@ -71,3 +71,13 @@ evaluation:
   # Reference points: the training covariate mean with x1 replaced by these
   # quantiles of x1 within each stratum.
   reference_quantiles: [0.25, 0.5, 0.75]
+  # Monte Carlo samples per test subject for the held-out joint IWAE.
+  likelihood_samples: 200
+# DIAGNOSTICS, not tuning: each variant probes one mechanism behind DVFM's
+# tau estimates. Run with --dvfm-variant NAME; the
+# paper's DVFM stays the only reported DVFM.
+diagnostic_variants:
+  alpha0: {latent_loading_l1: 0.0}                       # is the l1 penalty suppressing the x-z interaction?
+  alpha0_wide_long: {latent_loading_l1: 0.0, decoder_hidden: [128, 128], epochs: 400}  # ...or decoder capacity/training length?
+  dz2: {latent_dim: 2}                                   # does a second latent free one for marginal flexibility?
+  two_trunk_shared_dz2: {latent_dim: 2, decoder_architecture: two_trunk_shared}

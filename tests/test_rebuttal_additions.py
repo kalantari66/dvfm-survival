@@ -130,6 +130,25 @@ def test_joint_survival_mixture_with_a_point_mass_is_deterministic():
     np.testing.assert_allclose(first, second, rtol=1e-6)
 
 
+def test_learned_tau_default_is_unchanged_and_a_point_mass_mixture_removes_dependence():
+    torch.manual_seed(4)
+    model = DVFM(3, 1, encoder_hidden=[8], decoder_hidden=[16], scale_link="exp").eval()
+    with torch.no_grad():
+        model.decoder.network[0].weight[:, 3:] *= 50.0  # the latent dominates both margins
+    reference = np.zeros(3)
+    rng = np.random.default_rng(0)
+    generator = torch.Generator().manual_seed(0)
+    with torch.no_grad():
+        z = torch.randn((3000, 1), generator=generator)
+        se, ce, sc, cc = model.decoder(torch.zeros(3000, 3), z)
+        event = ce * (-torch.log(torch.as_tensor(rng.uniform(size=3000), dtype=torch.float32))) ** (1 / se)
+        censor = cc * (-torch.log(torch.as_tensor(rng.uniform(size=3000), dtype=torch.float32))) ** (1 / sc)
+    manual = kendalltau(event.numpy(), censor.numpy()).statistic
+    assert learned_conditional_kendall_tau(model, reference, 3000, "cpu", 0) == pytest.approx(manual)
+    point_mass = (np.full((5, 1), 0.3), np.zeros((5, 1)))
+    assert abs(learned_conditional_kendall_tau(model, reference, 3000, "cpu", 0, mixture=point_mass)) < 0.05
+
+
 def test_independent_two_trunk_routes_each_latent_to_one_margin_only():
     torch.manual_seed(9)
     decoder = TwoTrunkDecoder(3, 2, hidden_dims=[8], latent_routing="independent").eval()

@@ -123,9 +123,16 @@ for variant in SETTINGS["task5_variants"]:
 
 # Task 6: covariate-varying dependence (step and smooth loading), DVFM and
 # untuned HACSurv, 10 repeats each.
-for variant in ("stratified", "smooth"):
-    config = CONFIGS / "rebuttal" / f"{variant}_dependence.yaml"
-    gwf.target_from_template(f"task6_{variant}_dependence", _job(
-        "stratified_dependence.py", f'--config "{config}"', OUT / f"task6_{variant}_dependence",
-        ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv"], [config, CONFIGS / "synthetic.yaml"], "gpu",
+TASK6_OUTPUTS = ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv", "posterior_rows.csv"]
+for profile in ("stratified", "smooth"):
+    config = CONFIGS / "rebuttal" / f"{profile}_dependence.yaml"
+    gwf.target_from_template(f"task6_{profile}_dependence", _job(
+        "stratified_dependence.py", f'--config "{config}"', OUT / f"task6_{profile}_dependence",
+        TASK6_OUTPUTS, [config, CONFIGS / "synthetic.yaml"], "gpu",
     ))
+    # Diagnostics of DVFM's tau, DVFM only; the paper variant is the job above.
+    for variant in yaml.safe_load(config.read_text(encoding="utf-8"))["diagnostic_variants"]:
+        gwf.target_from_template(f"task6diag_{profile}_{variant}", _job(
+            "stratified_dependence.py", f'--config "{config}" --models dvfm --dvfm-variant {variant}',
+            OUT / "task6_diagnostics" / profile / variant, TASK6_OUTPUTS, [config, CONFIGS / "synthetic.yaml"], "gpu",
+        ))
