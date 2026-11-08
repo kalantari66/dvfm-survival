@@ -21,7 +21,7 @@ The rebuttal experiments make two benefits of DVFM concrete. Neither is availabl
 | Censored patients: precision for the top-quarter frailty | DVFM (paper, d_z=1) | Shared latents (two-trunk, d_z=2) | Independent latents (two-trunk, d_z=2) |
 |---|---|---|---|
 | Median over all 12 datasets | 67% (range 50–77%) | — | — |
-| GBSG / METABRIC / SUPPORT / SEER liver | 66% / 69% / 67% / 75% | 66% / 71% / 67% / 75% | 55% / 64% / 58% / 65% |
+| GBSG / METABRIC / SUPPORT / SEER (liver) | 66% / 69% / 67% / 75% | 66% / 71% / 67% / 75% | 55% / 64% / 58% / 65% |
 
 On the same censored subjects, DVFM's posterior mean also tracks the true frailty better than the Cox-Gamma posterior frailty on 11 of 12 datasets (median Spearman gain +0.19), and better than independent latents on all four control datasets (+0.09 to +0.18).
 
@@ -60,7 +60,7 @@ On cost, q_agg is one encoder pass over the training split and can be built once
 
 **If the revision switches to the prior.** None of the semi-synthetic conclusions change:
 - the d_z = 0 ablation still shows lower IBS on 7 of 12 datasets, with the same four improving by 10–25%;
-- SEER brain and SEER liver are worse by 7–8% instead of 8%;
+- SEER (brain) and SEER (liver) are worse by 7–8% instead of 8%;
 - DVFM's mean rank stays 3.1.
 
 The same holds on real data and on the covariate-varying DGP, where we refit and scored every model under both mixing distributions:
@@ -145,9 +145,9 @@ Capacity, latent budget, training, evaluation and seeds are identical, and both 
 | GBSG | **0.0120** | 0.0156 | 0.0131 | 0.0183 | Shared better (CI excludes 0) |
 | METABRIC | **0.0068** | 0.0072 | 0.0079 | 0.0091 | Shared marginally better |
 | SUPPORT | 0.0120 | 0.0121 | **0.0115** | 0.0135 | Tied |
-| SEER liver | 0.0126 | **0.0117** | 0.0135 | **0.0117** | Independent better |
+| SEER (liver) | 0.0126 | **0.0117** | 0.0135 | **0.0117** | Independent better |
 
-**Accuracy.** Even the independent latent improves joint ISE over the latent-free model on three of four datasets and ties on SEER liver. So part of DVFM's gain over d_z = 0 comes from the richer Weibull-mixture margins a latent provides, and the independent control obtains most of it on METABRIC and SUPPORT. Sharing adds a further gain in joint ISE on GBSG (clearly) and on METABRIC (marginally). It ties on SUPPORT and is behind on SEER liver. On IBS the two variants are within 0.002 everywhere except SEER liver.
+**Accuracy.** Even the independent latent improves joint ISE over the latent-free model on three of four datasets and ties on SEER (liver). So part of DVFM's gain over d_z = 0 comes from the richer Weibull-mixture margins a latent provides, and the independent control obtains most of it on METABRIC and SUPPORT. Sharing adds a further gain in joint ISE on GBSG (clearly) and on METABRIC (marginally). It ties on SUPPORT and is behind on SEER (liver). On IBS the two variants are within 0.002 everywhere except SEER (liver).
 
 **What sharing contributes beyond accuracy.** Sharing is what lets a subject's censoring time carry information about their frailty, and the subject-level recovery shows this directly:
 
@@ -156,7 +156,7 @@ Capacity, latent budget, training, evaluation and seeds are identical, and both 
 | GBSG | **0.66** | 0.65 | 0.48 | 0.53 | 0.38 |
 | METABRIC | **0.77** | 0.76 | 0.68 | 0.77 | 0.76 |
 | SUPPORT | **0.71** | **0.71** | 0.56 | 0.71 | 0.71 |
-| SEER liver | **0.83** | **0.83** | 0.69 | 0.75 | 0.75 |
+| SEER (liver) | **0.83** | **0.83** | 0.69 | 0.75 | 0.75 |
 
 On censored subjects, the shared latent recovers the true frailty substantially better on all four datasets, by 0.09–0.18. On subjects whose event was observed the two are equal, except on GBSG. This is the paper's mechanism: censoring is informative about the latent only when the latent is shared. The independent model also cannot produce a dependence estimate (its learned τ is about 0 by construction), joint predictions that reflect dependence, or covariate-varying τ(x).
 
@@ -173,14 +173,14 @@ FpZd asked for training and prediction times under comparable hardware. We timed
 |---|---|---|---|---|---|---|
 | GBSG (n_train 479) | 4.2 | 24.2 | 0.10 | 9.1 | 19.3 | 0.30 |
 | SUPPORT (6,210) | 51.8 | 150.7 | 0.73 | 108.3 | 112.7 | 1.50 |
-| SEER liver (7,000) | 68.5 | 341.3 | 0.82 | 134.2 | 234.7 | 1.54 |
+| SEER (liver) (7,000) | 68.5 | 341.3 | 0.82 | 134.2 | 234.7 | 1.54 |
 
-| Prediction, SEER liver | DVFM CPU | DVFM GPU | HACSurv CPU | HACSurv GPU | CG CPU |
+| Prediction, SEER (liver) | DVFM CPU | DVFM GPU | HACSurv CPU | HACSurv GPU | CG CPU |
 |---|---|---|---|---|---|
 | 1,000 patients (q_agg cached; amortized per patient) | 0.057 s (0.06 ms) | 0.055 s (0.06 ms) | 0.116 s | 0.034 s | 0.0003 s |
 
 **What we see.**
-- **DVFM vs HACSurv:** DVFM trains 3–6× faster on CPU and 1–2× faster on GPU. Per epoch the two cost the same (0.34 s on SEER liver, CPU); the difference is that DVFM trains for a fixed 200 epochs while HACSurv typically runs 550–1,000 before early stopping.
+- **DVFM vs HACSurv:** DVFM trains 3–6× faster on CPU and 1–2× faster on GPU. Per epoch the two cost the same (0.34 s on SEER (liver) on CPU); the difference is that DVFM trains for a fixed 200 epochs while HACSurv typically runs 550–1,000 before early stopping.
 - **DVFM on GPU:** it is about 2× slower than on CPU, because its networks are small and batch size 64 leaves the GPU waiting on kernel launches. For this model the CPU is the right hardware.
 - **CG:** a linear frailty model, 40–90× faster than DVFM to train. We should concede that.
 
@@ -206,16 +206,16 @@ FpZd asked whether DVFM's advantages over HACSurv come from dependence modelling
 | GBSG | 0.0156 | 0.0131 | 0.0385 | 0.1487 | 0.1482 | **0.1372** |
 | METABRIC | 0.0072 | 0.0079 | **0.0063** | 0.1612 | 0.1601 | 0.1610 |
 | SUPPORT | 0.0121 | **0.0115** | 0.0142 | 0.1190 | 0.1184 | **0.1165** |
-| SEER liver | 0.0117 | 0.0135 | **0.0075** | **0.0819** | 0.0886 | 0.0823 |
+| SEER (liver) | 0.0117 | 0.0135 | **0.0075** | **0.0819** | 0.0886 | 0.0823 |
 
 **What we see.** Both components contribute.
 - *The margins:* the flexible Weibull-mixture margins are a real strength. On GBSG and SUPPORT the no-dependence variant already beats HACSurv on joint ISE, so DVFM's margins alone outperform HACSurv's monotone neural margins there.
 - *The shared latent:* it improves joint ISE further on GBSG, and it drives the much better recovery of subject-level frailty on censored subjects (previous section).
-- *HACSurv:* it leads on METABRIC and SEER liver in this subset. These are two of the four datasets (with EMPLOYEE and SEER stomach) where it beats DVFM on joint ISE overall, so the four-dataset subset is less favourable to DVFM than the full benchmark.
+- *HACSurv:* it leads on METABRIC and SEER (liver) in this subset. These are two of the four datasets where it beats DVFM on joint ISE overall; the other two are Employee and SEER (stomach). So the four-dataset subset is less favourable to DVFM than the full benchmark.
 
 ## P1 Identification theorem scope and matched decoder variant (kyMv)
 
-kyMv pointed out that the identification theorem covers a restricted multiplicative frailty model, while the implemented DVFM lets the latent affect both the Weibull shape and scale. This is correct. `semi_synthetic.yaml` sets neither `latent_path` nor `shape_mode`, so the paper's DVFM runs the defaults: a nonlinear latent path and a z-dependent shape ([runner.py:170-171](../src/experiments/runner.py#L170-L171)). That model is outside the theorem's class, and the text must say so.
+kyMv pointed out that the identification theorem covers a restricted multiplicative frailty model, while the implemented DVFM lets the latent affect both the Weibull shape and scale. This is correct. `semi_synthetic.yaml` sets neither `latent_path` nor `shape_mode`, so the paper's DVFM runs the defaults: a nonlinear latent path and a z-dependent shape ([runner.py:170-171](src/experiments/runner.py#L170-L171)). That model is outside the theorem's class, and the text must say so.
 
 To see whether staying inside the class would help, we ran a decoder that satisfies its structure: log-scale f(x) + g·z with one global Weibull shape per margin. It still learns the baseline hazards instead of assuming them known. We ran it with the paper's α = 0.1 and with α = 0, because in this decoder the ℓ1 penalty acts directly on the frailty loading g. Everything else matches the paper fits, seed for seed. The synthetic DGP (Weibull, global shape, log-scale additive in x and z) lies exactly inside this class, so the restricted decoder is correctly specified there and the paper decoder is over-flexible.
 
@@ -243,7 +243,7 @@ To see whether staying inside the class would help, we ran a decoder that satisf
 | GBSG | **0.0131** / 0.0210 / 0.0202 / 0.0183 | 0.148 / 0.154 / 0.154 / **0.146** | 42 / 17 |
 | METABRIC | **0.0079** / 0.0091 / 0.0107 / 0.0091 | **0.161** / 0.162 / 0.164 / 0.165 | 0 / 0 |
 | SUPPORT | **0.0115** / 0.0161 / 0.0151 / 0.0135 | 0.118 / 0.120 / 0.119 / **0.118** | 40 / 0 |
-| SEER liver | 0.0135 / 0.0200 / 0.0197 / **0.0117** | 0.088 / 0.095 / 0.095 / **0.082** | 0 / 0 |
+| SEER (liver) | 0.0135 / 0.0200 / 0.0197 / **0.0117** | 0.088 / 0.095 / 0.095 / **0.082** | 0 / 0 |
 
 **Semi-synthetic: the restricted decoder is worse everywhere.**
 - *Joint ISE:* worse than the paper decoder on all four datasets, and often worse than having no latent at all.
@@ -284,7 +284,7 @@ As the paper already says, these results show a better fit to observed follow-up
 | Censored subjects, Δρ = DVFM − baseline | DVFM better | Tied | DVFM worse | Median Δρ (95% bootstrap CI) |
 |---|---|---|---|---|
 | CG posterior frailty | 11 | 1 | 0 | +0.19 [0.13, 0.28] |
-| CoxPH martingale residual | 4 (SEER ×3, FLCHAIN) | 4 | 4 (GBSG, WHAS, CHURN, SUPPORT) | −0.00 [−0.01, 0.13] |
+| CoxPH martingale residual | 4 (SEER ×3, FLChain) | 4 | 4 (GBSG, WHAS, Churn, SUPPORT) | −0.00 [−0.01, 0.13] |
 
 **What we see.** Against CG the claim generalises well: DVFM wins on 11 of 12 datasets. Against the CoxPH martingale residual it does not: DVFM wins on only 4 datasets, and those include the three SEER cohorts the paper happens to show. The claim should be restricted to CG, or both baselines shown across all datasets.
 
