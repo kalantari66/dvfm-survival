@@ -304,3 +304,23 @@ def test_strict_numerics_escalates_the_ridge_only_when_enabled(monkeypatch):
     with pytest.warns(RuntimeWarning, match="stronger ridge alpha=0.01"):
         strict = coxph.make_cox_model({**settings, "strict_numerics": True}).fit(X, None)
     assert strict.alpha_ == 1e-2 and np.isfinite(strict.model_.cum_baseline_hazard_.y).all()
+
+
+def test_collapsed_encoder_gives_nan_recovery_instead_of_failing_the_fit():
+    from experiments.synthetic import _frailty_diagnostics
+
+    rng = np.random.default_rng(0)
+
+    def split(n):
+        return SurvivalData(rng.normal(size=(n, 3)).astype(np.float32), rng.uniform(0.2, 2.0, n),
+                            (rng.uniform(size=n) > 0.5).astype(int), ["a", "b", "c"], true_z=rng.normal(size=n))
+
+    validation, test = split(60), split(80)
+    model = DVFM(3, 1, latent_path="additive_scale", shape_mode="global")
+    with torch.no_grad():  # a fully collapsed encoder: constant posterior mean
+        model.encoder.fc_mu.weight.zero_()
+        model.encoder.fc_mu.bias.zero_()
+    rows = _frailty_diagnostics(model, validation, test, 32, 0.01, 0.5, "cpu")
+    assert [row["subgroup"] for row in rows] == ["all", "event_observed", "censored"]
+    assert all(row["selected_latent_dimension"] == 0 for row in rows)
+    assert all(np.isnan(row["frailty_spearman"]) and np.isnan(row["frailty_pearson"]) for row in rows)

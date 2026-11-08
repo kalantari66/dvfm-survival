@@ -103,7 +103,14 @@ def _frailty_diagnostics(
         pearson_correlation(validation_mu[:, j], validation.true_z)
         for j in range(validation_mu.shape[1])
     ])
-    selected = int(np.nanargmax(np.abs(correlations))) if recovery_defined else 0
+    # A fully collapsed encoder has a constant posterior mean, so every
+    # correlation is NaN; recovery is then reported as NaN rather than
+    # discarding the whole fit.
+    has_finite_correlation = bool(np.isfinite(correlations).any())
+    selected = (
+        int(np.nanargmax(np.abs(correlations)))
+        if recovery_defined and has_finite_correlation else 0
+    )
     raw_pearson = correlations[selected] if recovery_defined else float("nan")
     sign = 1.0 if not np.isfinite(raw_pearson) or raw_pearson >= 0 else -1.0
     if recovery_defined:
