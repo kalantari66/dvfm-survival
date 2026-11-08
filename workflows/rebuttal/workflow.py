@@ -132,6 +132,24 @@ for variant in SETTINGS["task5_variants"]:
                 ["results_raw.csv"], [SEMI_CONFIG], kind,
             ))
 
+# Task 7: DVFM with the decoder in the identification theorem's class, on the
+# synthetic grid (inside that class) and on the Task 5 datasets.
+kind, device = _placement("task7")
+for variant in SETTINGS["task7_variants"]:
+    for index in range(int(SETTINGS["synthetic_scenarios"])):
+        gwf.target_from_template(f"task7_{variant}_synthetic_{index:02d}", _job(
+            "synthetic_cell.py", f"--scenario-index {index} --dvfm-variant {variant}{device}",
+            OUT / "task7_theorem_class_decoder" / "synthetic" / variant / f"scenario_{index:02d}",
+            ["results_raw.csv", "run_manifest.csv", "dvfm_diagnostics.csv"], [CONFIGS / "synthetic.yaml"], kind,
+        ))
+    for dataset in SETTINGS["task5_datasets"]:
+        for seed in seeds:
+            gwf.target_from_template(f"task7_{variant}_semi_{dataset}_{seed}", _job(
+                "semi_synthetic_refit.py", f"--variant {variant} --dataset {dataset} --seed-index {seed}{device}",
+                OUT / "task7_theorem_class_decoder" / "semi_synthetic" / variant / dataset / f"seed_{seed}",
+                ["results_raw.csv"], [SEMI_CONFIG], kind,
+            ))
+
 # Task 6: covariate-varying dependence (step and smooth loading), DVFM and
 # untuned HACSurv, 10 repeats each.
 TASK6_OUTPUTS = ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv", "posterior_rows.csv"]

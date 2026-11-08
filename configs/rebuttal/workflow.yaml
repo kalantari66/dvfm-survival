@@ -18,9 +18,11 @@ resources:
 # CUDA stream the paper's fits used, so it reproduces a paper fit only up to
 # seed-to-seed noise. Kept on GPU: task1_semi (reproduction check, reference
 # for Tasks 3 and 5), task2 GPU timings and task4 (reproduction check).
-run_on_cpu: [task1_synthetic, task5, task6diag]
+run_on_cpu: [task1_synthetic, task5, task6diag, task7]
 seed_count: 10
 synthetic_scenarios: 12
 task2_datasets: [gbsg, support, seer_liver]
 task5_datasets: [gbsg, seer_liver, support, metabric]
 task5_variants: [two_trunk_independent, two_trunk_shared]
+# Task 7 decoders, on the synthetic grid and on the task5_datasets.
+task7_variants: [theorem_class, theorem_class_alpha0]

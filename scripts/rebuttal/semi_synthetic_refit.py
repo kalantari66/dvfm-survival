@@ -9,7 +9,10 @@ DVFM settings unchanged. ``--variant`` selects:
 * ``two_trunk_independent``: d_z = 2, z1 feeds only the event trunk and z2
   only the censoring trunk (Task 5 control);
 * ``two_trunk_shared``: d_z = 2, both latents feed both trunks (Task 5
-  capacity-matched reference).
+  capacity-matched reference);
+* ``theorem_class``: d_z = 1 with the decoder in the identification theorem's
+  class, log Weibull scale f(x) + g'z and one shape per margin (Task 7);
+  ``theorem_class_alpha0`` is the same without the latent-loading l1 penalty.
 
 The benchmark's prediction path is replayed first, in the same order and with
 the same RNG consumption as ``experiments.runner`` (aggregate-posterior curves,
@@ -52,6 +55,15 @@ VARIANTS = {
     "two_trunk_shared": {
         "display": "DVFM-2T-shared",
         "overrides": {"latent_dim": 2, "decoder_architecture": "two_trunk_shared"},
+    },
+    "theorem_class": {
+        "display": "DVFM-theorem-class",
+        "overrides": {"latent_path": "additive_scale", "shape_mode": "global"},
+    },
+    # In this decoder the l1 penalty acts on the frailty loadings themselves.
+    "theorem_class_alpha0": {
+        "display": "DVFM-theorem-class-alpha0",
+        "overrides": {"latent_path": "additive_scale", "shape_mode": "global", "latent_loading_l1": 0.0},
     },
 }
 

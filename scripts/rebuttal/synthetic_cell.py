@@ -1,4 +1,4 @@
-"""Task 1 (synthetic): one cell of the primary synthetic grid, DVFM d_z = 1.
+"""Tasks 1 and 7 (synthetic): one cell of the primary synthetic grid, DVFM d_z = 1.
 
 Runs ``configs/synthetic.yaml`` through ``run_synthetic_pilot`` with exactly
 three in-memory changes, all recorded in the written ``resolved_config.json``:
@@ -9,7 +9,9 @@ three in-memory changes, all recorded in the written ``resolved_config.json``:
 * ``evaluation.joint_survival_aggregate_posterior = true``, adding joint ISE
   under the aggregate posterior next to the existing prior column.
 
-Prior and aggregate-posterior prediction rows are already part of the study.
+``--dvfm-variant`` (Task 7) additionally overrides DVFM settings; the default
+``paper`` overrides nothing. Prior and aggregate-posterior prediction rows are
+already part of the study.
 """
 
 from __future__ import annotations
@@ -27,6 +29,17 @@ from utility.runtime import resolve_device
 
 from rebuttal_common import PROJECT_ROOT, environment_record, write_json
 
+# Task 7 (kyMv W2): the decoder in the identification theorem's class, i.e.
+# log Weibull scale f(x) + g'z and one Weibull shape per margin.
+THEOREM_CLASS = {"latent_path": "additive_scale", "shape_mode": "global"}
+DVFM_VARIANTS = {
+    "paper": {},
+    "theorem_class": THEOREM_CLASS,
+    # In this decoder the l1 penalty acts on the frailty loadings g themselves,
+    # so alpha = 0 separates the penalty's shrinkage from the decoder class.
+    "theorem_class_alpha0": {**THEOREM_CLASS, "latent_loading_l1": 0.0},
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -34,6 +47,7 @@ def main() -> None:
     parser.add_argument("--scenario-index", type=int)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--dvfm-variant", choices=sorted(DVFM_VARIANTS), default="paper")
     parser.add_argument("--list", action="store_true", help="Print the scenario indices and exit")
     args = parser.parse_args()
 
@@ -51,6 +65,7 @@ def main() -> None:
     cfg["data"].pop("grid", None)
     cfg["data"]["scenarios"] = [scenarios[args.scenario_index]]
     cfg["models"]["dvfm"]["latent_dims"] = [1]
+    cfg["models"]["dvfm"].update(DVFM_VARIANTS[args.dvfm_variant])
     cfg["evaluation"]["joint_survival_aggregate_posterior"] = True
     cfg["study"]["output_dir"] = str(args.output_dir)
     validate_config(cfg)
