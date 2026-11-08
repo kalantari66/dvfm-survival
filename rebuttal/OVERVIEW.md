@@ -6,7 +6,7 @@ Every run below uses the paper's configs, seeds, splits and per-dataset tuned hy
 
 The rebuttal experiments make two benefits of DVFM concrete. Neither is available from a global copula (HACSurv), an event-only frailty model (Cox-Gamma) or a model with independent latents. Both deserve a place in the revised paper; the covariate-varying experiment would be new.
 
-**1. Dependence that varies with covariates, predicted for a new patient from x alone.** DVFM's frailty can act differently depending on covariates, so the strength of event–censoring dependence can differ between patients. On a DGP where dependence rises with x1, DVFM's τ(x) follows it; HACSurv's single copula cannot.
+**1. Dependence that varies with covariates, predicted for a new patient from x alone.** DVFM's frailty can act differently depending on covariates, so the strength of event–censoring dependence can differ between patients. In the test DGP, an unobserved frailty z enters both log event and log censoring time with an observed-covariate loading λ(x1), so the dependence (Kendall's τ between T and C given x) rises with x1. The exact definitions are in the λ(X) section. DVFM's τ(x) follows this rise; HACSurv's single copula cannot.
 
 | Smooth DGP, x1 | −2 | −1 | 0 | 1 | 2 |
 |---|---|---|---|---|---|
@@ -75,11 +75,35 @@ On real data, too, q_agg is essentially N(0,1), so switching the revision to pri
 
 ## P0 Covariate-varying dependence λ(X) (kyMv, FpZd)
 
-The paper says DVFM can represent dependence that varies with covariates, and reviewers asked us to show this at prediction time. We built a synthetic Gaussian-frailty DGP (N = 10,000, 50% censoring, 10 repeats) in which the frailty loading depends on x1, in two versions:
-- **Step:** no dependence for x1 < 0, and τ = 0.5 for x1 ≥ 0.
-- **Smooth:** dependence rising continuously, λ = λ_max · sigmoid(2·x1).
+The paper says DVFM can represent dependence that varies with covariates, and reviewers asked us to show this at prediction time.
 
-DVFM uses the synthetic study's settings unchanged. Its τ(x) is read off the decoder at a reference x with z drawn from the prior, so it uses only the covariates of a new subject, never their outcome. HACSurv, the strongest copula baseline in the paper, was run with its pilot settings (untuned). It has one global copula, so by construction it returns the same τ for every subject.
+**Data-generating process.** We use the paper's Gaussian shared-frailty DGP (N = 10,000, 10 covariates, 50% censoring, 10 repeats), changed in one respect: the frailty's effect depends on x1. For each subject:
+
+- Observed covariates x ~ N(0, I₁₀); unobserved frailty z ~ N(0, 1); independent noise U_E, U_C ~ Uniform(0, 1).
+- Event time: T = exp(xᵀβ_E + λ(x)·z) · (−log U_E)^(1/1.5).
+- Censoring time: C = exp(b + xᵀβ_C + λ(x)·z) · (−log U_C)^(1/1.3).
+
+These are Weibull times with shapes 1.5 and 1.3 and scales exp(xᵀβ + λ(x)·z). The intercept b is calibrated to 50% censoring, and we observe min(T, C) and the indicator 1[T ≤ C].
+
+**Where the dependence comes from.** Given both x and z, T and C are independent. Given only x, they are dependent, because the shared z moves both, and its loading λ(x) sets how strongly:
+
+| Version | Frailty loading λ(x) | Dependence |
+|---|---|---|
+| Step | λ_max · 1[x1 ≥ 0] | None for x1 < 0; τ = 0.5 for x1 ≥ 0 |
+| Smooth | λ_max · σ(2·x1), with σ(u) = 1/(1 + e^(−u)) | Rises continuously from τ ≈ 0 at low x1 to τ ≈ 0.5 at high x1 |
+
+λ_max is calibrated so that a subject with the full loading has conditional Kendall's τ = 0.5. So z causes the dependence and x1 controls its strength; x2 to x10 only shift the times. In the example of the opening section, x1 could be disease severity and z an unmeasured frailty that makes severe patients both die and drop out sooner.
+
+**What is measured at a reference patient x_ref** (training mean of x, with x1 set to −2, −1, 0, 1 or 2):
+
+| Quantity | Definition |
+|---|---|
+| True τ(x_ref) | Kendall's τ between T and C given x = x_ref. It depends on x only through λ(x) (Monte Carlo, 200,000 draws). |
+| DVFM τ̂(x_ref) | Kendall's τ of 2,000 pairs (T⁽ᵐ⁾, C⁽ᵐ⁾) drawn from the fitted decoder p_θ(t, c \| x_ref, z⁽ᵐ⁾) with z⁽ᵐ⁾ ~ N(0, 1). It uses only x_ref, never an outcome. |
+| HACSurv τ̂ | The Kendall's τ of its single fitted copula, the same for every x |
+| DVFM latent recovery | Spearman correlation between the posterior mean E_q[z \| xᵢ, tᵢ, δᵢ] (sign aligned on validation) and the true zᵢ, for test subjects with x1 near x_ref |
+
+DVFM can represent a τ that varies with x because its decoder takes (x, z) jointly, so the network can learn how much z matters for each x (an x × z interaction). DVFM uses the synthetic study's settings unchanged. HACSurv, the strongest copula baseline in the paper, was run with its pilot settings (untuned).
 
 | Smooth DGP, x1 | −2 | −1 | 0 | 1 | 2 |
 |---|---|---|---|---|---|
@@ -232,7 +256,7 @@ To see whether staying inside the class would help, we ran a decoder that satisf
 ## P1 PRO-ACT survival calibration (kyMv)
 
 kyMv noted that the real-data evidence rests on held-out likelihood and asked for survival calibration. We refit the PRO-ACT models (10 seeds × d_z ∈ {0, 1}) on the paper's splits. They reproduce the paper's C-index, IBS-IPCW, best epoch and held-out likelihoods exactly. Every quantity was scored under the prior, the revision's predictor; q_agg gives the same numbers (previous sections). Two calibration diagnostics:
-- **D-calibration:** checks whether each patient's predicted survival at their observed time is uniformly distributed (10 bins, SurvivalEVAL).
+- **D-calibration:** checks whether each patient's predicted probability of surviving past their own observed time, S(tᵢ | xᵢ), is spread uniformly between 0 and 1, as it is for a well-calibrated model. The probabilities are grouped into 10 bins (SurvivalEVAL). The statistic measures how far the bin counts are from equal, so lower is better. A seed passes when p > 0.05, meaning calibration cannot be rejected.
 - **KM-calibration:** measures how far the average predicted curve is from the test-set Kaplan–Meier curve.
 
 | PRO-ACT, prior prediction | d_z = 0 | d_z = 1 | d_z = 1 better in |
@@ -246,9 +270,10 @@ kyMv noted that the real-data evidence rests on held-out likelihood and asked fo
 | Held-out joint log-likelihood (IWAE) | −7.026 | **−6.732** | 10 of 10 seeds |
 
 **What we see.**
-- **Per subject, the latent improves calibration.** Without a latent, the D-calibration histogram is U-shaped: too many patients fall in the extreme bins, so the predictive distributions are too narrow. The latent widens them, and the model passes D-calibration in 9 of 10 seeds instead of 6.
+- **The latent gives better D-calibration: per-patient survival predictions are better calibrated.** The statistic drops from 14.9 to 8.0 (lower in 9 of 10 seeds), and the model passes in 9 of 10 seeds instead of 6. Without the latent, the D-calibration histogram is U-shaped: too many patients fall in the extreme bins (S near 0 or near 1). Its predictive distributions are therefore too narrow, or overconfident, and events happen earlier or later than predicted more often than they should. Averaging over the latent widens each patient's predictive distribution, which removes most of the U-shape.
 - **The likelihood gain holds under the prior, in every seed and on both margins.** This includes the event margin, which is the likelihood of the reported survival curve itself, so the paper's real-data claim is unchanged by the switch.
-- **On average, the latent-free curve sits closer to Kaplan–Meier.** Kaplan–Meier assumes independent censoring and is itself biased if censoring is dependent.
+- **On average, the latent-free curve sits closer to Kaplan–Meier.** KM-calibration compares only the population-average curve, not individual patients. Kaplan–Meier assumes independent censoring and is itself biased if censoring is dependent.
+- **Both diagnostics assume independent censoring,** including D-calibration's handling of censored patients. They are descriptive.
 
 As the paper already says, these results show a better fit to observed follow-up, not that censoring in PRO-ACT is dependent.
 
