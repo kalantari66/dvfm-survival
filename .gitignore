@@ -45,7 +45,8 @@ figures/
 docs/dvfm_draft_21-09-2026.tex
 paper/dvfm.pdf
 
-# Rebuttal outputs and write-ups stay local (root only: scripts/, configs/ and
-# workflows/ also have rebuttal/ folders that are tracked).
-/rebuttal/
+# Rebuttal outputs stay local; only the overview is tracked (root only:
+# scripts/, configs/ and workflows/ also have rebuttal/ folders that are tracked).
+/rebuttal/*
+!/rebuttal/OVERVIEW.md
 dvfm_iclr_2027_review.pdf
