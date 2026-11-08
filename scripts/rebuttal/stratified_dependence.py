@@ -1,16 +1,19 @@
 """Task 6: covariate-varying dependence (synthetic, d_z = 1).
 
-Generates the stratified Gaussian shared-frailty DGP of
-``configs/rebuttal/stratified_dependence.yaml``, fits DVFM (the synthetic
-study's settings, unchanged) and untuned HACSurv-2D on the same cohort and
-split per repeat, and reports:
+Generates a Gaussian shared-frailty DGP whose loading depends on x1, either
+as a step (``configs/rebuttal/stratified_dependence.yaml``: 0 below the
+threshold, calibrated to the target tau above) or smoothly
+(``configs/rebuttal/smooth_dependence.yaml``: lambda_max * sigmoid(slope * x1)).
+It fits DVFM (the synthetic study's settings, unchanged) and untuned
+HACSurv-2D on the same cohort and split per repeat, and reports:
 
-* DVFM's conditional Kendall's tau from decoder samples at reference points in
-  each stratum, against the true tau of that stratum (0 or the target);
+* DVFM's conditional Kendall's tau from decoder samples at reference points
+  (within each stratum, or at fixed x1 values for the smooth profile) against
+  the true conditional tau there;
 * HACSurv's single global tau, which cannot vary with x;
-* DVFM latent recovery per stratum (Spearman of the posterior mean with the
-  true z, sign aligned on all validation subjects, as in the paper);
-* oracle IBS, C-index and MAE per stratum for both models.
+* DVFM latent recovery per stratum or x1 bin (Spearman of the posterior mean
+  with the true z, sign aligned on all validation subjects, as in the paper);
+* oracle IBS, C-index and MAE per stratum or bin for both models.
 
 DVFM training mirrors ``experiments.synthetic.run_synthetic_pilot``: seeded
 loader, best post-warmup validation ELBO checkpoint, no time rescaling.
@@ -39,11 +42,11 @@ from utility.metrics import (
 )
 from utility.runtime import resolve_device, seed_everything
 from utility.splitting import split_survival_data
-from utility.synthetic import generate_stratified_gaussian_shared_frailty
+from scipy.stats import kendalltau
+
+from utility.synthetic import conditional_kendall_tau_for_loading, generate_stratified_gaussian_shared_frailty
 
 from rebuttal_common import PROJECT_ROOT, environment_record, write_json
-
-STRATA = ("independent", "dependent")
 
 
 def check_dvfm_matches_synthetic_study(dvfm: dict) -> None:
@@ -99,9 +102,35 @@ def encode_mean(model, data, device):
     return mu[:, 0].cpu().numpy()
 
 
-def stratum_masks(X, feature, threshold):
-    dependent = np.asarray(X)[:, feature] >= threshold
-    return {"independent": ~dependent, "dependent": dependent}
+def group_masks(X, feature, data_cfg, evaluation):
+    """Strata (step profile) or x1 bins centred on the reference points (sigmoid)."""
+    x1 = np.asarray(X)[:, feature]
+    if data_cfg.get("loading_profile", "step") == "step":
+        dependent = x1 >= float(data_cfg["threshold"])
+        return {"independent": ~dependent, "dependent": dependent}
+    points = sorted(float(value) for value in evaluation["reference_x1"])
+    edges = [-np.inf, *((a + b) / 2 for a, b in zip(points, points[1:])), np.inf]
+    return {f"x1~{point:g}": (x1 >= low) & (x1 < high) for point, low, high in zip(points, edges, edges[1:])}
+
+
+def reference_points(train_X, feature, data_cfg, evaluation, loading_max, target_tau):
+    """(group, x1, true conditional tau) at which DVFM's tau is evaluated."""
+    if data_cfg.get("loading_profile", "step") == "step":
+        masks = group_masks(train_X, feature, data_cfg, evaluation)
+        return [
+            (name, float(np.quantile(train_X[mask, feature], quantile)),
+             target_tau if name == "dependent" else 0.0)
+            for name, mask in masks.items() if mask.any()
+            for quantile in evaluation["reference_quantiles"]
+        ]
+    slope, threshold = float(data_cfg["sigmoid_slope"]), float(data_cfg["threshold"])
+    return [
+        (f"x1~{float(x1):g}", float(x1), conditional_kendall_tau_for_loading(
+            loading_max / (1.0 + np.exp(-slope * (float(x1) - threshold))), seed=0,
+            n_samples=int(evaluation.get("true_tau_samples", 200_000)),
+        ))
+        for x1 in evaluation["reference_x1"]
+    ]
 
 
 def main() -> None:
@@ -140,6 +169,8 @@ def main() -> None:
             dgp_seed=int(seeds["dgp"]), sampling_seed=int(seeds["sampling"]),
             calibration_samples=int(data_cfg["calibration_samples"]),
             stratify_feature=feature, threshold=threshold,
+            loading_profile=str(data_cfg.get("loading_profile", "step")),
+            sigmoid_slope=float(data_cfg.get("sigmoid_slope", 2.0)),
         )
         full = SurvivalData(
             generated.X, generated.observed_time, generated.event,
@@ -151,17 +182,25 @@ def main() -> None:
             0.0, float(np.quantile(train.true_event_time, evaluation["grid_max_quantile"])),
             int(evaluation["n_time_points"]),
         )
-        base = {"repeat": repeat, "seed": int(seeds["model"])}
-        for name in STRATA:
+        base = {"repeat": repeat, "seed": int(seeds["model"]),
+                "loading_profile": str(data_cfg.get("loading_profile", "step"))}
+        event_residual = np.log(generated.event_time) - generated.X @ generated.beta_event
+        censor_residual = (np.log(generated.censor_time) - generated.X @ generated.beta_censor
+                           - generated.censor_intercept)
+        for name, mask in group_masks(generated.X, feature, data_cfg, evaluation).items():
             dgp_rows.append({
-                **base, "stratum": name, "true_conditional_kendall_tau": target_tau if name == "dependent" else 0.0,
-                "empirical_conditional_kendall_tau": generated.stratum_conditional_kendall_tau[name],
-                "censoring_rate": generated.stratum_censoring_rate[name],
-                "frailty_loading": generated.frailty_loading if name == "dependent" else 0.0,
+                **base, "stratum": name, "n": int(mask.sum()),
+                "mean_frailty_loading": float(generated.subject_loading[mask].mean()),
+                "true_conditional_kendall_tau_at_mean_loading": conditional_kendall_tau_for_loading(
+                    float(generated.subject_loading[mask].mean()), seed=0),
+                "empirical_conditional_kendall_tau": float(
+                    kendalltau(event_residual[mask], censor_residual[mask]).statistic),
+                "censoring_rate": float(1.0 - generated.event[mask].mean()),
+                "frailty_loading_max": generated.frailty_loading,
                 "overall_censoring_rate": generated.achieved_censoring_rate,
             })
-        test_masks = stratum_masks(test.X, feature, threshold)
-        train_masks = stratum_masks(train.X, feature, threshold)
+        test_masks = group_masks(test.X, feature, data_cfg, evaluation)
+        points = reference_points(train.X, feature, data_cfg, evaluation, generated.frailty_loading, target_tau)
         x_mean = np.mean(train.X, axis=0)
 
         def prediction_metrics(model_name, survival):
@@ -182,22 +221,17 @@ def main() -> None:
             seed_everything(int(seeds["model"]) + 50_000)
             survival = predict_survival_curves(model, test.X, grid, train_loader, int(settings["mc_samples"]), device)
             prediction_metrics("DVFM", survival)
-            for stratum in STRATA:
-                stratum_x1 = train.X[train_masks[stratum], feature]
-                if not len(stratum_x1):
-                    continue
-                for index, quantile in enumerate(evaluation["reference_quantiles"]):
-                    reference = x_mean.copy()
-                    reference[feature] = float(np.quantile(stratum_x1, quantile))
-                    tau = learned_conditional_kendall_tau(
-                        model, reference, int(evaluation["dependence_samples"]), device,
-                        int(seeds["model"]) + 1000 * (1 + STRATA.index(stratum)) + index,
-                    )
-                    tau_rows.append({
-                        **base, "model": "DVFM", "stratum": stratum, "reference_quantile": float(quantile),
-                        "reference_x1": reference[feature], "learned_kendall_tau": tau,
-                        "true_kendall_tau": target_tau if stratum == "dependent" else 0.0,
-                    })
+            for index, (group, x1, true_tau) in enumerate(points):
+                reference = x_mean.copy()
+                reference[feature] = x1
+                tau = learned_conditional_kendall_tau(
+                    model, reference, int(evaluation["dependence_samples"]), device,
+                    int(seeds["model"]) + 1000 + index,
+                )
+                tau_rows.append({
+                    **base, "model": "DVFM", "stratum": group, "reference_x1": x1,
+                    "learned_kendall_tau": tau, "true_kendall_tau": true_tau,
+                })
             validation_mu, test_mu = encode_mean(model, validation, device), encode_mean(model, test, device)
             correlation = pearson_correlation(validation_mu, validation.true_z)
             sign = -1.0 if correlation < 0 else 1.0
@@ -226,11 +260,11 @@ def main() -> None:
             )
             fit_seconds = timer.perf_counter() - started
             prediction_metrics("HACSurv (untuned)", survival)
-            for stratum in STRATA:
+            # One global generator: the same tau at every reference point.
+            for group, x1, true_tau in points:
                 tau_rows.append({
-                    **base, "model": "HACSurv (untuned)", "stratum": stratum, "reference_quantile": np.nan,
-                    "reference_x1": np.nan, "learned_kendall_tau": info["learned_conditional_kendall_tau"],
-                    "true_kendall_tau": target_tau if stratum == "dependent" else 0.0,
+                    **base, "model": "HACSurv (untuned)", "stratum": group, "reference_x1": x1,
+                    "learned_kendall_tau": info["learned_conditional_kendall_tau"], "true_kendall_tau": true_tau,
                 })
             manifest.append({**base, "model": "HACSurv (untuned)", "fit_seconds": fit_seconds,
                              "checkpoint_epoch": info["checkpoint_epoch"], "epochs_completed": info["epochs_completed"],

@@ -20,6 +20,7 @@ from utility.metrics import (
     predict_dvfm_joint_survival,
 )
 from utility.synthetic import (
+    conditional_kendall_tau_for_loading,
     generate_gaussian_shared_frailty,
     generate_stratified_gaussian_shared_frailty,
 )
@@ -218,3 +219,24 @@ def test_stratified_frailty_shares_draws_and_switches_dependence_by_stratum():
     independent_rows = ~dependent
     residual_e = np.log(stratified.event_time) - stratified.X @ stratified.beta_event
     assert abs(kendalltau(residual_e[independent_rows], stratified.true_z[independent_rows]).statistic) < 0.03
+
+
+def test_sigmoid_loading_rises_smoothly_to_the_calibrated_maximum():
+    common = dict(n_samples=20_000, n_features=4, kendall_tau=0.5, censoring_rate=0.5,
+                  dgp_seed=3, sampling_seed=4, calibration_samples=20_000)
+    step = generate_stratified_gaussian_shared_frailty(**common)
+    smooth = generate_stratified_gaussian_shared_frailty(**common, loading_profile="sigmoid", sigmoid_slope=2.0)
+    np.testing.assert_array_equal(step.X, smooth.X)
+    x1 = smooth.X[:, 0]
+    expected = smooth.frailty_loading / (1.0 + np.exp(-2.0 * x1))
+    # The loading is computed from float64 covariates; X is returned as float32.
+    np.testing.assert_allclose(smooth.subject_loading, expected, rtol=1e-6)
+    order = np.argsort(x1)
+    assert np.all(np.diff(smooth.subject_loading[order]) >= -1e-6)
+    assert abs(smooth.achieved_censoring_rate - 0.5) < 0.01
+    assert conditional_kendall_tau_for_loading(0.0) == 0.0
+    assert conditional_kendall_tau_for_loading(smooth.frailty_loading, n_samples=100_000) == pytest.approx(0.5, abs=0.02)
+    half = conditional_kendall_tau_for_loading(smooth.frailty_loading / 2.0, n_samples=100_000)
+    assert 0.05 < half < 0.45
+    with pytest.raises(ValueError):
+        generate_stratified_gaussian_shared_frailty(**common, loading_profile="linear")

@@ -13,9 +13,10 @@ Two settings are timed:
 
 Prediction is timed on 1,000 test subjects (resampled with replacement when
 the test split is smaller) on the shared 100-point grid. For DVFM, building
-the aggregate posterior (encoding the training set) is timed separately from
-prediction given that cache, and per-patient prediction is timed with and
-without the cache (Task 1d). GPU timings synchronize before reading the clock.
+the aggregate posterior (encoding the training split) is timed separately from
+prediction given that cache, both on the actual training split and on exactly
+10,000 encoded subjects, and per-patient prediction is timed with and without
+the cache (Task 1d). GPU timings synchronize before reading the clock.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 
 from dvfm.prediction import aggregate_posterior_mixture, predict_survival_curves, predict_survival_from_mixture
 from experiments.config import load_config
@@ -35,11 +37,13 @@ from experiments.runner import (
 )
 from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
 from sota.hacsurv import fit_hacsurv_2d
+from utility.data import SurvivalDataset
 from utility.runtime import seed_everything
 
 from rebuttal_common import PROJECT_ROOT, REBUTTAL_ROOT, environment_record, semisynthetic_cells, write_json
 
 PREDICTION_SUBJECTS = 1000
+Q_AGG_SUBJECTS = 10_000
 
 
 class Clock:
@@ -93,11 +97,25 @@ def time_cell(cell, model_cfg, setting, devices, per_patient):
         predict_survival_from_mixture(model, X_predict, grid, *mixture, int(c["mc_samples"]), device)
     with Clock(device) as uncached:
         predict_survival_curves(model, X_predict, grid, train_loader, int(c["mc_samples"]), device)
+    # Building q_agg at exactly N = 10,000 encoded subjects (training rows
+    # resampled with replacement), same batch size as the training loader.
+    big = rng.choice(len(model_train.X), Q_AGG_SUBJECTS, replace=len(model_train.X) < Q_AGG_SUBJECTS)
+    big_loader = DataLoader(
+        SurvivalDataset(model_train.X[big], model_train.time[big], model_train.event[big]),
+        batch_size=int(c["batch_size"]), shuffle=False,
+    )
+    with Clock(device) as build_big:
+        mixture_big = aggregate_posterior_mixture(model, big_loader, device)
+    with Clock(device) as cached_big:
+        predict_survival_from_mixture(model, X_predict, grid, *mixture_big, int(c["mc_samples"]), device)
     row = {**base, "model": "DVFM", "device": str(device), "precision": "fp32",
            "fit_seconds": fit.seconds, "epochs_run": len(artifacts["history"]),
-           "q_agg_build_seconds": build.seconds,
+           "q_agg_build_seconds": build.seconds, "q_agg_build_subjects": len(model_train.X),
+           "q_agg_build_seconds_n10000": build_big.seconds,
            "predict_seconds_per_1000_cached": cached.seconds,
-           "predict_seconds_per_1000_uncached": uncached.seconds}
+           "predict_seconds_per_1000_cached_n10000": cached_big.seconds,
+           "predict_seconds_per_1000_uncached": uncached.seconds,
+           "encoder_batch_size": int(c["batch_size"])}
     if per_patient:
         single = []
         for index in range(per_patient):

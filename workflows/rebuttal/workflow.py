@@ -138,12 +138,14 @@ for variant in SETTINGS["task5_variants"]:
                 result_dir, ["results_raw.csv"], _sources(script, SEMI_CONFIG), "gpu",
             ))
 
-# Task 6: covariate-varying dependence, DVFM and untuned HACSurv, 10 repeats.
+# Task 6: covariate-varying dependence, DVFM and untuned HACSurv, 10 repeats,
+# with a step loading (stratified) and a smooth sigmoid loading.
 script = SCRIPTS / "stratified_dependence.py"
-result_dir = OUT / "task6_stratified_dependence"
-gwf.target_from_template("task6_stratified_dependence", _job(
-    f'python "{script}" --output-dir "{result_dir}" && touch "{result_dir / "_SUCCESS"}"',
-    result_dir, ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv"],
-    _sources(script, PROJECT_ROOT / "configs" / "rebuttal" / "stratified_dependence.yaml",
-             PROJECT_ROOT / "configs" / "synthetic.yaml"), "gpu_long",
-))
+for variant in ("stratified", "smooth"):
+    config = PROJECT_ROOT / "configs" / "rebuttal" / f"{variant}_dependence.yaml"
+    result_dir = OUT / f"task6_{variant}_dependence"
+    gwf.target_from_template(f"task6_{variant}_dependence", _job(
+        f'python "{script}" --config "{config}" --output-dir "{result_dir}" && touch "{result_dir / "_SUCCESS"}"',
+        result_dir, ["tau_rows.csv", "recovery_rows.csv", "prediction_rows.csv"],
+        _sources(script, config, PROJECT_ROOT / "configs" / "synthetic.yaml"), "gpu_long",
+    ))

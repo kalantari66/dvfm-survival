@@ -234,10 +234,11 @@ def generate_gaussian_shared_frailty(*, n_samples: int, n_features: int, kendall
 
 @dataclass
 class StratifiedGaussianFrailtySample(GaussianFrailtySample):
-    """Gaussian shared frailty whose loading is switched on by a covariate.
+    """Gaussian shared frailty whose loading depends on a covariate.
 
-    ``frailty_loading`` is the loading in the dependent stratum; every subject's
-    own loading is ``subject_loading``.
+    ``frailty_loading`` is the calibrated (maximum) loading; every subject's
+    own loading is ``subject_loading``. ``dependent_stratum`` and the stratum
+    summaries split the cohort at the threshold for either loading profile.
     """
 
     subject_loading: np.ndarray
@@ -248,24 +249,40 @@ class StratifiedGaussianFrailtySample(GaussianFrailtySample):
     stratum_censoring_rate: dict
 
 
+def conditional_kendall_tau_for_loading(loading: float, *, seed: int = 0, n_samples: int = 200_000) -> float:
+    """Monte Carlo conditional Kendall's tau of the Gaussian frailty DGP at one loading.
+
+    Given x, dependence depends only on the loading, so this is the true
+    conditional tau of any subject with that loading.
+    """
+    return 0.0 if float(loading) == 0.0 else _conditional_tau(float(loading), seed, int(n_samples))
+
+
 def generate_stratified_gaussian_shared_frailty(
     *, n_samples: int, n_features: int, kendall_tau: float, censoring_rate: float,
     dgp_seed: int, sampling_seed: int, calibration_samples: int = 50_000,
     stratify_feature: int = 0, threshold: float = 0.0,
+    loading_profile: str = "step", sigmoid_slope: float = 2.0,
 ) -> StratifiedGaussianFrailtySample:
-    """Covariate-varying dependence: loading 0 below the threshold, calibrated above.
+    """Covariate-varying dependence through a covariate-dependent frailty loading.
 
-    Subjects with ``X[:, stratify_feature] >= threshold`` get the loading
-    calibrated to conditional Kendall's ``kendall_tau``; the rest get loading 0,
-    so their event and censoring times are conditionally independent. Draws
-    follow ``generate_gaussian_shared_frailty`` in the same order, so at equal
-    seeds the two cohorts share X, z and noise and differ only in the loading.
-    Censoring is calibrated on the whole cohort, as there.
+    ``loading_profile="step"``: subjects with ``X[:, stratify_feature] >=
+    threshold`` get the loading calibrated to conditional Kendall's
+    ``kendall_tau``; the rest get 0, so their event and censoring times are
+    conditionally independent. ``"sigmoid"``: the loading rises smoothly,
+    ``lambda_max * sigmoid(sigmoid_slope * (x - threshold))``, with
+    ``lambda_max`` the same calibrated loading, so tau approaches
+    ``kendall_tau`` for large x. Draws follow
+    ``generate_gaussian_shared_frailty`` in the same order, so at equal seeds
+    the cohorts share X, z and noise and differ only in the loading. Censoring
+    is calibrated on the whole cohort, as there.
     """
     if not 0.0 < float(censoring_rate) < 1.0:
         raise ValueError("censoring_rate must be between 0 and 1")
     if not 0 <= int(stratify_feature) < int(n_features):
         raise ValueError("stratify_feature must index a covariate")
+    if loading_profile not in {"step", "sigmoid"}:
+        raise ValueError("loading_profile must be 'step' or 'sigmoid'")
     loading = calibrate_gaussian_frailty_loading(kendall_tau, seed=dgp_seed + 17, n_samples=calibration_samples)
     parameter_rng = np.random.default_rng(dgp_seed)
     beta_event = parameter_rng.normal(0.0, 0.25, size=n_features)
@@ -276,7 +293,11 @@ def generate_stratified_gaussian_shared_frailty(
     u_event = np.clip(rng.uniform(size=n_samples), 1e-8, 1.0 - 1e-8)
     u_censor = np.clip(rng.uniform(size=n_samples), 1e-8, 1.0 - 1e-8)
     dependent = X[:, int(stratify_feature)] >= float(threshold)
-    subject_loading = np.where(dependent, loading, 0.0)
+    if loading_profile == "step":
+        subject_loading = np.where(dependent, loading, 0.0)
+    else:
+        shifted = float(sigmoid_slope) * (X[:, int(stratify_feature)] - float(threshold))
+        subject_loading = loading / (1.0 + np.exp(-shifted))
     event_time = np.exp(X @ beta_event + subject_loading * z) * (-np.log(u_event)) ** (1.0 / 1.5)
     censor_base = np.exp(X @ beta_censor + subject_loading * z) * (-np.log(u_censor)) ** (1.0 / 1.3)
     censor_intercept = float(np.quantile(
@@ -313,4 +334,5 @@ __all__ = ["ClaytonAFTSample", "ClaytonGammaFrailtySample", "GaussianFrailtySamp
            "generate_clayton_aft_data", "generate_clayton_gamma_frailty",
            "calibrate_gaussian_frailty_loading", "generate_gaussian_shared_frailty",
            "generate_stratified_gaussian_shared_frailty",
+           "conditional_kendall_tau_for_loading",
            "generate_copula_data"]

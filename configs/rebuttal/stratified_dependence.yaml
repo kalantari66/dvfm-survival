@@ -17,6 +17,7 @@ data:
   censoring_rate: 0.5
   stratify_feature: 0       # x1 in the paper's notation
   threshold: 0.0
+  loading_profile: step
 split: {strategy: holdout, validation_fraction: 0.10, test_fraction: 0.20}
 models:
   # Must equal configs/synthetic.yaml models.dvfm apart from latent_dims; the
