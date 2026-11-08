@@ -272,22 +272,24 @@ def recovery_baseline_rows(
             )
         }
 
+        # The ridge penalty the CoxPH fit actually used (the robust wrapper may
+        # escalate it), so cells where it differs from the configured one show.
+        ridge = {"CoxPHMartingale": cox.alpha_, "CoxPH": cox.alpha_}
         for model_name, statistic in (
             ("CoxPHMartingale", cox_statistic),
             ("BayesianCoxGammaFrailty", gamma_statistic),
         ):
+            model_context = {**context, "model": model_name, "coxph_ridge_alpha": ridge.get(model_name, np.nan)}
             if nonfinite == "record" and not all(
                 np.isfinite(statistic[part]).all() for part in ("validation", "test")
             ):
                 rows.extend(nonfinite_recovery_rows(
-                    statistic["validation"], statistic["test"], test.event,
-                    {**context, "model": model_name},
+                    statistic["validation"], statistic["test"], test.event, model_context,
                 ))
                 continue
             rows.extend(aligned_recovery_rows(
                 statistic["validation"], validation.true_z,
-                statistic["test"], test.true_z, test.event,
-                {**context, "model": model_name},
+                statistic["test"], test.true_z, test.event, model_context,
             ))
 
         for model_name, survival in (
@@ -301,7 +303,7 @@ def recovery_baseline_rows(
                 t_train=train.time, e_train=train.event, oracle_only=True,
             )
             crosscheck.append({
-                **context, "model": model_name,
+                **context, "model": model_name, "coxph_ridge_alpha": ridge.get(model_name, np.nan),
                 "refit_oracle_ibs": metrics[f"{model_name} IBS Oracle"],
                 "refit_oracle_ci": metrics[f"{model_name} CI Oracle"],
                 "refit_oracle_mae": metrics[f"{model_name} MAE Oracle"],

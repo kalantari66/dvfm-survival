@@ -18,11 +18,16 @@ except ImportError:  # pragma: no cover - exercised in minimal local environment
 class RobustCoxPHSurvivalAnalysis:
     """CoxPH wrapper with split-safe cleaning and escalating ridge penalties."""
 
-    def __init__(self, alpha=1e-4, ties="breslow", n_iter=100, tol=1e-9):
+    def __init__(self, alpha=1e-4, ties="breslow", n_iter=100, tol=1e-9, strict_numerics=False):
         self.alpha = float(alpha)
         self.ties = str(ties)
         self.n_iter = int(n_iter)
         self.tol = float(tol)
+        # Off by default, as in the paper's runs. When on, a fit whose Breslow
+        # baseline hazard divides by an underflowed risk-set sum (extreme
+        # coefficients) counts as failed and escalates the ridge penalty,
+        # instead of returning a cumulative hazard that is infinite at late times.
+        self.strict_numerics = bool(strict_numerics)
         self.model_ = None
         self.alpha_ = None
         self.columns_ = None
@@ -89,7 +94,14 @@ class RobustCoxPHSurvivalAnalysis:
                     n_iter=self.n_iter,
                     tol=self.tol,
                 )
-                model.fit(X_fit, y)
+                if self.strict_numerics:
+                    with np.errstate(divide="raise", invalid="raise"):
+                        model.fit(X_fit, y)
+                    baseline = getattr(model, "cum_baseline_hazard_", None)
+                    if baseline is not None and not np.all(np.isfinite(baseline.y)):
+                        raise FloatingPointError("Non-finite Breslow cumulative baseline hazard")
+                else:
+                    model.fit(X_fit, y)
                 self.model_ = model
                 self.alpha_ = alpha
                 if alpha != self.alpha:
@@ -132,6 +144,7 @@ def make_cox_model(config):
         ties=config.get("ties", "breslow"),
         n_iter=int(config["n_iter"]),
         tol=float(config["tol"]),
+        strict_numerics=bool(config.get("strict_numerics", False)),
     )
 
 

@@ -276,3 +276,31 @@ def test_nonfinite_recovery_rows_match_the_scored_schema_and_count_failures():
     counts = {row["subgroup"]: row["nonfinite_test"] for row in failed}
     assert counts == {"All": 3, "Event observed": 1, "Censored": 2}
     assert all(row["numerical_failure"] and np.isnan(row["spearman"]) for row in failed)
+
+
+def test_strict_numerics_escalates_the_ridge_only_when_enabled(monkeypatch):
+    import warnings
+    from types import SimpleNamespace
+    import sota.coxph as coxph
+
+    class UnderflowingCox:
+        """Breslow-like fit whose risk-set sum underflows below alpha = 1e-2."""
+
+        def __init__(self, alpha, ties, n_iter, tol):
+            self.alpha = alpha
+
+        def fit(self, X, y):
+            divisor = np.zeros(1) if self.alpha < 1e-2 else np.ones(1)
+            self.cum_baseline_hazard_ = SimpleNamespace(y=np.cumsum(np.ones(1) / divisor))
+            return self
+
+    monkeypatch.setattr(coxph, "CoxPHSurvivalAnalysis", UnderflowingCox)
+    X = np.random.default_rng(0).normal(size=(20, 3))
+    settings = {"alpha": 1e-4, "ties": "breslow", "n_iter": 100, "tol": 1e-9}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        default = coxph.make_cox_model(settings).fit(X, None)
+    assert default.alpha_ == 1e-4 and not np.isfinite(default.model_.cum_baseline_hazard_.y).all()
+    with pytest.warns(RuntimeWarning, match="stronger ridge alpha=0.01"):
+        strict = coxph.make_cox_model({**settings, "strict_numerics": True}).fit(X, None)
+    assert strict.alpha_ == 1e-2 and np.isfinite(strict.model_.cum_baseline_hazard_.y).all()

@@ -2,10 +2,18 @@
 
 Runs the paper's ``experiments.recovery_baselines.run_recovery_baselines``
 unchanged for one dataset and seed of ``configs/semi_synthetic.yaml``. The only
-in-memory change is ``evaluation.recovery_baseline_datasets``, widened from the
-three SEER cohorts to all twelve datasets. A baseline whose statistic is
-non-finite on a cell (CoxPH's cumulative hazard can diverge beyond the training
-support, as on MIMIC-IV) is recorded as a failure row instead of aborting the job. Each refit is cross-checked against
+in-memory changes are:
+
+* ``evaluation.recovery_baseline_datasets``, widened from the three SEER
+  cohorts to all twelve datasets;
+* ``models.coxph.strict_numerics = true``: a CoxPH fit whose Breslow baseline
+  hazard underflows (extreme coefficients, as on MIMIC-IV) escalates the
+  robust wrapper's ridge penalty instead of returning an infinite cumulative
+  hazard. Only cells where that happens differ from the benchmark's CoxPH; the
+  alpha used is in ``coxph_ridge_alpha`` and the IBS cross-check shows them.
+
+A statistic that is still non-finite is recorded as a failure row instead of
+aborting the job. Each refit is cross-checked against
 the benchmark's CoxPH and Cox--Gamma oracle IBS (``ibs_crosscheck.csv``).
 """
 
@@ -32,6 +40,7 @@ def main() -> None:
 
     cfg = deepcopy(load_config(args.config))
     cfg["evaluation"]["recovery_baseline_datasets"] = [item["name"] for item in semisynthetic_datasets(cfg["data"])]
+    cfg["models"]["coxph"]["strict_numerics"] = True
     validate_config(cfg)
     dataset = select_dataset(cfg, args.dataset)
     seeds = expand_seed_streams(cfg["seeds"])[args.seed_index]
