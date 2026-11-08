@@ -3,7 +3,9 @@
 Runs the paper's ``experiments.recovery_baselines.run_recovery_baselines``
 unchanged for one dataset and seed of ``configs/semi_synthetic.yaml``. The only
 in-memory change is ``evaluation.recovery_baseline_datasets``, widened from the
-three SEER cohorts to all twelve datasets. Each refit is cross-checked against
+three SEER cohorts to all twelve datasets. A baseline whose statistic is
+non-finite on a cell (CoxPH's cumulative hazard can diverge beyond the training
+support, as on MIMIC-IV) is recorded as a failure row instead of aborting the job. Each refit is cross-checked against
 the benchmark's CoxPH and Cox--Gamma oracle IBS (``ibs_crosscheck.csv``).
 """
 
@@ -35,7 +37,9 @@ def main() -> None:
     seeds = expand_seed_streams(cfg["seeds"])[args.seed_index]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_json(args.output_dir / "environment.json", environment_record("cpu"))
-    rows, crosscheck = run_recovery_baselines(cfg, dataset, args.seed_index, seeds)
+    # The paper's runs raise on a non-finite statistic; here one baseline's
+    # failure is recorded so the other is still scored on that cell.
+    rows, crosscheck = run_recovery_baselines(cfg, dataset, args.seed_index, seeds, nonfinite="record")
     rows.to_csv(args.output_dir / "recovery_rows.csv", index=False)
     crosscheck.to_csv(args.output_dir / "ibs_crosscheck.csv", index=False)
     (args.output_dir / "resolved_config.json").write_text(

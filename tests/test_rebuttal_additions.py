@@ -259,3 +259,20 @@ def test_sigmoid_loading_rises_smoothly_to_the_calibrated_maximum():
     assert 0.05 < half < 0.45
     with pytest.raises(ValueError):
         generate_stratified_gaussian_shared_frailty(**common, loading_profile="linear")
+
+
+def test_nonfinite_recovery_rows_match_the_scored_schema_and_count_failures():
+    from experiments.recovery_baselines import aligned_recovery_rows, nonfinite_recovery_rows
+
+    rng = np.random.default_rng(0)
+    validation, test = rng.normal(size=40), rng.normal(size=30)
+    event = np.r_[np.ones(10), np.zeros(20)].astype(int)
+    scored = aligned_recovery_rows(validation, validation, test, test, event, {"model": "m"})
+    test_bad = test.copy()
+    test_bad[[0, 15, 16]] = -np.inf  # one event-observed and two censored subjects
+    failed = nonfinite_recovery_rows(validation, test_bad, event, {"model": "m"})
+    assert len(failed) == len(scored)
+    assert set(scored[0]) <= set(failed[0])
+    counts = {row["subgroup"]: row["nonfinite_test"] for row in failed}
+    assert counts == {"All": 3, "Event observed": 1, "Censored": 2}
+    assert all(row["numerical_failure"] and np.isnan(row["spearman"]) for row in failed)

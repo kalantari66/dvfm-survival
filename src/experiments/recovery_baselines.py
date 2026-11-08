@@ -127,6 +127,29 @@ def aligned_recovery_rows(
     return rows
 
 
+def nonfinite_recovery_rows(validation_statistic, test_statistic, test_event, context: dict) -> list[dict]:
+    """Failure rows, in the schema of ``aligned_recovery_rows``, for a statistic
+    that is infinite or NaN for some subjects. No value is imputed."""
+    test_event = np.asarray(test_event)
+    masks = {
+        "All": np.ones(len(test_event), dtype=bool),
+        "Event observed": test_event == 1,
+        "Censored": test_event == 0,
+    }
+    return [
+        {
+            **context, "split": "test", "subgroup": subgroup, "representation": representation,
+            "n": int(mask.sum()), "pearson": np.nan, "spearman": np.nan, "r2": np.nan, "rmse": np.nan,
+            "alignment_sign": np.nan, "calibration_intercept": np.nan, "calibration_slope": np.nan,
+            "numerical_failure": True,
+            "nonfinite_validation": int(np.sum(~np.isfinite(np.asarray(validation_statistic, dtype=float)))),
+            "nonfinite_test": int(np.sum(~np.isfinite(np.asarray(test_statistic, dtype=float)[mask]))),
+        }
+        for subgroup, mask in masks.items()
+        for representation in ("Aligned, uncalibrated", "Validation-calibrated")
+    ]
+
+
 def _fit_coxph(train, config):
     if Surv is None:
         raise ImportError(
@@ -151,8 +174,14 @@ def _cox_survival(model, X, time_points) -> np.ndarray:
 
 def recovery_baseline_rows(
     cfg: dict, dataset: dict, copula: str, repeat: int, seeds: dict,
+    *, nonfinite: str = "raise",
 ) -> tuple[list[dict], list[dict]]:
     """Refit both baselines on one regenerated cell and score their recovery.
+
+    ``nonfinite="record"`` writes failure rows for a baseline whose statistic
+    is non-finite for any subject (e.g. a CoxPH cumulative hazard that
+    diverges beyond the training support) and still scores the other one; the
+    default raises, as the paper's runs did.
 
     Returns the recovery rows and the oracle-metric cross-check rows.  The
     cross-check recomputes each baseline's oracle IBS from the refit and is
@@ -247,6 +276,14 @@ def recovery_baseline_rows(
             ("CoxPHMartingale", cox_statistic),
             ("BayesianCoxGammaFrailty", gamma_statistic),
         ):
+            if nonfinite == "record" and not all(
+                np.isfinite(statistic[part]).all() for part in ("validation", "test")
+            ):
+                rows.extend(nonfinite_recovery_rows(
+                    statistic["validation"], statistic["test"], test.event,
+                    {**context, "model": model_name},
+                ))
+                continue
             rows.extend(aligned_recovery_rows(
                 statistic["validation"], validation.true_z,
                 statistic["test"], test.true_z, test.event,
@@ -273,14 +310,14 @@ def recovery_baseline_rows(
 
 
 def run_recovery_baselines(
-    cfg: dict, dataset: dict, repeat: int, seeds: dict,
+    cfg: dict, dataset: dict, repeat: int, seeds: dict, *, nonfinite: str = "raise",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Score both baselines on every configured positive copula for one cell."""
     copulas = cfg["data"].get("copulas", [cfg["data"].get("copula", "clayton")])
     rows, crosscheck = [], []
     for copula in copulas:
         cell_rows, cell_crosscheck = recovery_baseline_rows(
-            cfg, dataset, str(copula), repeat, seeds
+            cfg, dataset, str(copula), repeat, seeds, nonfinite=nonfinite
         )
         rows.extend(cell_rows)
         crosscheck.extend(cell_crosscheck)
@@ -290,6 +327,7 @@ def run_recovery_baselines(
 __all__ = [
     "aligned_recovery_rows",
     "martingale_residuals",
+    "nonfinite_recovery_rows",
     "recovery_baseline_rows",
     "run_recovery_baselines",
 ]
