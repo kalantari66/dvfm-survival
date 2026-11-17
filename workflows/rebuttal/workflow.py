@@ -113,6 +113,17 @@ for dataset in SEMI_DATASETS:
             ["recovery_rows.csv", "ibs_crosscheck.csv"], [SEMI_CONFIG], "cpu",
         ))
 
+# Task 8: joint shared Gamma-frailty baseline (frailty on event and censoring
+# hazards) on all 12 datasets, with the event-only Cox--Gamma refitted beside it
+# as a same-cohort check against Task 3 (CPU).
+for dataset in SEMI_DATASETS:
+    for seed in seeds:
+        gwf.target_from_template(f"task8_jointcg_{dataset}_{seed}", _job(
+            "joint_cg_recovery.py", f"--dataset {dataset} --seed-index {seed}",
+            OUT / "joint_cg" / "fits" / dataset / f"seed_{seed}",
+            ["recovery_rows.csv", "ibs_crosscheck.csv"], [SEMI_CONFIG], "cpu",
+        ))
+
 # Task 4: PRO-ACT D- and KM-calibration, 10 seeds x d_z in {0, 1}.
 kind, device = _placement("task4")
 gwf.target_from_template("task4_proact_calibration", _job(

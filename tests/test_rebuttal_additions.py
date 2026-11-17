@@ -324,3 +324,92 @@ def test_collapsed_encoder_gives_nan_recovery_instead_of_failing_the_fit():
     assert [row["subgroup"] for row in rows] == ["all", "event_observed", "censored"]
     assert all(row["selected_latent_dimension"] == 0 for row in rows)
     assert all(np.isnan(row["frailty_spearman"]) and np.isnan(row["frailty_pearson"]) for row in rows)
+
+
+def _joint_cox_gamma(alpha=1.7):
+    from sota.bayesian_cox_gamma_frailty import BayesianJointCoxGammaFrailty
+
+    model = BayesianJointCoxGammaFrailty(2, [0.0, 0.8, 1.5], [0.0, 1.0], dtype=torch.float64)
+    with torch.no_grad():
+        model.event.beta.copy_(torch.tensor([0.4, -0.7], dtype=torch.float64))
+        model.censor.beta.copy_(torch.tensor([-0.3, 0.5], dtype=torch.float64))
+        model.event.log_baseline_hazards.copy_(torch.log(torch.tensor([0.3, 0.6, 0.9], dtype=torch.float64)))
+        model.censor.log_baseline_hazards.copy_(torch.log(torch.tensor([0.5, 0.2], dtype=torch.float64)))
+        model.log_alpha.fill_(np.log(alpha))
+    return model
+
+
+def test_joint_cox_gamma_likelihood_and_posterior_match_numerical_integration():
+    from scipy import integrate, special
+
+    model = _joint_cox_gamma(alpha=1.7)
+    X = np.array([[0.2, -1.0], [1.3, 0.4], [-0.5, 0.9], [0.0, 0.0]])
+    time = np.array([0.5, 1.2, 2.4, 0.95])
+    event = np.array([1.0, 0.0, 1.0, 0.0])
+    closed_form = model.marginal_log_likelihood(X, time, event).detach().numpy()
+    log_frailty = model.posterior_log_frailty_mean(X, time, event)
+
+    def cumulative(knots, rates, t):
+        edges = np.r_[knots[1:], np.inf]
+        return float(sum(rate * max(0.0, min(t, end) - start) for start, end, rate in zip(knots, edges, rates)))
+
+    def hazard(knots, rates, t):
+        return float(rates[np.searchsorted(knots, t, side="right") - 1])
+
+    alpha = 1.7
+    for i in range(len(time)):
+        x, t = X[i], time[i]
+        risk_e, risk_c = np.exp(x @ [0.4, -0.7]), np.exp(x @ [-0.3, 0.5])
+        total = (risk_e * cumulative([0.0, 0.8, 1.5], [0.3, 0.6, 0.9], t)
+                 + risk_c * cumulative([0.0, 1.0], [0.5, 0.2], t))
+        cause = (risk_e * hazard([0.0, 0.8, 1.5], [0.3, 0.6, 0.9], t) if event[i]
+                 else risk_c * hazard([0.0, 1.0], [0.5, 0.2], t))
+        prior = lambda u: np.exp(alpha * np.log(alpha) - special.gammaln(alpha) + (alpha - 1) * np.log(u) - alpha * u)
+        joint = lambda u: u * cause * np.exp(-u * total) * prior(u)
+        evidence = integrate.quad(joint, 0.0, np.inf)[0]
+        np.testing.assert_allclose(closed_form[i], np.log(evidence), rtol=1e-7)
+        mean_log = integrate.quad(lambda u: np.log(u) * joint(u), 0.0, np.inf)[0] / evidence
+        np.testing.assert_allclose(log_frailty[i], mean_log, rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(log_frailty[i], special.digamma(alpha + 1) - np.log(alpha + total), rtol=1e-12)
+
+
+def test_joint_cox_gamma_without_frailty_variance_is_two_independent_causes():
+    model = _joint_cox_gamma(alpha=1e4)
+    X = np.array([[0.2, -1.0], [1.3, 0.4]])
+    time, event = np.array([0.5, 1.2]), np.array([1.0, 0.0])
+    Xt = torch.as_tensor(X)
+    tt = torch.as_tensor(time)
+    independent = (
+        torch.where(torch.as_tensor(event) == 1, model.event.log_hazard(Xt, tt), model.censor.log_hazard(Xt, tt))
+        - model.total_cumulative_hazard(Xt, tt)
+    ).detach().numpy()
+    np.testing.assert_allclose(model.marginal_log_likelihood(X, time, event).detach().numpy(), independent, atol=1e-3)
+
+
+def test_joint_cox_gamma_fit_recovers_a_simulated_shared_frailty():
+    from scipy.stats import spearmanr
+    from sota.bayesian_cox_gamma_frailty import fit_joint_cox_gamma_frailty
+
+    rng = np.random.default_rng(3)
+    n, alpha = 6000, 2.0
+    X = rng.normal(size=(n, 2))
+    u = rng.gamma(alpha, 1.0 / alpha, size=n)
+    event_time = rng.exponential(1.0 / (u * 0.5 * np.exp(X @ [0.5, -0.5])))
+    censor_time = rng.exponential(1.0 / (u * 0.3 * np.exp(X @ [-0.3, 0.4])))
+    time, event = np.minimum(event_time, censor_time), (event_time <= censor_time).astype(float)
+    train, validation = slice(0, 5000), slice(5000, n)
+    _, info, _, model = fit_joint_cox_gamma_frailty(
+        X[train], time[train], event[train], X[validation], time[validation], event[validation],
+        X[validation], np.linspace(0.0, 2.0, 5),
+        {"n_intervals": 1, "learning_rate": 0.05, "epochs": 1500, "minimum_epochs": 300,
+         "early_stopping_patience": 100, "beta_prior_sd": 2.5},
+    )
+    assert info["frailty_shared_with_censoring"]
+    assert 1.4 < info["frailty_alpha"] < 2.8
+    np.testing.assert_allclose(model.event.beta.detach().numpy(), [0.5, -0.5], atol=0.12)
+    np.testing.assert_allclose(model.censor.beta.detach().numpy(), [-0.3, 0.4], atol=0.12)
+    np.testing.assert_allclose(model.event.baseline_hazards().item(), 0.5, rtol=0.25)
+    np.testing.assert_allclose(model.censor.baseline_hazards().item(), 0.3, rtol=0.25)
+    score = model.posterior_log_frailty_mean(X[validation], time[validation], event[validation])
+    censored = event[validation] == 0
+    assert spearmanr(score[censored], np.log(u[validation][censored]))[0] > 0.3

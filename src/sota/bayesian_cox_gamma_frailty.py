@@ -155,6 +155,138 @@ def _interval_starts(time, event, n_intervals: int):
     return np.r_[0.0, interior]
 
 
+class _PiecewiseExponentialHazard(nn.Module):
+    """One cause's log-linear predictor and piecewise-constant baseline hazard,
+    parameterised exactly as in ``BayesianIndividualCoxGammaFrailty``."""
+
+    def __init__(self, n_features: int, interval_starts, *, dtype=torch.float64):
+        super().__init__()
+        starts = torch.as_tensor(interval_starts, dtype=dtype)
+        if starts.ndim != 1 or len(starts) < 1 or starts[0] != 0:
+            raise ValueError("interval_starts must be one-dimensional and start at zero")
+        if len(starts) > 1 and not bool(torch.all(starts[1:] > starts[:-1])):
+            raise ValueError("interval_starts must be strictly increasing")
+        self.register_buffer("interval_starts", starts)
+        self.beta = nn.Parameter(torch.zeros(int(n_features), dtype=dtype))
+        self.log_baseline_hazards = nn.Parameter(torch.zeros(len(starts), dtype=dtype))
+
+    dtype = BayesianIndividualCoxGammaFrailty.dtype
+    baseline_hazards = BayesianIndividualCoxGammaFrailty.baseline_hazards
+    _cumulative_baseline_hazard = BayesianIndividualCoxGammaFrailty._cumulative_baseline_hazard
+    _event_baseline_hazard = BayesianIndividualCoxGammaFrailty._event_baseline_hazard
+
+    def cumulative_hazard(self, X, time):
+        """exp(x' beta) H_0(t): the cumulative hazard at unit frailty."""
+        return torch.exp((X @ self.beta).clamp(-30.0, 30.0)) * self._cumulative_baseline_hazard(time)
+
+    def log_hazard(self, X, time):
+        return torch.log(self._event_baseline_hazard(time).clamp_min(1e-30)) + X @ self.beta
+
+    def penalty(self, beta_prior_sd, log_hazard_prior_sd, baseline_smoothness):
+        penalty = 0.5 * torch.sum((self.beta / float(beta_prior_sd)) ** 2)
+        penalty = penalty + 0.5 * torch.sum(
+            (self.log_baseline_hazards / float(log_hazard_prior_sd)) ** 2
+        )
+        if len(self.log_baseline_hazards) > 1:
+            penalty = penalty + float(baseline_smoothness) * torch.sum(
+                torch.diff(self.log_baseline_hazards) ** 2
+            )
+        return penalty
+
+
+class BayesianJointCoxGammaFrailty(nn.Module):
+    """Event and censoring hazards that share one Gamma frailty.
+
+        h_E(t | x, u) = u exp(x' beta_E) h_0E(t),
+        h_C(t | x, u) = u exp(x' beta_C) h_0C(t),    u ~ Gamma(alpha, rate=alpha),
+
+    each cause with its own piecewise-exponential baseline. Given u the two
+    times are independent, so for an observed (t, delta) with cause
+    j = E if delta = 1 else C, and Lambda = Lambda_E(t | x) + Lambda_C(t | x),
+
+        p(t, delta | x) = h_j(t | x) alpha^alpha Gamma(alpha + 1) / Gamma(alpha)
+                          (alpha + Lambda)^-(alpha + 1),
+
+    and the frailty posterior is Gamma(alpha + 1, alpha + Lambda) for every
+    subject, event or censored.
+    """
+
+    def __init__(self, n_features: int, event_interval_starts, censor_interval_starts,
+                 *, dtype=torch.float64):
+        super().__init__()
+        self.event = _PiecewiseExponentialHazard(n_features, event_interval_starts, dtype=dtype)
+        self.censor = _PiecewiseExponentialHazard(n_features, censor_interval_starts, dtype=dtype)
+        self.log_alpha = nn.Parameter(torch.tensor(np.log(2.0), dtype=dtype))
+
+    dtype = BayesianIndividualCoxGammaFrailty.dtype
+    alpha = BayesianIndividualCoxGammaFrailty.alpha
+
+    @property
+    def beta(self):
+        # dtype/device lookups shared with the event-only model read ``beta``.
+        return self.event.beta
+
+    def _tensors(self, X, time, event):
+        return (torch.as_tensor(value, dtype=self.dtype, device=self.beta.device)
+                for value in (X, time, event))
+
+    def total_cumulative_hazard(self, X, time):
+        return self.event.cumulative_hazard(X, time) + self.censor.cumulative_hazard(X, time)
+
+    def marginal_log_likelihood(self, X, time, event):
+        """Per-subject likelihood after analytically integrating frailty."""
+        X, time, event = self._tensors(X, time, event)
+        alpha = self.alpha()
+        log_hazard = (
+            event * self.event.log_hazard(X, time)
+            + (1.0 - event) * self.censor.log_hazard(X, time)
+        )
+        return (
+            log_hazard
+            + alpha * torch.log(alpha)
+            + torch.lgamma(alpha + 1.0)
+            - torch.lgamma(alpha)
+            - (alpha + 1.0) * torch.log(alpha + self.total_cumulative_hazard(X, time))
+        )
+
+    def map_objective(
+        self, X, time, event, *, beta_prior_sd=2.5,
+        log_hazard_prior_sd=5.0, log_alpha_prior_sd=2.0,
+        baseline_smoothness=1.0,
+    ):
+        """Negative log posterior per observation; both causes get the
+        event-only model's priors."""
+        n = max(int(len(time)), 1)
+        log_likelihood = self.marginal_log_likelihood(X, time, event).sum()
+        penalty = sum(
+            cause.penalty(beta_prior_sd, log_hazard_prior_sd, baseline_smoothness)
+            for cause in (self.event, self.censor)
+        )
+        penalty = penalty + 0.5 * (self.log_alpha / float(log_alpha_prior_sd)) ** 2
+        return (-log_likelihood + penalty) / n
+
+    @torch.no_grad()
+    def posterior_parameters(self, X, time, event):
+        """Return exact posterior Gamma shape and rate for each subject."""
+        X, time, event = self._tensors(X, time, event)
+        alpha = self.alpha()
+        rate = alpha + self.total_cumulative_hazard(X, time)
+        return torch.full_like(rate, 1.0) * (alpha + 1.0), rate
+
+    posterior_log_frailty_mean = BayesianIndividualCoxGammaFrailty.posterior_log_frailty_mean
+    posterior_frailty_mean = BayesianIndividualCoxGammaFrailty.posterior_frailty_mean
+
+    @torch.no_grad()
+    def predict_marginal_survival(self, X, time_points):
+        """Population-averaged event-time survival, (1 + Lambda_E / alpha)^-alpha."""
+        X = torch.as_tensor(X, dtype=self.dtype, device=self.beta.device)
+        grid = torch.as_tensor(time_points, dtype=self.dtype, device=self.beta.device).clamp_min(0.0)
+        alpha = self.alpha()
+        risk = torch.exp((X @ self.event.beta).clamp(-30.0, 30.0))
+        cumulative = self.event._cumulative_baseline_hazard(grid)
+        return torch.exp(-alpha * torch.log1p(risk[:, None] * cumulative[None, :] / alpha)).cpu().numpy()
+
+
 def fit_bayesian_cox_gamma_frailty(
     X_train, time_train, event_train,
     X_validation, time_validation, event_validation,
@@ -168,16 +300,59 @@ def fit_bayesian_cox_gamma_frailty(
         np.asarray(X_train).shape[1], starts, dtype=dtype
     ).to(device)
 
+    event_rate = max(float(np.sum(event_train)) / max(float(np.sum(time_train)), 1e-12), 1e-8)
+    with torch.no_grad():
+        model.log_baseline_hazards.fill_(np.log(event_rate))
+    return _fit_map(
+        model, X_train, time_train, event_train,
+        X_validation, time_validation, event_validation,
+        X_test, time_points, config, device, dtype,
+    )
+
+
+def fit_joint_cox_gamma_frailty(
+    X_train, time_train, event_train,
+    X_validation, time_validation, event_validation,
+    X_test, time_points, config: dict, device="cpu",
+):
+    """Fit the shared-frailty event + censoring model with the event-only
+    model's procedure and hyperparameters; the censoring baseline gets the same
+    number of intervals, placed at censoring-time quantiles."""
+    dtype = torch.float64 if str(config.get("dtype", "float64")) == "float64" else torch.float32
+    device = torch.device(device)
+    n_intervals = int(config.get("n_intervals", 10))
+    censored = 1 - np.asarray(event_train, dtype=int)
+    model = BayesianJointCoxGammaFrailty(
+        np.asarray(X_train).shape[1],
+        _interval_starts(time_train, event_train, n_intervals),
+        _interval_starts(time_train, censored, n_intervals),
+        dtype=dtype,
+    ).to(device)
+
+    exposure = max(float(np.sum(time_train)), 1e-12)
+    with torch.no_grad():
+        for cause, count in ((model.event, np.sum(event_train)), (model.censor, np.sum(censored))):
+            cause.log_baseline_hazards.fill_(np.log(max(float(count) / exposure, 1e-8)))
+    survival, fit_info, history, model = _fit_map(
+        model, X_train, time_train, event_train,
+        X_validation, time_validation, event_validation,
+        X_test, time_points, config, device, dtype,
+    )
+    fit_info["frailty_shared_with_censoring"] = True
+    return survival, fit_info, history, model
+
+
+def _fit_map(
+    model, X_train, time_train, event_train,
+    X_validation, time_validation, event_validation,
+    X_test, time_points, config, device, dtype,
+):
     X_train_t = torch.as_tensor(X_train, dtype=dtype, device=device)
     time_train_t = torch.as_tensor(time_train, dtype=dtype, device=device)
     event_train_t = torch.as_tensor(event_train, dtype=dtype, device=device)
     X_val_t = torch.as_tensor(X_validation, dtype=dtype, device=device)
     time_val_t = torch.as_tensor(time_validation, dtype=dtype, device=device)
     event_val_t = torch.as_tensor(event_validation, dtype=dtype, device=device)
-
-    event_rate = max(float(np.sum(event_train)) / max(float(np.sum(time_train)), 1e-12), 1e-8)
-    with torch.no_grad():
-        model.log_baseline_hazards.fill_(np.log(event_rate))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config.get("learning_rate", 0.03)))
     maximum_epochs = int(config.get("epochs", 500))
@@ -244,5 +419,7 @@ def fit_bayesian_cox_gamma_frailty(
 
 __all__ = [
     "BayesianIndividualCoxGammaFrailty",
+    "BayesianJointCoxGammaFrailty",
     "fit_bayesian_cox_gamma_frailty",
+    "fit_joint_cox_gamma_frailty",
 ]

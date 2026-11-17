@@ -12,6 +12,11 @@ fitted cumulative event hazard, so they rank subjects identically under a
 common hazard fit and differ only through the fit itself.  They are reported
 together to show that the gap to DVFM is not an artefact of either baseline's
 particular baseline-hazard estimator.
+
+Optionally (``models``), a joint Cox--Gamma model whose frailty also
+multiplies the censoring hazard is scored the same way. Its posterior mean
+``psi(alpha + 1) - log(alpha + Lambda_E(t | x) + Lambda_C(t | x))`` uses the
+censoring time as evidence about the frailty, as DVFM's shared latent does.
 """
 
 from __future__ import annotations
@@ -20,7 +25,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from sota.bayesian_cox_gamma_frailty import fit_bayesian_cox_gamma_frailty
+from sota.bayesian_cox_gamma_frailty import (
+    fit_bayesian_cox_gamma_frailty,
+    fit_joint_cox_gamma_frailty,
+)
 from sota.coxph import make_cox_model
 from utility.metrics import (
     collect_metrics,
@@ -172,11 +180,19 @@ def _cox_survival(model, X, time_points) -> np.ndarray:
     ])
 
 
+BASELINE_MODELS = ("coxph", "cox_gamma")
+OPTIONAL_BASELINE_MODELS = ("joint_cox_gamma",)
+
+
 def recovery_baseline_rows(
     cfg: dict, dataset: dict, copula: str, repeat: int, seeds: dict,
-    *, nonfinite: str = "raise",
+    *, nonfinite: str = "raise", models=BASELINE_MODELS,
 ) -> tuple[list[dict], list[dict]]:
     """Refit both baselines on one regenerated cell and score their recovery.
+
+    ``models`` selects among ``coxph``, ``cox_gamma`` and ``joint_cox_gamma``
+    (the Cox--Gamma model whose frailty also multiplies the censoring hazard,
+    fitted with the ``bayesian_cox_gamma_frailty`` hyperparameters).
 
     ``nonfinite="record"`` writes failure rows for a baseline whose statistic
     is non-finite for any subject (e.g. a CoxPH cumulative hazard that
@@ -188,6 +204,9 @@ def recovery_baseline_rows(
     compared against the benchmark run: agreement proves the regenerated
     cohort and split are the ones the stored results were produced on.
     """
+    unknown = set(models) - set(BASELINE_MODELS) - set(OPTIONAL_BASELINE_MODELS)
+    if unknown:
+        raise ValueError(f"Unknown recovery baselines: {sorted(unknown)}")
     target_tau = float(cfg["evaluation"]["recovery_baseline_kendall_tau"])
     if target_tau <= 0.0:
         raise ValueError(
@@ -244,42 +263,50 @@ def recovery_baseline_rows(
             "training_time_scale": float(scale),
         }
 
+        parts = (("validation", model_validation), ("test", model_test))
+        statistics, survivals, ridge, fitted = {}, {}, {}, {}
         # One model per job in the benchmark, so each fit saw a freshly seeded
         # generator; reproduce that ordering fit by fit.
-        seed_everything(int(seeds["model"]))
-        cox = _fit_coxph(model_train, model_cfg["coxph"])
-        cox_statistic = {
-            part_name: martingale_residuals(cox, part.X, part.time, part.event)
-            for part_name, part in (
-                ("validation", model_validation), ("test", model_test)
-            )
-        }
-        cox_survival = _cox_survival(cox, model_test.X, model_time_points)
+        if "coxph" in models:
+            seed_everything(int(seeds["model"]))
+            cox = _fit_coxph(model_train, model_cfg["coxph"])
+            statistics["CoxPHMartingale"] = {
+                part_name: martingale_residuals(cox, part.X, part.time, part.event)
+                for part_name, part in parts
+            }
+            survivals["CoxPH"] = _cox_survival(cox, model_test.X, model_time_points)
+            # The ridge penalty the CoxPH fit actually used (the robust wrapper may
+            # escalate it), so cells where it differs from the configured one show.
+            ridge = {"CoxPHMartingale": cox.alpha_, "CoxPH": cox.alpha_}
 
-        seed_everything(int(seeds["model"]))
-        gamma_survival, _, _, gamma = fit_bayesian_cox_gamma_frailty(
-            model_train.X, model_train.time, model_train.event,
-            model_validation.X, model_validation.time, model_validation.event,
-            model_test.X, model_time_points,
-            model_cfg["bayesian_cox_gamma_frailty"], device="cpu",
-        )
-        gamma_statistic = {
-            part_name: gamma.posterior_log_frailty_mean(
-                part.X, part.time, part.event
-            )
-            for part_name, part in (
-                ("validation", model_validation), ("test", model_test)
-            )
-        }
-
-        # The ridge penalty the CoxPH fit actually used (the robust wrapper may
-        # escalate it), so cells where it differs from the configured one show.
-        ridge = {"CoxPHMartingale": cox.alpha_, "CoxPH": cox.alpha_}
-        for model_name, statistic in (
-            ("CoxPHMartingale", cox_statistic),
-            ("BayesianCoxGammaFrailty", gamma_statistic),
+        for key, model_name, fit in (
+            ("cox_gamma", "BayesianCoxGammaFrailty", fit_bayesian_cox_gamma_frailty),
+            ("joint_cox_gamma", "JointCoxGammaFrailty", fit_joint_cox_gamma_frailty),
         ):
-            model_context = {**context, "model": model_name, "coxph_ridge_alpha": ridge.get(model_name, np.nan)}
+            if key not in models:
+                continue
+            seed_everything(int(seeds["model"]))
+            survivals[model_name], fit_info, _, gamma = fit(
+                model_train.X, model_train.time, model_train.event,
+                model_validation.X, model_validation.time, model_validation.event,
+                model_test.X, model_time_points,
+                model_cfg["bayesian_cox_gamma_frailty"], device="cpu",
+            )
+            statistics[model_name] = {
+                part_name: gamma.posterior_log_frailty_mean(part.X, part.time, part.event)
+                for part_name, part in parts
+            }
+            if key in OPTIONAL_BASELINE_MODELS:
+                fitted[model_name] = {
+                    "frailty_alpha": fit_info["frailty_alpha"],
+                    "checkpoint_epoch": fit_info["checkpoint_epoch"],
+                }
+
+        for model_name, statistic in statistics.items():
+            model_context = {
+                **context, "model": model_name,
+                "coxph_ridge_alpha": ridge.get(model_name, np.nan), **fitted.get(model_name, {}),
+            }
             if nonfinite == "record" and not all(
                 np.isfinite(statistic[part]).all() for part in ("validation", "test")
             ):
@@ -292,9 +319,7 @@ def recovery_baseline_rows(
                 statistic["test"], test.true_z, test.event, model_context,
             ))
 
-        for model_name, survival in (
-            ("CoxPH", cox_survival), ("BayesianCoxGammaFrailty", gamma_survival),
-        ):
+        for model_name, survival in survivals.items():
             # Oracle metrics read medians off the curves themselves, so the
             # median argument is unused on this path.
             metrics = collect_metrics(
@@ -304,6 +329,7 @@ def recovery_baseline_rows(
             )
             crosscheck.append({
                 **context, "model": model_name, "coxph_ridge_alpha": ridge.get(model_name, np.nan),
+                **fitted.get(model_name, {}),
                 "refit_oracle_ibs": metrics[f"{model_name} IBS Oracle"],
                 "refit_oracle_ci": metrics[f"{model_name} CI Oracle"],
                 "refit_oracle_mae": metrics[f"{model_name} MAE Oracle"],
@@ -313,13 +339,14 @@ def recovery_baseline_rows(
 
 def run_recovery_baselines(
     cfg: dict, dataset: dict, repeat: int, seeds: dict, *, nonfinite: str = "raise",
+    models=BASELINE_MODELS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Score both baselines on every configured positive copula for one cell."""
+    """Score the baselines on every configured positive copula for one cell."""
     copulas = cfg["data"].get("copulas", [cfg["data"].get("copula", "clayton")])
     rows, crosscheck = [], []
     for copula in copulas:
         cell_rows, cell_crosscheck = recovery_baseline_rows(
-            cfg, dataset, str(copula), repeat, seeds, nonfinite=nonfinite
+            cfg, dataset, str(copula), repeat, seeds, nonfinite=nonfinite, models=models,
         )
         rows.extend(cell_rows)
         crosscheck.extend(cell_crosscheck)
